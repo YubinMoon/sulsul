@@ -1,0 +1,17 @@
+[package]
+name = "sulsul-cli"
+description = "술술 개발용 명령줄 도구 (장치 확인, 녹음 테스트)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+sulsul-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

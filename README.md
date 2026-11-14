@@ -12,6 +12,7 @@
 crates/
   sulsul-core/          설정(TOML), 오디오, STT·후처리 추상화
   sulsul-stt-whisper/   로컬 Whisper 엔진
+  sulsul-cli/           개발용 명령줄 도구 (장치 확인, 녹음 테스트)
 locales/                화면 문구 번역 파일 (ko.yml이 기본)
 ```
 
@@ -40,4 +41,9 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 ```sh
 cargo build --workspace
 cargo test --workspace
+
+# 입력 장치 목록
+cargo run -p sulsul-cli -- devices
+# 5초 녹음해서 16kHz 모노 WAV로 저장 (--native-rate: 장치 샘플레이트 그대로)
+cargo run -p sulsul-cli -- record -s 5 -o test.wav
 ```

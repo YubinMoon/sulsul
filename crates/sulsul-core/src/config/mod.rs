@@ -105,7 +105,7 @@ pub enum HotkeyMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioConfig {
-    /// 입력 장치 이름. 비어 있으면 시스템 기본 장치
+    /// 입력 장치 ID(권장) 또는 이름. 비어 있으면 시스템 기본 장치
     pub input_device: String,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,

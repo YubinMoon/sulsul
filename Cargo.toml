@@ -13,8 +13,10 @@ repository = "https://github.com/YubinMoon/sulsul"
 sulsul-core = { path = "crates/sulsul-core" }
 
 # 공통
+anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 설정
 serde = { version = "1", features = ["derive"] }
@@ -23,6 +25,14 @@ toml_edit = "0.25"
 serde_ignored = "0.1"
 directories = "6"
 notify-debouncer-mini = "0.7"
+
+# 오디오
+cpal = "0.18"
+rubato = "5"
+hound = "3"
+
+# 명령줄
+clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
