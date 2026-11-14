@@ -1,7 +1,13 @@
 //! 로컬 Whisper(whisper.cpp) 엔진.
 //!
-//! 지금은 설명자·설정 스키마·모델 목록만 있습니다. 실제 인식은 M1에서
-//! `whisper-rs`로 구현합니다.
+//! - `lib.rs`: 팩토리, 설정 스키마, 설정 키
+//! - [`models`]: 내려받을 수 있는 모델 목록
+//! - `engine.rs`: `whisper-rs`로 하는 실제 인식
+//!
+//! 기본 빌드는 CPU만 씁니다. GPU 가속은 Cargo 기능 `cuda`, `vulkan`으로 켭니다.
+
+mod engine;
+pub mod models;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,12 +15,14 @@ use std::sync::Arc;
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, SttEngine,
-    SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
+    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport,
+    ModelRequirement, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
 };
 
+use engine::{EngineOptions, WhisperEngine};
+pub use models::{DEFAULT_MODEL, MODELS, WhisperModel, find_model};
+
 pub const ENGINE_ID: &str = "whisper_local";
-pub const DEFAULT_MODEL: &str = "large-v3-turbo-q5_0";
 
 /// 설정 키
 pub mod keys {
@@ -22,67 +30,18 @@ pub mod keys {
     pub const MODEL_PATH: &str = "model_path";
     pub const USE_GPU: &str = "use_gpu";
     pub const THREADS: &str = "threads";
+    pub const BEAM_SIZE: &str = "beam_size";
 }
 
-/// 내려받을 수 있는 whisper.cpp GGML 모델
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WhisperModel {
-    pub id: &'static str,
-    pub file_name: &'static str,
-    /// 대략적인 파일 크기 (MiB)
-    pub size_mib: u32,
-}
-
-impl WhisperModel {
-    pub fn download_url(&self) -> String {
-        format!(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
-            self.file_name
-        )
+/// 이 빌드에 들어 있는 GPU 백엔드. CPU 전용 빌드면 `None`입니다.
+pub fn compiled_gpu_backend() -> Option<&'static str> {
+    if cfg!(feature = "cuda") {
+        Some("CUDA")
+    } else if cfg!(feature = "vulkan") {
+        Some("Vulkan")
+    } else {
+        None
     }
-}
-
-/// 한국어 인식에는 `large-v3` 계열을 권장합니다. 작은 모델은 한국어 정확도가 많이 떨어집니다.
-pub const MODELS: &[WhisperModel] = &[
-    WhisperModel {
-        id: "large-v3-turbo-q5_0",
-        file_name: "ggml-large-v3-turbo-q5_0.bin",
-        size_mib: 547,
-    },
-    WhisperModel {
-        id: "large-v3-turbo-q8_0",
-        file_name: "ggml-large-v3-turbo-q8_0.bin",
-        size_mib: 834,
-    },
-    WhisperModel {
-        id: "large-v3-turbo",
-        file_name: "ggml-large-v3-turbo.bin",
-        size_mib: 1549,
-    },
-    WhisperModel {
-        id: "large-v3",
-        file_name: "ggml-large-v3.bin",
-        size_mib: 2950,
-    },
-    WhisperModel {
-        id: "medium",
-        file_name: "ggml-medium.bin",
-        size_mib: 1462,
-    },
-    WhisperModel {
-        id: "small",
-        file_name: "ggml-small.bin",
-        size_mib: 466,
-    },
-    WhisperModel {
-        id: "base",
-        file_name: "ggml-base.bin",
-        size_mib: 142,
-    },
-];
-
-pub fn find_model(id: &str) -> Option<&'static WhisperModel> {
-    MODELS.iter().find(|m| m.id == id)
 }
 
 /// 사용할 모델 파일 경로. `model_path`가 있으면 그것을, 없으면 모델 폴더의 선택한 모델을 씁니다.
@@ -106,7 +65,7 @@ impl WhisperFactory {
     pub fn new() -> Self {
         let model_options = MODELS
             .iter()
-            .map(|m| ChoiceOption::new(m.id).with_detail(format!("{} MB", m.size_mib)))
+            .map(|m| ChoiceOption::new(m.id).with_detail(m.size_label()))
             .collect();
         Self {
             descriptor: EngineDescriptor {
@@ -148,6 +107,14 @@ impl WhisperFactory {
                         64,
                     )
                     .with_help("engine.whisper_local.settings.threads_help"),
+                    SettingField::integer(
+                        keys::BEAM_SIZE,
+                        "engine.whisper_local.settings.beam_size",
+                        5,
+                        1,
+                        8,
+                    )
+                    .with_help("engine.whisper_local.settings.beam_size_help"),
                 ],
             },
         }
@@ -167,10 +134,39 @@ impl SttEngineFactory for WhisperFactory {
 
     fn create(
         &self,
-        _ctx: &EngineContext,
-        _settings: &ResolvedSettings,
+        ctx: &EngineContext,
+        settings: &ResolvedSettings,
     ) -> Result<Box<dyn SttEngine>, SttError> {
-        Err(SttError::NotImplemented(ENGINE_ID.into()))
+        let path = resolve_model_path(&ctx.paths, settings)
+            .ok_or_else(|| SttError::Backend("no whisper model is selected".into()))?;
+        if !path.is_file() {
+            return Err(SttError::ModelNotFound(path));
+        }
+        // whisper.cpp 로그가 stderr로 쏟아지지 않게 tracing으로 돌립니다.
+        // 여러 번 불러도 처음 한 번만 적용됩니다.
+        whisper_rs::install_logging_hooks();
+
+        let options = EngineOptions {
+            use_gpu: settings.bool(keys::USE_GPU),
+            threads: settings.int(keys::THREADS).max(0) as usize,
+            beam_size: settings.int(keys::BEAM_SIZE).clamp(1, 8) as i32,
+        };
+        Ok(Box::new(WhisperEngine::load(&path, options)?))
+    }
+
+    fn model(&self, ctx: &EngineContext, settings: &ResolvedSettings) -> Option<ModelRequirement> {
+        let custom = settings.str(keys::MODEL_PATH).trim();
+        if !custom.is_empty() {
+            return Some(ModelRequirement {
+                path: PathBuf::from(custom),
+                asset: None,
+            });
+        }
+        let model = find_model(settings.str(keys::MODEL))?;
+        Some(ModelRequirement {
+            path: ctx.paths.models_dir().join(model.file_name),
+            asset: Some(model.asset()),
+        })
     }
 }
 
@@ -179,29 +175,85 @@ mod tests {
     use super::*;
     use sulsul_core::settings;
 
-    #[test]
-    fn default_model_is_listed() {
-        assert!(find_model(DEFAULT_MODEL).is_some());
+    fn custom_path_settings(factory: &WhisperFactory, path: &str) -> ResolvedSettings {
+        let mut table = sulsul_core::toml::Table::new();
+        table.insert(keys::MODEL_PATH.into(), path.into());
+        settings::resolve(&factory.descriptor().settings, Some(&table))
     }
 
     #[test]
     fn model_path_prefers_custom_file() {
         let factory = WhisperFactory::new();
-        let schema = &factory.descriptor().settings;
         let paths = AppPaths::under("root");
 
-        let defaults = settings::resolve(schema, None);
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
         assert_eq!(
             resolve_model_path(&paths, &defaults),
-            Some(paths.models_dir().join("ggml-large-v3-turbo-q5_0.bin"))
+            Some(paths.models_dir().join("ggml-large-v3.bin"))
         );
 
-        let mut table = sulsul_core::toml::Table::new();
-        table.insert(keys::MODEL_PATH.into(), "D:/models/custom.bin".into());
-        let custom = settings::resolve(schema, Some(&table));
+        let custom = custom_path_settings(&factory, "D:/models/custom.bin");
         assert_eq!(
             resolve_model_path(&paths, &custom),
             Some(PathBuf::from("D:/models/custom.bin"))
         );
+    }
+
+    #[test]
+    fn model_requirement_follows_settings() {
+        let factory = WhisperFactory::new();
+        let ctx = EngineContext {
+            paths: AppPaths::under("root"),
+        };
+
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
+        let requirement = factory.model(&ctx, &defaults).unwrap();
+        assert_eq!(
+            requirement.path,
+            ctx.paths.models_dir().join("ggml-large-v3.bin")
+        );
+        assert_eq!(
+            requirement.asset,
+            Some(find_model(DEFAULT_MODEL).unwrap().asset())
+        );
+
+        let custom = custom_path_settings(&factory, "D:/models/custom.bin");
+        let requirement = factory.model(&ctx, &custom).unwrap();
+        assert_eq!(requirement.path, PathBuf::from("D:/models/custom.bin"));
+        assert_eq!(requirement.asset, None);
+    }
+
+    #[test]
+    fn create_reports_missing_model() {
+        let factory = WhisperFactory::new();
+        let ctx = EngineContext {
+            paths: AppPaths::under("no-such-sulsul-root"),
+        };
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
+        let expected = ctx.paths.models_dir().join("ggml-large-v3.bin");
+        match factory.create(&ctx, &defaults) {
+            Err(SttError::ModelNotFound(path)) => assert_eq!(path, expected),
+            Err(other) => panic!("unexpected error: {other}"),
+            Ok(_) => panic!("engine was created without a model file"),
+        }
+    }
+
+    #[test]
+    fn beam_size_defaults_to_five() {
+        let factory = WhisperFactory::new();
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
+        assert_eq!(defaults.int(keys::BEAM_SIZE), 5);
+    }
+
+    #[test]
+    fn gpu_backend_matches_features() {
+        let expected = if cfg!(feature = "cuda") {
+            Some("CUDA")
+        } else if cfg!(feature = "vulkan") {
+            Some("Vulkan")
+        } else {
+            None
+        };
+        assert_eq!(compiled_gpu_backend(), expected);
     }
 }
