@@ -2,6 +2,8 @@
 //!
 //! 사용자용 화면이 아니라 개발 중 기능을 빠르게 확인하는 용도라 문구를 번역하지 않습니다.
 
+mod engines;
+mod models;
 mod transcribe;
 
 use std::io::Write;
@@ -42,6 +44,11 @@ enum Command {
     },
     /// WAV 파일을 받아쓰고 걸린 시간을 보여 줍니다
     Transcribe(transcribe::Args),
+    /// 엔진이 쓰는 모델 파일을 확인하고 내려받습니다
+    Models {
+        #[command(subcommand)]
+        command: models::Command,
+    },
 }
 
 fn main() -> Result<()> {
@@ -61,6 +68,7 @@ fn main() -> Result<()> {
             native_rate,
         } => record(seconds, output, device, native_rate),
         Command::Transcribe(args) => transcribe::run(args),
+        Command::Models { command } => models::run(command),
     }
 }
 
