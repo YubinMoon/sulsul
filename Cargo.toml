@@ -11,6 +11,7 @@ repository = "https://github.com/YubinMoon/sulsul"
 [workspace.dependencies]
 # 내부 크레이트
 sulsul-core = { path = "crates/sulsul-core" }
+sulsul-stt-whisper = { path = "crates/sulsul-stt-whisper" }
 
 # 공통
 anyhow = "1"
@@ -33,6 +34,14 @@ hound = "3"
 
 # 명령줄
 clap = { version = "4", features = ["derive"] }
+
+# GUI
+eframe = "0.37"
+egui = "0.37"
+rust-i18n = "4"
+rfd = "0.18"
+opener = "0.9"
+lucide-icons = "1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
