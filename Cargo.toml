@@ -32,6 +32,13 @@ cpal = "0.18"
 rubato = "5"
 hound = "3"
 
+# 음성 인식
+whisper-rs = "0.16"
+
+# 모델 내려받기
+ureq = "3"
+sha2 = "0.11"
+
 # 명령줄
 clap = { version = "4", features = ["derive"] }
 

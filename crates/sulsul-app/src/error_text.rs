@@ -64,6 +64,7 @@ pub fn stt(error: &SttError, registry: &SttRegistry) -> String {
         SttError::UnsupportedLanguage(language) => {
             t!("error.stt.unsupported_language", language = language).into_owned()
         }
+        SttError::Cancelled => t!("error.stt.cancelled").into_owned(),
         SttError::Backend(message) => t!("error.stt.backend", message = message).into_owned(),
     }
 }

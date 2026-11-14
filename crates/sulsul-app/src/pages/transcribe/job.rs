@@ -185,6 +185,7 @@ fn recognize(
     let request = TranscribeRequest {
         language,
         prompt: (capabilities.supports_prompt && !prompt.is_empty()).then(|| prompt.to_owned()),
+        cancel: sulsul_core::CancelToken::new(),
     };
 
     let started = Instant::now();

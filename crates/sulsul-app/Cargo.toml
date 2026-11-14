@@ -10,6 +10,11 @@ repository.workspace = true
 name = "sulsul"
 path = "src/main.rs"
 
+[features]
+# GPU 가속 빌드: cargo build -p sulsul-app --features cuda
+cuda = ["sulsul-stt-whisper/cuda"]
+vulkan = ["sulsul-stt-whisper/vulkan"]
+
 [dependencies]
 sulsul-core.workspace = true
 sulsul-stt-whisper.workspace = true

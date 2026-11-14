@@ -7,16 +7,20 @@
 //! 4. `locales/*.yml`의 `engine.<ID>.*` 아래에 이름·설명·설정 항목 문구 추가
 //!
 //! 엔진별 설정 값은 TOML의 `[stt.engines.<ID>]`에 저장됩니다.
+//! 모델 파일을 쓰는 엔진은 [`SttEngineFactory::model`]도 구현해 필요한 파일을 알려 줍니다.
 
 pub mod mock;
+pub mod model;
 mod registry;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use model::{ModelAsset, ModelRequirement};
 pub use registry::SttRegistry;
 
 use crate::audio::AudioClip;
+use crate::cancel::CancelToken;
 use crate::paths::AppPaths;
 use crate::settings::{ResolvedSettings, SettingField, SettingIssue};
 
@@ -98,11 +102,13 @@ impl Language {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TranscribeRequest {
     pub language: Language,
     /// 고유명사·전문용어 힌트
     pub prompt: Option<String>,
+    /// 인식을 중간에 멈추는 신호. 멈추면 [`SttError::Cancelled`]를 돌려줍니다.
+    pub cancel: CancelToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -118,6 +124,17 @@ pub struct Segment {
     pub start: Duration,
     pub end: Duration,
     pub text: String,
+}
+
+/// 엔진이 계산에 쓰는 장치
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ComputeDevice {
+    /// 알 수 없음 (클라우드 엔진 등)
+    #[default]
+    Unknown,
+    Cpu,
+    /// GPU 가속. 값은 화면에 그대로 보일 이름입니다 (예: `CUDA`, `Vulkan`).
+    Gpu(String),
 }
 
 /// 엔진을 만들 때 넘겨주는 앱 환경
@@ -137,6 +154,12 @@ pub trait SttEngine: Send {
         audio: &AudioClip,
         request: &TranscribeRequest,
     ) -> Result<Transcript, SttError>;
+
+    /// 이 인스턴스가 계산에 쓰는 장치.
+    /// GPU를 쓰도록 설정했어도 쓸 수 없는 환경이면 [`ComputeDevice::Cpu`]일 수 있습니다.
+    fn device(&self) -> ComputeDevice {
+        ComputeDevice::Unknown
+    }
 }
 
 /// 엔진의 메타데이터를 제공하고 인스턴스를 만듭니다.
@@ -149,6 +172,16 @@ pub trait SttEngineFactory: Send + Sync {
         ctx: &EngineContext,
         settings: &ResolvedSettings,
     ) -> Result<Box<dyn SttEngine>, SttError>;
+
+    /// 이 설정으로 엔진을 만들 때 필요한 모델 파일.
+    /// 모델 파일이 필요 없는 엔진(클라우드 등)은 `None`을 돌려줍니다.
+    fn model(
+        &self,
+        _ctx: &EngineContext,
+        _settings: &ResolvedSettings,
+    ) -> Option<ModelRequirement> {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,6 +201,8 @@ pub enum SttError {
     SampleRateMismatch { expected: u32, actual: u32 },
     #[error("language '{0}' is not supported by this engine")]
     UnsupportedLanguage(String),
+    #[error("transcription was cancelled")]
+    Cancelled,
     #[error("{0}")]
     Backend(String),
 }

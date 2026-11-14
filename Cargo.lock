@@ -3970,6 +3970,7 @@ dependencies = [
  "anyhow",
  "clap",
  "sulsul-core",
+ "sulsul-stt-whisper",
  "tracing",
  "tracing-subscriber",
 ]

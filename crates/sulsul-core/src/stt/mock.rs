@@ -1,6 +1,6 @@
 //! 개발·UI 테스트용 가짜 엔진. 실제 인식 없이 오디오 정보를 텍스트로 돌려줍니다.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{
     EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, SttEngine,
@@ -86,7 +86,18 @@ impl SttEngine for MockEngine {
                 actual: audio.sample_rate,
             });
         }
-        std::thread::sleep(self.delay);
+        // 취소 흐름도 확인할 수 있게 조금씩 끊어서 기다립니다.
+        let deadline = Instant::now() + self.delay;
+        loop {
+            if request.cancel.is_cancelled() {
+                return Err(SttError::Cancelled);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            std::thread::sleep(left.min(Duration::from_millis(10)));
+        }
         let text = if self.text.is_empty() {
             format!(
                 "[mock] {:.2}s of audio, peak {:.2}, language {}",

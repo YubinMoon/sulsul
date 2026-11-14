@@ -1,7 +1,9 @@
 use std::fmt;
 use std::sync::Arc;
 
-use super::{EngineContext, EngineDescriptor, SttEngine, SttEngineFactory, SttError};
+use super::{
+    EngineContext, EngineDescriptor, ModelRequirement, SttEngine, SttEngineFactory, SttError,
+};
 use crate::config::SttConfig;
 use crate::settings::{self, ResolvedSettings, SettingIssue};
 
@@ -62,6 +64,20 @@ impl SttRegistry {
             &descriptor.settings,
             config.engines.get(id),
         ))
+    }
+
+    /// 지금 설정으로 이 엔진이 쓸 모델 파일 (모델 파일을 쓰지 않는 엔진이면 `None`)
+    pub fn model(
+        &self,
+        ctx: &EngineContext,
+        config: &SttConfig,
+        id: &str,
+    ) -> Result<Option<ModelRequirement>, SttError> {
+        let factory = self
+            .get(id)
+            .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
+        let resolved = settings::resolve(&factory.descriptor().settings, config.engines.get(id));
+        Ok(factory.model(ctx, &resolved))
     }
 
     /// 설정 파일에 빠진 엔진 설정 키를 기본값으로 채웁니다.
@@ -129,6 +145,7 @@ impl fmt::Debug for SttRegistry {
 mod tests {
     use super::*;
     use crate::audio::AudioClip;
+    use crate::cancel::CancelToken;
     use crate::paths::AppPaths;
     use crate::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
     use crate::stt::{Language, TranscribeRequest};
@@ -175,9 +192,24 @@ mod tests {
         let request = TranscribeRequest {
             language: Language::Code("ko".into()),
             prompt: None,
+            cancel: CancelToken::new(),
         };
         let transcript = engine.transcribe(&clip, &request).unwrap();
         assert!(!transcript.text.is_empty());
+    }
+
+    #[test]
+    fn engine_without_model_files_reports_none() {
+        let registry = registry();
+        let config = SttConfig::default();
+        assert_eq!(
+            registry.model(&ctx(), &config, MOCK_ENGINE_ID).unwrap(),
+            None
+        );
+        assert!(matches!(
+            registry.model(&ctx(), &config, "nope"),
+            Err(SttError::UnknownEngine(_))
+        ));
     }
 
     #[test]

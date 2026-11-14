@@ -6,6 +6,12 @@ edition.workspace = true
 publish.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# GPU 가속 (빌드할 때만 고릅니다. 기본은 어디서나 도는 CPU 빌드)
+cuda = []
+vulkan = []
+
 [dependencies]
 sulsul-core.workspace = true
 

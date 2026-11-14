@@ -80,6 +80,7 @@ error:
     model_not_found: "모델 파일이 없습니다: %{path}"
     sample_rate_mismatch: "엔진은 %{expected} Hz 오디오를 받는데 %{actual} Hz 오디오가 전달됐습니다."
     unsupported_language: "이 엔진은 '%{language}' 언어를 지원하지 않습니다."
+    cancelled: 받아쓰기를 취소했습니다.
     backend: "엔진에서 오류가 발생했습니다: %{message}"
   config:
     read: "설정 파일을 읽지 못했습니다 (%{path}): %{message}"
