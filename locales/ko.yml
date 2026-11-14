@@ -1,0 +1,34 @@
+# 한국어 번역 (기본 언어)
+#
+# 규칙
+# - 화면에 보이는 모든 문구는 코드에 직접 쓰지 않고 이 파일의 키로 참조합니다.
+# - 새 언어는 이 파일을 복사해 `<언어 코드>.yml`(예: en.yml)로 만들고 값만 번역합니다.
+# - 엔진·후처리기 문구는 `engine.<엔진 ID>.*`, `processor.<ID>.*` 아래에 둡니다.
+#   (코어 크레이트의 설명자에 있는 name_key, label_key 등과 일치해야 합니다)
+# - 값 안의 %{이름}은 코드에서 채워 넣는 자리입니다.
+_version: 1
+
+app:
+  name: 술술
+
+engine:
+  whisper_local:
+    name: Whisper (로컬)
+    description: 이 컴퓨터에서 whisper.cpp로 인식합니다. 인터넷 없이 동작하고 음성이 밖으로 나가지 않습니다.
+    settings:
+      model: 모델
+      model_help: 큰 모델일수록 정확하지만 느리고 메모리를 많이 씁니다. 한국어에는 large-v3 계열을 권장합니다.
+      model_path: 모델 파일 직접 지정
+      model_path_help: 비워 두면 모델 폴더에서 선택한 모델을 찾습니다.
+      use_gpu: GPU 가속
+      use_gpu_help: 지원되는 그래픽카드가 있으면 훨씬 빠르게 인식합니다.
+      threads: CPU 스레드 수
+      threads_help: 0이면 자동으로 정합니다.
+  mock:
+    name: 테스트용 가짜 엔진
+    description: 실제 인식 없이 받은 오디오 정보를 돌려줍니다. 개발 중 화면 흐름을 확인할 때 씁니다.
+    settings:
+      delay_ms: 응답 지연(ms)
+      delay_ms_help: 인식에 시간이 걸리는 상황을 흉내 냅니다.
+      text: 고정 응답 문구
+      text_help: 비워 두면 오디오 길이와 음량을 알려 줍니다.

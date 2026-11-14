@@ -1,0 +1,13 @@
+[package]
+name = "sulsul-stt-whisper"
+description = "술술 로컬 Whisper(whisper.cpp) 음성 인식 엔진"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+sulsul-core.workspace = true
+
+[lints]
+workspace = true

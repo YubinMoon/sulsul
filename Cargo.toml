@@ -1,0 +1,36 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+repository = "https://github.com/YubinMoon/sulsul"
+
+[workspace.dependencies]
+# 내부 크레이트
+sulsul-core = { path = "crates/sulsul-core" }
+
+# 공통
+thiserror = "2"
+tracing = "0.1"
+
+# 설정
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+toml_edit = "0.25"
+serde_ignored = "0.1"
+directories = "6"
+notify-debouncer-mini = "0.7"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev.package."*"]
+# 의존성은 최적화해서 빌드 (오디오 처리·추론 속도 확보)
+opt-level = 2
