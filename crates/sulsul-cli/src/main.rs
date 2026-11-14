@@ -2,6 +2,8 @@
 //!
 //! 사용자용 화면이 아니라 개발 중 기능을 빠르게 확인하는 용도라 문구를 번역하지 않습니다.
 
+mod transcribe;
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -10,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use sulsul_core::audio::{self, Recording, RecordingOptions};
 use sulsul_core::stt::WHISPER_SAMPLE_RATE;
-use sulsul_core::{AppPaths, ConfigStore};
+use sulsul_core::{AppPaths, Config, ConfigStore};
 
 #[derive(Parser)]
 #[command(name = "sulsul-cli", version, about = "술술 개발용 명령줄 도구")]
@@ -38,6 +40,8 @@ enum Command {
         #[arg(long)]
         native_rate: bool,
     },
+    /// WAV 파일을 받아쓰고 걸린 시간을 보여 줍니다
+    Transcribe(transcribe::Args),
 }
 
 fn main() -> Result<()> {
@@ -56,6 +60,7 @@ fn main() -> Result<()> {
             device,
             native_rate,
         } => record(seconds, output, device, native_rate),
+        Command::Transcribe(args) => transcribe::run(args),
     }
 }
 
@@ -140,18 +145,23 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
 
 /// 설정 파일이 있으면 그 입력 장치, 없으면 기본 장치(빈 문자열)
 fn configured_device() -> String {
-    let Ok(paths) = AppPaths::resolve() else {
-        return String::new();
-    };
+    match AppPaths::resolve() {
+        Ok(paths) => load_config(&paths).audio.input_device,
+        Err(_) => String::new(),
+    }
+}
+
+/// 설정 파일이 있으면 그 내용, 없거나 읽지 못하면 기본값
+fn load_config(paths: &AppPaths) -> Config {
     let store = ConfigStore::new(paths.config_file());
     if !store.path().exists() {
-        return String::new();
+        return Config::default();
     }
     match store.load() {
-        Ok(loaded) => loaded.config.audio.input_device,
+        Ok(loaded) => loaded.config,
         Err(e) => {
-            tracing::warn!("설정 파일을 읽지 못해 기본 장치를 씁니다: {e}");
-            String::new()
+            tracing::warn!("설정 파일을 읽지 못해 기본값을 씁니다: {e}");
+            Config::default()
         }
     }
 }
