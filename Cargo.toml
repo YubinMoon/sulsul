@@ -36,7 +36,7 @@ hound = "3"
 whisper-rs = "0.16"
 
 # 모델 내려받기
-ureq = "3"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.11"
 
 # 명령줄
