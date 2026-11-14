@@ -8,16 +8,21 @@
 //!
 //! 엔진별 설정 값은 TOML의 `[stt.engines.<ID>]`에 저장됩니다.
 //! 모델 파일을 쓰는 엔진은 [`SttEngineFactory::model`]도 구현해 필요한 파일을 알려 줍니다.
+//!
+//! 인식을 실행할 때는 엔진을 직접 다루지 말고 [`Transcriber`]를 쓰세요.
+//! 엔진 재사용, 언어 확인, 리샘플을 대신 처리합니다.
 
 pub mod mock;
 pub mod model;
 mod registry;
+mod transcriber;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 pub use model::{ModelAsset, ModelRequirement};
 pub use registry::SttRegistry;
+pub use transcriber::{Prepared, TranscribeError, TranscribeJob, Transcriber, Transcription};
 
 use crate::audio::AudioClip;
 use crate::cancel::CancelToken;

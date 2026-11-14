@@ -9,11 +9,12 @@ use std::time::{Duration, Instant};
 
 use egui::{Frame, Label, Margin, RichText, Stroke, Ui};
 use rust_i18n::t;
+use sulsul_core::CancelToken;
 use sulsul_core::audio::{self, AudioClip};
 use sulsul_core::config::Config;
-use sulsul_core::stt::EngineContext;
+use sulsul_core::stt::{EngineContext, Transcriber};
 
-use self::job::{CachedEngine, Failure, JobAudio, JobInput, JobOutput, Success};
+use self::job::{Failure, JobAudio, JobInput, JobOutput, Success};
 use super::{Page, SECTION_GAP, header, language_items};
 use crate::error_text::{self, engine_name};
 use crate::format::{elapsed_text, hertz_text, seconds_text};
@@ -44,8 +45,9 @@ pub struct TranscribePage {
     /// 이 화면에서만 임시로 바꾼 언어. `None`이면 설정 값을 따릅니다.
     language_override: Option<String>,
     running: Option<Running>,
-    /// 다음 받아쓰기에 다시 쓸 엔진 (모델 로딩을 반복하지 않으려고 보관)
-    cached_engine: Option<CachedEngine>,
+    /// 엔진을 보관해 모델 로딩을 반복하지 않게 합니다. 작업 중에는 작업 스레드에 가 있고,
+    /// 돌려받지 못했으면(`None`) 다음 작업 때 새로 만듭니다.
+    transcriber: Option<Transcriber>,
     attempts: Vec<Attempt>,
     /// 결과 카드에 보여 줄 시도 (`attempts`의 위치)
     selected: Option<usize>,
@@ -66,6 +68,9 @@ struct LoadedFile {
 
 struct Running {
     output: Receiver<JobOutput>,
+    /// 작업을 멈추는 신호. 취소 버튼이 붙으면 쓰입니다.
+    #[allow(dead_code)]
+    cancel: CancelToken,
     started: Instant,
     engine_id: String,
     language: String,
@@ -103,7 +108,7 @@ impl Default for TranscribePage {
             engine_override: None,
             language_override: None,
             running: None,
-            cached_engine: None,
+            transcriber: None,
             attempts: Vec::new(),
             selected: None,
             reveal_result: false,
@@ -117,20 +122,17 @@ impl TranscribePage {
         let Some(running) = &self.running else {
             return;
         };
-        let output = match running.output.try_recv() {
-            Ok(output) => output,
+        let (transcriber, result) = match running.output.try_recv() {
+            Ok(output) => (Some(output.transcriber), output.result),
             Err(TryRecvError::Empty) => return,
             // 작업 스레드가 결과 없이 끝났습니다(엔진 내부 패닉 등).
-            Err(TryRecvError::Disconnected) => JobOutput {
-                cached: None,
-                result: Err(Failure::Crashed),
-            },
+            Err(TryRecvError::Disconnected) => (None, Err(Failure::Crashed)),
         };
         let Some(running) = self.running.take() else {
             return;
         };
-        self.cached_engine = output.cached;
-        let outcome = output.result.map_err(|failure| match failure {
+        self.transcriber = transcriber;
+        let outcome = result.map_err(|failure| match failure {
             Failure::Stt(error) => {
                 tracing::warn!("transcription failed: {error}");
                 error_text::stt(&error, &shared.registry)
@@ -194,20 +196,27 @@ impl TranscribePage {
         let engine_id = self.engine_id(cx.config);
         let language = self.language(cx.config);
         let duration = audio.clip().duration();
+        let transcriber = self.transcriber.take().unwrap_or_else(|| {
+            Transcriber::new(
+                cx.shared.registry.clone(),
+                EngineContext {
+                    paths: cx.shared.paths.clone(),
+                },
+            )
+        });
+        let cancel = CancelToken::new();
         let input = JobInput {
-            registry: cx.shared.registry.clone(),
-            context: EngineContext {
-                paths: cx.shared.paths.clone(),
-            },
+            transcriber,
             stt: cx.config.stt.clone(),
             engine_id: engine_id.clone(),
             language: language.clone(),
             audio,
-            cached: self.cached_engine.take(),
+            cancel: cancel.clone(),
         };
         let output = job::spawn(input, ctx.clone());
         self.running = Some(Running {
             output,
+            cancel,
             started: Instant::now(),
             engine_id,
             language,
