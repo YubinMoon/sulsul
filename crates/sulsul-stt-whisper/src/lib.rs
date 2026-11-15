@@ -218,6 +218,7 @@ impl SttEngineFactory for WhisperFactory {
                     path: ctx.paths.models_dir().join(m.file_name),
                     asset: m.asset(),
                 }],
+                choices: m.choices(),
             })
             .collect()
     }
@@ -231,6 +232,7 @@ impl SttEngineFactory for WhisperFactory {
 mod tests {
     use super::*;
     use sulsul_core::settings;
+    use sulsul_core::stt::{ModelAxis, axis_options, catalog_axes, find_by_choices};
 
     fn custom_path_settings(factory: &WhisperFactory, path: &str) -> ResolvedSettings {
         let mut table = sulsul_core::toml::Table::new();
@@ -337,5 +339,126 @@ mod tests {
         if compiled_gpu_backend().is_none() {
             assert_eq!(gpu_device(), None);
         }
+    }
+
+    fn catalog() -> Vec<ModelVariant> {
+        let ctx = EngineContext {
+            paths: AppPaths::under("root"),
+        };
+        WhisperFactory::new().model_variants(&ctx)
+    }
+
+    fn picked(variant: &ModelVariant) -> Vec<(ModelAxis, &str)> {
+        variant
+            .choices
+            .iter()
+            .map(|c| (c.axis, c.value.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn every_variant_has_same_axes_in_order() {
+        let catalog = catalog();
+        assert_eq!(
+            catalog_axes(&catalog),
+            [ModelAxis::Size, ModelAxis::Language, ModelAxis::Precision]
+        );
+        for variant in &catalog {
+            let axes: Vec<_> = variant.choices.iter().map(|c| c.axis).collect();
+            assert_eq!(
+                axes,
+                catalog_axes(&catalog),
+                "{}: 단계 순서가 다른 변형과 다릅니다",
+                variant.id
+            );
+        }
+    }
+
+    #[test]
+    fn choice_combinations_are_unique_and_findable() {
+        let catalog = catalog();
+        let mut seen = std::collections::HashSet::new();
+        for variant in &catalog {
+            let picks = picked(variant);
+            assert!(
+                seen.insert(picks.clone()),
+                "{}: 같은 (크기, 언어, 정밀도) 조합을 가진 변형이 또 있습니다",
+                variant.id
+            );
+            let found = find_by_choices(&catalog, &picks).unwrap();
+            assert_eq!(
+                found.id, variant.id,
+                "단계 값으로 찾은 변형이 {}가 아닙니다",
+                variant.id
+            );
+        }
+    }
+
+    #[test]
+    fn choice_label_keys_follow_rule() {
+        for variant in catalog() {
+            for choice in &variant.choices {
+                assert_eq!(
+                    choice.label_key,
+                    format!(
+                        "engine.whisper_local.choices.{}.{}",
+                        choice.axis.id(),
+                        choice.value
+                    ),
+                    "{}: 번역 키 규칙이 다릅니다",
+                    variant.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn choice_values_match_model_ids() {
+        let expected = [
+            ("tiny", "tiny", "f16"),
+            ("base", "base", "f16"),
+            ("small", "small", "f16"),
+            ("medium", "medium", "f16"),
+            ("large-v3-turbo-q5_0", "large-v3-turbo", "q5_0"),
+            ("large-v3-turbo", "large-v3-turbo", "f16"),
+            ("large-v3", "large-v3", "f16"),
+        ];
+        let catalog = catalog();
+        assert_eq!(catalog.len(), expected.len());
+        for (variant, (id, size, precision)) in catalog.iter().zip(expected) {
+            assert_eq!(variant.id, id, "모델 목록 순서가 다릅니다");
+            let value = |axis| variant.choice(axis).unwrap().value.as_str();
+            assert_eq!(value(ModelAxis::Size), size, "{id}: 크기 값");
+            assert_eq!(value(ModelAxis::Language), "multi", "{id}: 언어 값");
+            assert_eq!(value(ModelAxis::Precision), precision, "{id}: 정밀도 값");
+        }
+    }
+
+    #[test]
+    fn size_options_are_ordered_small_to_large() {
+        let catalog = catalog();
+        let sizes: Vec<_> = axis_options(&catalog, &[], ModelAxis::Size)
+            .into_iter()
+            .map(|c| c.value.as_str())
+            .collect();
+        assert_eq!(
+            sizes,
+            [
+                "tiny",
+                "base",
+                "small",
+                "medium",
+                "large-v3-turbo",
+                "large-v3"
+            ],
+            "크기 선택지 순서가 작은 모델부터가 아닙니다"
+        );
+
+        let turbo = [(ModelAxis::Size, "large-v3-turbo")];
+        let precisions: Vec<_> = axis_options(&catalog, &turbo, ModelAxis::Precision)
+            .into_iter()
+            .map(|c| c.value.as_str())
+            .collect();
+        assert_eq!(precisions, ["q5_0", "f16"]);
     }
 }

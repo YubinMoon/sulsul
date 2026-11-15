@@ -21,7 +21,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub use model::{
-    ModelAsset, ModelFile, ModelRequirement, ModelVariant, delete_variant, format_bytes,
+    ModelAsset, ModelAxis, ModelFile, ModelRequirement, ModelVariant, VariantChoice, axis_options,
+    catalog_axes, delete_variant, find_by_choices, format_bytes,
 };
 pub use registry::SttRegistry;
 pub use transcriber::{
