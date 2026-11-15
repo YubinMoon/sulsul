@@ -124,7 +124,9 @@ fn download_model(selected: &Selected) -> Result<()> {
 
 fn announce(model: &ModelRequirement) {
     if let Some(asset) = &model.asset {
-        eprintln!("모델: {} ({})", asset.id, size_text(asset.size_bytes));
+        // 파일이 여러 개인 모델(Whisper ONNX, SenseVoice)은 대표 파일이 아니라 전체 크기를 보여 줍니다.
+        let total = model.total_bytes().unwrap_or(asset.size_bytes);
+        eprintln!("모델: {} ({})", asset.id, size_text(total));
         eprintln!("받는 곳: {}", asset.url);
     }
     eprintln!("저장 위치: {}", model.path.display());
