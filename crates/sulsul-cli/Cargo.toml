@@ -7,7 +7,11 @@ publish.workspace = true
 repository.workspace = true
 
 [features]
-# GPU 가속 빌드: cargo build -p sulsul-cli --features cuda
+# Whisper GPU 가속. 기본은 Vulkan이고, 빌드할 때 Vulkan SDK(`VULKAN_SDK`)가 필요합니다.
+# 실행 중에 쓸 수 있는 GPU가 없으면 CPU로 인식합니다.
+# - CPU 전용: cargo build -p sulsul-cli --no-default-features
+# - CUDA만: cargo build -p sulsul-cli --no-default-features --features cuda
+default = ["vulkan"]
 cuda = ["sulsul-stt-whisper/cuda"]
 vulkan = ["sulsul-stt-whisper/vulkan"]
 

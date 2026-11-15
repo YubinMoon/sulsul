@@ -4,13 +4,15 @@
 //! - [`models`]: 내려받을 수 있는 모델 목록
 //! - `engine.rs`: `whisper-rs`로 하는 실제 인식
 //!
-//! 기본 빌드는 CPU만 씁니다. GPU 가속은 Cargo 기능 `cuda`, `vulkan`으로 켭니다.
+//! GPU 가속은 Cargo 기능 `vulkan`, `cuda`로 넣습니다. 이 크레이트의 기본은 CPU 전용이고,
+//! 앱과 CLI가 기본으로 `vulkan`을 켭니다. 넣어 빌드해도 실행 중에 쓸 수 있는 GPU가
+//! 없으면([`gpu_device`]) CPU로 인식합니다.
 
 mod engine;
 pub mod models;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
@@ -42,6 +44,28 @@ pub fn compiled_gpu_backend() -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// 지금 실행 중인 컴퓨터에서 Whisper가 쓸 GPU 장치의 이름
+/// (예: `Vulkan0 (NVIDIA GeForce RTX 3060)`). 쓸 수 있는 GPU가 없으면 `None`입니다.
+///
+/// - CPU 전용 빌드([`compiled_gpu_backend`]가 `None`)면 장치를 찾아보지 않고 `None`입니다.
+/// - GPU 빌드라도 드라이버가 없거나 장치 초기화가 실패하면 `None`입니다.
+///
+/// 처음 부를 때 ggml 장치를 열거하고 실제로 한 번 초기화해 보며(RTX 3060·Vulkan에서 약
+/// 150ms, GPU가 없으면 약 20ms), 결과는 프로세스가 끝날 때까지 캐시합니다.
+pub fn gpu_device() -> Option<&'static str> {
+    static DEVICE: OnceLock<Option<String>> = OnceLock::new();
+    DEVICE
+        .get_or_init(|| {
+            compiled_gpu_backend()?;
+            // 장치를 찾는 동안 나오는 ggml 로그도 stderr 대신 tracing으로 보냅니다.
+            whisper_rs::install_logging_hooks();
+            let device = engine::usable_gpu_device();
+            tracing::info!("whisper GPU device: {device:?}");
+            device
+        })
+        .as_deref()
 }
 
 /// 사용할 모델 파일 경로. `model_path`가 있으면 그것을, 없으면 모델 폴더의 선택한 모델을 씁니다.
@@ -255,5 +279,12 @@ mod tests {
             None
         };
         assert_eq!(compiled_gpu_backend(), expected);
+    }
+
+    #[test]
+    fn cpu_build_finds_no_gpu_device() {
+        if compiled_gpu_backend().is_none() {
+            assert_eq!(gpu_device(), None);
+        }
     }
 }

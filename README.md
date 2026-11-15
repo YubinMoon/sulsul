@@ -37,7 +37,25 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 
 ## 개발
 
-필요한 도구: Rust(stable, MSVC), CMake, LLVM/Clang(whisper.cpp 바인딩 생성용)
+필요한 도구: Rust(stable, MSVC), CMake, LLVM/Clang(whisper.cpp 바인딩 생성용),
+Vulkan SDK(기본 빌드에 들어가는 Whisper GPU 가속용)
+
+### 빌드 종류
+
+| 빌드 | 빌드할 때 필요한 것 | Whisper 인식 장치 |
+|---|---|---|
+| 기본 (Vulkan) | Vulkan SDK (`VULKAN_SDK` 환경 변수) | 쓸 수 있는 GPU가 있으면 GPU, 없으면 CPU |
+| `--no-default-features` | 없음 | CPU만 |
+| `--no-default-features --features cuda` | CUDA Toolkit (`CUDA_PATH`) | CUDA GPU가 있으면 GPU, 없으면 CPU |
+
+- Vulkan SDK는 `winget install --id KhronosGroup.VulkanSDK -e`로 설치할 수 있습니다. 설치 프로그램이
+  `VULKAN_SDK`를 등록하므로, 설치한 뒤 터미널(과 편집기)을 다시 여세요.
+- `VULKAN_SDK`가 없으면 기본 빌드가 `Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set`
+  (whisper-rs-sys 빌드 스크립트)로 실패합니다. SDK 없이 빌드하려면 `--no-default-features`를 붙이세요.
+- GPU가 없거나 드라이버가 없는 컴퓨터에서는 설정의 GPU 가속 항목이 잠기고 CPU로 인식합니다.
+- 기본 빌드 실행 파일은 `vulkan-1.dll`(Vulkan 로더)을 실행할 때 불러옵니다. 그래픽 드라이버가 설치된
+  컴퓨터에는 거의 항상 있지만, 드라이버가 전혀 없는 컴퓨터(가상 머신 등)에서는 프로그램이 뜨지 않으므로
+  배포할 때 로더를 함께 넣거나 CPU 전용 빌드를 쓰세요.
 
 ```sh
 cargo build --workspace

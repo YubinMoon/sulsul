@@ -7,8 +7,10 @@ publish.workspace = true
 repository.workspace = true
 
 [features]
+# 라이브러리 자체의 기본은 CPU 전용입니다. GPU 백엔드는 실행 파일(sulsul-app, sulsul-cli)이
+# 기본 기능으로 켭니다. 여기서 켜 두면 실행 파일의 `--no-default-features`로 끌 수 없습니다.
 default = []
-# GPU 가속 (빌드할 때만 고릅니다. 기본은 어디서나 도는 CPU 빌드)
+# GPU 가속 백엔드 (빌드할 때 고릅니다. 실행 중에 쓸 수 있는 GPU가 없으면 CPU로 인식합니다)
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 

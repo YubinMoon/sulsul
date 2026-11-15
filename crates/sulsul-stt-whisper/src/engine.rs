@@ -50,25 +50,32 @@ pub(crate) struct WhisperEngine {
 impl WhisperEngine {
     /// 모델을 읽어 엔진을 만듭니다. GPU로 만들지 못하면 CPU로 한 번 더 시도합니다.
     pub(crate) fn load(model_path: &Path, options: EngineOptions) -> Result<Self, SttError> {
-        // GPU 백엔드 없이 빌드했으면 켜 봐야 쓸 장치가 없습니다.
-        let use_gpu = options.use_gpu && crate::compiled_gpu_backend().is_some();
+        // GPU 백엔드 없이 빌드했으면 켜 봐야 쓸 장치가 없습니다. GPU 빌드라도 실제로
+        // 쓸 수 있는 장치가 있을 때만 GPU로 엽니다 ([`crate::gpu_device`] 참고).
+        let gpu = if options.use_gpu && crate::compiled_gpu_backend().is_some() {
+            let gpu = crate::gpu_device();
+            if gpu.is_none() {
+                tracing::warn!("no usable GPU device, using CPU");
+            }
+            gpu
+        } else {
+            None
+        };
 
-        let (context, state, used_gpu) = match open(model_path, use_gpu) {
-            Ok((context, state)) => (context, state, use_gpu),
-            Err(error) if use_gpu => {
+        let (context, state, device) = match (open(model_path, gpu.is_some()), gpu) {
+            (Ok((context, state)), Some(name)) => {
+                (context, state, ComputeDevice::Gpu(name.to_owned()))
+            }
+            (Ok((context, state)), None) => (context, state, ComputeDevice::Cpu),
+            (Err(error), Some(_)) => {
+                // 장치는 있어도 모델을 올릴 메모리가 모자라면 여기로 옵니다.
                 tracing::warn!(
                     "failed to load whisper model with GPU ({error}), falling back to CPU"
                 );
                 let (context, state) = open(model_path, false).map_err(backend_error)?;
-                (context, state, false)
+                (context, state, ComputeDevice::Cpu)
             }
-            Err(error) => return Err(backend_error(error)),
-        };
-
-        let device = if used_gpu {
-            gpu_device_name().map_or(ComputeDevice::Cpu, ComputeDevice::Gpu)
-        } else {
-            ComputeDevice::Cpu
+            (Err(error), None) => return Err(backend_error(error)),
         };
         tracing::info!(
             "whisper model loaded: {} (device: {device:?})",
@@ -243,13 +250,22 @@ fn pad_short(samples: &[f32]) -> Cow<'_, [f32]> {
     Cow::Owned(padded)
 }
 
-/// whisper.cpp가 고르는 GPU 장치의 이름 (예: `CUDA (NVIDIA GeForce RTX 4070)`).
+/// whisper.cpp가 고를 GPU 장치가 실제로 쓸 수 있는 상태면 그 이름을 돌려줍니다
+/// (예: `Vulkan0 (NVIDIA GeForce RTX 3060)`). 장치가 없거나 초기화되지 않으면 `None`입니다.
+/// 매번 장치를 초기화해 보므로 직접 부르지 말고 캐시하는 [`crate::gpu_device`]를 쓰세요.
 ///
 /// whisper.cpp(`whisper_backend_init_gpu`)는 `gpu_device = 0`일 때 등록된 장치 중
-/// 첫 번째 GPU·내장 GPU를 쓰므로 같은 순서로 찾습니다. GPU 장치가 없으면 `None`입니다.
-fn gpu_device_name() -> Option<String> {
+/// 첫 번째 GPU·내장 GPU를 쓰므로 같은 순서로 찾습니다. 그런데 whisper.cpp는 그 장치의
+/// 초기화(`ggml_backend_dev_init`)가 실패해도 오류 없이 CPU로 계속하고, 어느 쪽을
+/// 쓰는지 밖에서 알 방법이 없습니다. 그래서 같은 초기화를 여기서 먼저 한 번 해 보고,
+/// 안 되면 처음부터 CPU로 엽니다. 드라이버가 없거나(장치가 등록되지 않음)
+/// `CUDA_VISIBLE_DEVICES=-1`, `VK_LOADER_DRIVERS_DISABLE=*`이면 장치 목록에 GPU가 없어
+/// `None`이 됩니다. CUDA와 Vulkan을 함께 넣어 빌드하면 ggml이 CUDA 장치를 먼저 등록하므로
+/// `CUDA0`이 골라집니다.
+pub(crate) fn usable_gpu_device() -> Option<String> {
     // SAFETY: 장치 목록은 ggml이 프로세스 수명 동안 유지하는 전역 레지스트리이고,
-    // 돌려받는 문자열 포인터도 그동안 유효한 널 종료 문자열입니다.
+    // 돌려받는 문자열 포인터도 그동안 유효한 널 종료 문자열입니다. 시험 삼아 만든
+    // 백엔드는 바로 해제합니다.
     unsafe {
         for index in 0..sys::ggml_backend_dev_count() {
             let device = sys::ggml_backend_dev_get(index);
@@ -262,16 +278,19 @@ fn gpu_device_name() -> Option<String> {
             {
                 continue;
             }
+            let backend = sys::ggml_backend_dev_init(device, std::ptr::null());
+            if backend.is_null() {
+                return None;
+            }
+            sys::ggml_backend_free(backend);
             // 장치 이름은 `CUDA0`, `Vulkan0` 같은 백엔드 이름 + 번호입니다.
-            let name = c_string(sys::ggml_backend_dev_name(device));
-            let description = c_string(sys::ggml_backend_dev_description(device));
-            let backend = crate::compiled_gpu_backend()
-                .map(str::to_owned)
-                .or(name)
+            let name = c_string(sys::ggml_backend_dev_name(device))
+                .or_else(|| crate::compiled_gpu_backend().map(str::to_owned))
                 .unwrap_or_else(|| "GPU".to_owned());
+            let description = c_string(sys::ggml_backend_dev_description(device));
             return Some(match description {
-                Some(description) => format!("{backend} ({description})"),
-                None => backend,
+                Some(description) => format!("{name} ({description})"),
+                None => name,
             });
         }
     }
@@ -329,7 +348,7 @@ mod tests {
     #[test]
     fn cpu_build_has_no_gpu_device() {
         if crate::compiled_gpu_backend().is_none() {
-            assert_eq!(gpu_device_name(), None);
+            assert_eq!(usable_gpu_device(), None);
         }
     }
 }
