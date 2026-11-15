@@ -18,6 +18,7 @@ use crate::error_text;
 use crate::i18n;
 use crate::icons::{self, Icon};
 use crate::pages::models::ModelsPage;
+use crate::pages::prompts::PromptsPage;
 use crate::pages::record::RecordPage;
 use crate::pages::settings::SettingsPage;
 use crate::pages::transcribe::TranscribePage;
@@ -39,6 +40,7 @@ pub struct SulsulApp {
     record: RecordPage,
     transcribe: TranscribePage,
     models: ModelsPage,
+    prompts: PromptsPage,
     settings: SettingsPage,
     /// 전역 단축키·단축키 받아쓰기·트레이·자동 실행
     desktop: Desktop,
@@ -82,6 +84,7 @@ impl SulsulApp {
             record: RecordPage::default(),
             transcribe: TranscribePage::default(),
             models: ModelsPage::default(),
+            prompts: PromptsPage::default(),
             settings: SettingsPage::default(),
             pending: None,
         };
@@ -253,6 +256,7 @@ impl SulsulApp {
             Page::Record => self.record.ui(ui, &mut cx),
             Page::Transcribe => self.transcribe.ui(ui, &mut cx),
             Page::Models => self.models.ui(ui, &mut cx),
+            Page::Prompts => self.prompts.ui(ui, &mut cx),
             Page::Settings => self.settings.ui(ui, &mut cx, &issues),
             Page::About => pages::about::ui(ui, &mut cx),
         }

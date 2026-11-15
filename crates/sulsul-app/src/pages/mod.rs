@@ -2,6 +2,7 @@
 
 pub mod about;
 pub mod models;
+pub mod prompts;
 pub mod record;
 pub mod settings;
 pub mod transcribe;
@@ -17,15 +18,17 @@ pub enum Page {
     Record,
     Transcribe,
     Models,
+    Prompts,
     Settings,
     About,
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Record,
         Self::Transcribe,
         Self::Models,
+        Self::Prompts,
         Self::Settings,
         Self::About,
     ];
@@ -35,6 +38,7 @@ impl Page {
             Self::Record => t!("nav.record"),
             Self::Transcribe => t!("nav.transcribe"),
             Self::Models => t!("nav.models"),
+            Self::Prompts => t!("nav.prompts"),
             Self::Settings => t!("nav.settings"),
             Self::About => t!("nav.about"),
         }
@@ -46,6 +50,7 @@ impl Page {
             Self::Record => Icon::Mic,
             Self::Transcribe => Icon::AudioLines,
             Self::Models => Icon::Boxes,
+            Self::Prompts => Icon::MessageSquareText,
             Self::Settings => Icon::Settings,
             Self::About => Icon::Info,
         }
