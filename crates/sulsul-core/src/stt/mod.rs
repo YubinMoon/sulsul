@@ -68,8 +68,10 @@ pub struct EngineCapabilities {
 pub enum LanguageSupport {
     /// 자동 감지를 포함해 대부분의 언어 지원
     Any,
-    /// 지정한 언어 코드만 지원
+    /// 지정한 언어 코드만 지원 (`auto` 미지원)
     Only(Vec<String>),
+    /// 자동 감지(`auto`)와 함께 지정한 언어 코드를 지원
+    AutoAnd(Vec<String>),
 }
 
 impl LanguageSupport {
@@ -78,6 +80,8 @@ impl LanguageSupport {
             (Self::Any, _) => true,
             (Self::Only(_), Language::Auto) => false,
             (Self::Only(codes), Language::Code(code)) => codes.iter().any(|c| c == code),
+            (Self::AutoAnd(_), Language::Auto) => true,
+            (Self::AutoAnd(codes), Language::Code(code)) => codes.iter().any(|c| c == code),
         }
     }
 }
@@ -142,6 +146,8 @@ pub enum ComputeDevice {
     Cpu,
     /// GPU 가속. 값은 화면에 그대로 보일 이름입니다 (예: `CUDA`, `Vulkan`).
     Gpu(String),
+    /// NPU 가속. 값은 화면에 그대로 보일 이름입니다 (예: `DirectML (Intel(R) AI Boost)`).
+    Npu(String),
 }
 
 /// 엔진을 만들 때 넘겨주는 앱 환경
@@ -163,7 +169,7 @@ pub trait SttEngine: Send {
     ) -> Result<Transcript, SttError>;
 
     /// 이 인스턴스가 계산에 쓰는 장치.
-    /// GPU를 쓰도록 설정했어도 쓸 수 없는 환경이면 [`ComputeDevice::Cpu`]일 수 있습니다.
+    /// GPU·NPU를 쓰도록 설정했어도 쓸 수 없는 환경이면 [`ComputeDevice::Cpu`]일 수 있습니다.
     fn device(&self) -> ComputeDevice {
         ComputeDevice::Unknown
     }
@@ -250,5 +256,10 @@ mod tests {
         assert!(!only_ko.supports(&Language::Code("en".into())));
         assert!(!only_ko.supports(&Language::Auto));
         assert!(LanguageSupport::Any.supports(&Language::Auto));
+
+        let auto_and_ko = LanguageSupport::AutoAnd(vec!["ko".into(), "en".into()]);
+        assert!(auto_and_ko.supports(&Language::Auto));
+        assert!(auto_and_ko.supports(&Language::Code("ko".into())));
+        assert!(!auto_and_ko.supports(&Language::Code("fr".into())));
     }
 }

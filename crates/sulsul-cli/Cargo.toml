@@ -18,6 +18,7 @@ vulkan = ["sulsul-stt-whisper/vulkan"]
 [dependencies]
 sulsul-core.workspace = true
 sulsul-stt-whisper.workspace = true
+sulsul-stt-sensevoice.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true

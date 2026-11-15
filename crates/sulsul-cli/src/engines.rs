@@ -114,10 +114,11 @@ impl Selected {
     }
 }
 
-/// Whisper와 가짜 엔진을 등록한 레지스트리
+/// 사용할 수 있는 음성 인식 엔진을 모두 등록한 레지스트리
 fn registry() -> SttRegistry {
     let mut registry = SttRegistry::new();
     registry.register(sulsul_stt_whisper::factory());
+    registry.register(sulsul_stt_sensevoice::factory());
     registry.register(Arc::new(MockEngineFactory::new()));
     registry
 }

@@ -12,6 +12,7 @@ repository = "https://github.com/YubinMoon/sulsul"
 # 내부 크레이트
 sulsul-core = { path = "crates/sulsul-core" }
 sulsul-stt-whisper = { path = "crates/sulsul-stt-whisper" }
+sulsul-stt-sensevoice = { path = "crates/sulsul-stt-sensevoice" }
 
 # 공통
 anyhow = "1"
@@ -34,6 +35,9 @@ hound = "3"
 
 # 음성 인식
 whisper-rs = "0.16"
+ort = "2.0.0-rc.15"
+ndarray = "0.17"
+rustfft = "6"
 
 # 모델 내려받기
 ureq = { version = "3", default-features = false, features = ["rustls"] }

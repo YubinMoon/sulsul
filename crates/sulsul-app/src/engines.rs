@@ -5,6 +5,7 @@ use sulsul_core::stt::SttRegistry;
 pub fn registry() -> SttRegistry {
     let mut registry = SttRegistry::new();
     registry.register(sulsul_stt_whisper::factory());
+    registry.register(sulsul_stt_sensevoice::factory());
     // 가짜 엔진은 화면 흐름 확인용이라 개발 빌드에만 넣습니다.
     #[cfg(debug_assertions)]
     registry.register(std::sync::Arc::new(
@@ -21,11 +22,9 @@ mod tests {
 
     #[test]
     fn whisper_is_registered() {
-        assert!(
-            registry()
-                .descriptor(sulsul_stt_whisper::ENGINE_ID)
-                .is_some()
-        );
+        let reg = registry();
+        assert!(reg.descriptor(sulsul_stt_whisper::ENGINE_ID).is_some());
+        assert!(reg.descriptor(sulsul_stt_sensevoice::ENGINE_ID).is_some());
     }
 
     /// 엔진 설명자가 가리키는 번역 키가 번역 파일에 모두 있어야 합니다.

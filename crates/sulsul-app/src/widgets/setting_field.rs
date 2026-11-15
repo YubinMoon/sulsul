@@ -253,3 +253,41 @@ fn unavailable_choice_warning(options: &[ChoiceOption], current: &Value) -> Opti
         .into_owned(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device_options() -> Vec<ChoiceOption> {
+        vec![
+            ChoiceOption::new("auto"),
+            ChoiceOption::new("npu")
+                .with_label("engine.sense_voice_local.settings.device_npu")
+                .unavailable("engine.sense_voice_local.settings.device_npu_missing"),
+            ChoiceOption::new("gpu").with_detail("NVIDIA GeForce RTX 3060"),
+        ]
+    }
+
+    #[test]
+    fn stale_choice_is_reported_with_its_reason() {
+        rust_i18n::set_locale("ko");
+        let options = device_options();
+        let warning = unavailable_choice_warning(&options, &Value::String("npu".into())).unwrap();
+        // 어떤 값이 왜 안 되는지 둘 다 들어 있어야 합니다.
+        assert!(warning.contains("NPU"), "{warning}");
+        assert!(warning.contains("찾지 못했습니다"), "{warning}");
+    }
+
+    #[test]
+    fn usable_or_unknown_choice_has_no_warning() {
+        let options = device_options();
+        for value in ["auto", "gpu", "tpu"] {
+            let value = Value::String(value.into());
+            assert_eq!(unavailable_choice_warning(&options, &value), None);
+        }
+        assert_eq!(
+            unavailable_choice_warning(&options, &Value::Boolean(true)),
+            None
+        );
+    }
+}

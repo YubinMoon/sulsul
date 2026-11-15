@@ -107,5 +107,6 @@ fn device_text(device: &ComputeDevice) -> String {
         ComputeDevice::Unknown => "알 수 없음".to_owned(),
         ComputeDevice::Cpu => "CPU".to_owned(),
         ComputeDevice::Gpu(name) => format!("GPU ({name})"),
+        ComputeDevice::Npu(name) => format!("NPU ({name})"),
     }
 }
