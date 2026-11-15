@@ -382,7 +382,7 @@ impl eframe::App for SulsulApp {
             ctx.request_repaint_after(remaining + Duration::from_millis(10));
         }
         self.record.tick(&mut self.shared, ctx);
-        self.transcribe.tick(&self.shared);
+        self.transcribe.tick(&self.shared, &self.sync.config, ctx);
         self.models.tick(&mut self.shared, ctx);
     }
 

@@ -2,18 +2,22 @@
 //!
 //! 새 엔진(로컬 모델, 클라우드 API 등)을 추가하는 방법:
 //! 1. [`SttEngineFactory`]를 구현해 [`EngineDescriptor`](ID, 번역 키, 설정 스키마)를 제공
+//!    - 모델을 메모리에 올리는 로컬 엔진은 설정 스키마 맨 뒤에 모델 메모리 유지 시간 항목
+//!      [`keep_loaded_field`]를 넣습니다.
 //!    - 더 이상 쓰지 않는 설정 키는 [`EngineDescriptor::retired_keys`]에 적어 두면 사용자 파일에
 //!      남아 있어도 오류나 "모르는 키" 경고 없이 무시됩니다.
 //! 2. [`SttEngine`]을 구현해 실제 인식을 수행
 //! 3. 앱 시작 시 [`SttRegistry::register`]로 등록
 //! 4. `locales/*.yml`의 `engine.<ID>.*` 아래에 이름·설명·설정 항목 문구 추가
+//!    (공용 항목의 문구는 `stt.keep_loaded.*`에 이미 있습니다)
 //!
 //! 엔진별 설정 값은 TOML의 `[stt.engines.<ID>]`에 저장됩니다.
 //! 모델 파일을 쓰는 엔진은 [`SttEngineFactory::model`]도 구현해 필요한 파일을 알려 줍니다.
 //!
 //! 인식을 실행할 때는 엔진을 직접 다루지 말고 [`Transcriber`]를 쓰세요.
-//! 엔진 재사용, 언어 확인, 리샘플을 대신 처리합니다.
+//! 엔진 재사용, 언어 확인, 리샘플, 쓰지 않는 모델 내려놓기를 대신 처리합니다.
 
+mod fields;
 pub mod mock;
 pub mod model;
 mod registry;
@@ -22,6 +26,9 @@ mod transcriber;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use fields::{
+    DEFAULT_KEEP_LOADED_MINUTES, KEEP_LOADED_KEY, MAX_KEEP_LOADED_MINUTES, keep_loaded_field,
+};
 pub use model::{
     ModelAsset, ModelAxis, ModelFile, ModelRequirement, ModelVariant, VariantChoice, axis_options,
     catalog_axes, delete_variant, find_by_choices, format_bytes,

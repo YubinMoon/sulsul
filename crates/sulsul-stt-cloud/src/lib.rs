@@ -48,6 +48,7 @@ impl CloudFactory {
                 name_key: "engine.cloud_api.name".into(),
                 description_key: "engine.cloud_api.description".into(),
                 kind: EngineKind::Cloud,
+                // 모델을 메모리에 올리지 않으므로 메모리 유지 시간 항목은 없습니다.
                 capabilities: EngineCapabilities {
                     input_sample_rate: WHISPER_SAMPLE_RATE,
                     languages: LanguageSupport::Any,

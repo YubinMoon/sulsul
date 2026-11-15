@@ -118,8 +118,34 @@ impl Default for TranscribePage {
 }
 
 impl TranscribePage {
-    /// 매 프레임 부릅니다. 작업 스레드가 끝났으면 결과를 기록합니다.
-    pub fn tick(&mut self, shared: &Shared) {
+    /// 매 프레임 부릅니다(다른 화면을 보고 있어도). 작업 스레드가 끝났으면 결과를 기록하고,
+    /// 보관한 엔진을 모델 메모리 유지 시간 동안 쓰지 않았으면 내려놓습니다.
+    /// `config`는 지금 설정이라, 쉬는 동안 유지 시간을 바꾸면 다음 프레임부터 적용됩니다.
+    pub fn tick(&mut self, shared: &Shared, config: &Config, ctx: &egui::Context) {
+        self.collect_result(shared);
+        self.release_idle_engine(config, ctx);
+    }
+
+    /// 보관한 엔진을 내려놓을 시각이 지났으면 내려놓고, 아직이면 그 시각에 화면을 다시 그리게 합니다.
+    ///
+    /// 시각은 매번 지금 설정으로 다시 계산합니다. 화면에서 설정을 바꾸면 앱이 바로 다시 그리고
+    /// 파일을 다시 읽으면 이 함수보다 먼저 반영되므로, 줄여서 당겨진 시각도 다음 프레임에 다시
+    /// 걸립니다(egui는 가장 이른 요청을 따름). 늘렸으면 먼저 걸어 둔 시각에 한 번 깨어나 새 시각으로 다시 겁니다.
+    fn release_idle_engine(&mut self, config: &Config, ctx: &egui::Context) {
+        let Some(transcriber) = &mut self.transcriber else {
+            return;
+        };
+        let now = Instant::now();
+        if transcriber.unload_if_idle(&config.stt, now) {
+            return;
+        }
+        if let Some(deadline) = transcriber.idle_deadline(&config.stt) {
+            ctx.request_repaint_after(deadline.saturating_duration_since(now));
+        }
+    }
+
+    /// 작업 스레드가 끝났으면 결과를 기록합니다.
+    fn collect_result(&mut self, shared: &Shared) {
         let Some(running) = &self.running else {
             return;
         };

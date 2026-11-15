@@ -327,6 +327,10 @@ impl ResolvedSettings {
         self.0.insert(key.into(), value);
     }
 
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        self.0.remove(key)
+    }
+
     pub fn into_table(self) -> Table {
         self.0
     }

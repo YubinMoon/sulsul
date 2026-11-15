@@ -19,6 +19,7 @@ use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingFie
 use sulsul_core::stt::{
     EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, ModelFile,
     ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
+    keep_loaded_field,
 };
 
 use engine::{EngineOptions, WhisperEngine};
@@ -148,6 +149,7 @@ impl WhisperFactory {
                         8,
                     )
                     .with_help("engine.whisper_local.settings.beam_size_help"),
+                    keep_loaded_field(),
                 ],
                 retired_keys: vec![keys::RETIRED_THREADS.into()],
             },

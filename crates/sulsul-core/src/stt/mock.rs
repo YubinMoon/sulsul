@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use super::{
     EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, SttEngine,
     SttEngineFactory, SttError, TranscribeRequest, Transcript, WHISPER_SAMPLE_RATE,
+    keep_loaded_field,
 };
 use crate::audio::AudioClip;
 use crate::settings::{ResolvedSettings, SettingField};
@@ -40,6 +41,7 @@ impl MockEngineFactory {
                     .with_help("engine.mock.settings.delay_ms_help"),
                     SettingField::text("text", "engine.mock.settings.text", "")
                         .with_help("engine.mock.settings.text_help"),
+                    keep_loaded_field(),
                 ],
                 retired_keys: Vec::new(),
             },

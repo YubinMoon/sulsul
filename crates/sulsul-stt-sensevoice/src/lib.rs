@@ -19,6 +19,7 @@ use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingFie
 use sulsul_core::stt::{
     EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport,
     ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
+    keep_loaded_field,
 };
 
 pub use accel::{DetectedDevices, DevicePreference, detected_devices};
@@ -119,6 +120,7 @@ impl SenseVoiceFactory {
                         device_options(detected_devices(), accel::DIRECTML_BUILT),
                     )
                     .with_help("engine.sense_voice_local.settings.device_help"),
+                    keep_loaded_field(),
                 ],
                 retired_keys: vec![keys::RETIRED_THREADS.into()],
             },
