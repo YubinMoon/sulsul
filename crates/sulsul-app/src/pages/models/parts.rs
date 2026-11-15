@@ -1,8 +1,11 @@
 //! 모델 관리 화면의 여러 탭이 함께 쓰는 화면 조각.
 //!
-//! 테스트 버튼과 진행 상황·결과, 예상 장치 칸, 내려받기 진행 막대, 제공자 입력 칸이 있습니다.
+//! 테스트 버튼과 진행 상황·결과, 예상 장치 칸, 내려받기 진행 상황, 제공자 입력 칸이 있습니다.
 
-use egui::{Align, Color32, Layout, ProgressBar, RichText, Spinner, TextEdit, Ui, vec2};
+use egui::{
+    Align, Color32, CornerRadius, Layout, Rect, RichText, Role, Sense, Spinner, Stroke, StrokeKind,
+    TextEdit, Ui, WidgetInfo, vec2,
+};
 use rust_i18n::t;
 use sulsul_core::config::ApiProfile;
 use sulsul_core::download::DownloadPhase;
@@ -13,7 +16,7 @@ use super::jobs::{ActiveTest, DownloadSnapshot, TestFailure, TestOutcome, TestTa
 use crate::accel::{self, AccelEnv, EngineAccel};
 use crate::format;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Palette, size};
+use crate::theme::{self, Palette, radius, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::controls;
 use crate::widgets::row::{self, Row};
@@ -22,6 +25,8 @@ use crate::widgets::tile;
 
 /// 예상 장치 칸에서 항목 이름이 차지하는 너비
 const ACCEL_FACT_LABEL_WIDTH: f32 = 64.0;
+/// 내려받기 진행 막대의 높이
+const PROGRESS_BAR_HEIGHT: f32 = 8.0;
 
 /// 목록의 묶음 제목 (예: "로컬 모델")
 pub fn group_title(ui: &mut Ui, title: &str) {
@@ -243,7 +248,10 @@ fn accel_fact(ui: &mut Ui, label: &str, value: &str, value_color: Color32) {
     });
 }
 
-/// 내려받기 진행 막대: 몇 번째 파일인지, 받은 양과 전체 크기, 검증 중인지를 보여 줍니다.
+/// 내려받기 진행 상황: 몇 번째 파일인지, 받은 양과 전체 크기, 검증 중인지를 적은 글과 진행 막대.
+///
+/// 글은 막대 안이 아니라 위에 둡니다. 좁은 창에서는 글이 막대보다 길어지므로, 그때 잘리지 않고
+/// 줄을 바꾸게 하려는 것입니다.
 pub fn download_progress(ui: &mut Ui, snapshot: &DownloadSnapshot) {
     let (fraction, label) = match snapshot.phase {
         DownloadPhase::Downloading => {
@@ -278,11 +286,48 @@ pub fn download_progress(ui: &mut Ui, snapshot: &DownloadSnapshot) {
             (fraction, label)
         }
     };
-    ui.add(
-        ProgressBar::new(fraction)
-            .text(label)
-            .desired_width(f32::INFINITY),
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 5.0;
+        ui.label(text::caption(ui, &*label));
+        progress_bar(ui, fraction, &label);
+    });
+}
+
+/// 얇은 진행 막대. 남은 너비를 다 씁니다. `label`은 화면 읽기 도구에 알릴 이름입니다.
+///
+/// egui의 `ProgressBar`는 쓰지 않습니다. `desired_width`에 준 값을 그대로 자리로 잡아서 "남은 너비를
+/// 채워라"는 뜻으로 `f32::INFINITY`를 주면 창 밖까지 늘어나고, 바탕색이 입력 칸 색이라 같은 색인
+/// 타일([`tile::panel`]) 안에서는 빈 부분이 보이지 않습니다. 음량 미터와 같은 모양으로 직접 그립니다.
+fn progress_bar(ui: &mut Ui, fraction: f32, label: &str) {
+    let palette = Palette::of(ui);
+    let fraction = fraction.clamp(0.0, 1.0);
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), PROGRESS_BAR_HEIGHT),
+        Sense::hover(),
     );
+    response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ProgressIndicator, ui.is_enabled(), label);
+        info.value = Some(f64::from(fraction * 100.0).floor());
+        info
+    });
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter();
+    let rounding = CornerRadius::same(radius::PILL);
+    painter.rect_filled(rect, rounding, palette.field);
+    painter.rect_stroke(
+        rect,
+        rounding,
+        Stroke::new(1.0, palette.border),
+        StrokeKind::Inside,
+    );
+    if fraction > 0.0 {
+        // 둥근 끝이 찌그러지지 않게 막대 높이보다 좁게 채우지 않습니다.
+        let width = (rect.width() * fraction).max(rect.height());
+        let filled = Rect::from_min_size(rect.min, vec2(width, rect.height()));
+        painter.rect_filled(filled, rounding, palette.accent);
+    }
 }
 
 /// 제공자의 이름·주소·API 키·모델 입력 칸. 공급자는 부르는 쪽에서 따로 보여 줍니다.
