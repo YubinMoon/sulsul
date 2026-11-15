@@ -8,7 +8,9 @@ use sulsul_core::audio::{self, AudioClip, AudioError, InputDevice};
 use sulsul_core::config::Config;
 use sulsul_core::stt::SttRegistry;
 
+use crate::hotkey::KeyCapture;
 use crate::pages::Page;
+use crate::transcriber::SharedTranscriber;
 use crate::widgets::banner::Tone;
 
 /// 화면에 넘겨주는 묶음
@@ -31,19 +33,47 @@ pub struct Shared {
     pub toasts: Toasts,
     /// 다음 프레임에 이동할 화면
     pub navigate: Option<Page>,
+    /// 받아쓰기 테스트 화면과 단축키 받아쓰기가 함께 쓰는 엔진 보관소
+    pub transcriber: SharedTranscriber,
+    /// 설정 화면에서 새 단축키를 입력받는 창구
+    pub key_capture: KeyCapture,
+    /// 단축키 받아쓰기 상태 (화면 표시용)
+    pub dictation: DictationStatus,
 }
 
 impl Shared {
     pub fn new(paths: AppPaths, registry: SttRegistry) -> Self {
         Self {
+            transcriber: SharedTranscriber::new(registry.clone(), paths.clone()),
             paths,
             registry,
             devices: DeviceList::load(),
             last_recording: None,
             toasts: Toasts::default(),
             navigate: None,
+            key_capture: KeyCapture::default(),
+            dictation: DictationStatus::default(),
         }
     }
+}
+
+/// 단축키 받아쓰기 상태 (화면 표시용). 앱이 매 프레임 받아쓰기 작업에서 받아 채웁니다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DictationStatus {
+    pub state: DictationState,
+    /// 전역 단축키를 쓸 수 없을 때 그 이유 (화면에 보일 문구). 쓸 수 있으면 `None`
+    pub hotkey_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DictationState {
+    #[default]
+    Idle,
+    Recording,
+    /// 녹음을 끝내고 인식하는 중
+    Transcribing,
+    /// 받아쓴 글이 클립보드에 있고, 붙여넣으면 원래 클립보드 내용으로 되돌릴 차례
+    WaitingPaste,
 }
 
 /// 녹음 결과
@@ -128,6 +158,10 @@ impl Toasts {
 
     pub fn error(&mut self, text: impl Into<String>) {
         self.push(Tone::Error, text);
+    }
+
+    pub fn warning(&mut self, text: impl Into<String>) {
+        self.push(Tone::Warning, text);
     }
 
     fn push(&mut self, tone: Tone, text: impl Into<String>) {

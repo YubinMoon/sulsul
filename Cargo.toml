@@ -58,6 +58,11 @@ rfd = "0.18"
 opener = "0.9"
 lucide-icons = "1"
 
+# 데스크톱 연동 (전역 단축키·클립보드·트레이·자동 실행, Windows)
+windows-sys = "0.61"
+tray-icon = { version = "0.26", default-features = false }
+raw-window-handle = "0.6"
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 

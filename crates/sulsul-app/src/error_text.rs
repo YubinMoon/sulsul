@@ -10,6 +10,10 @@ use sulsul_core::settings::{SettingIssue, SettingProblem};
 use sulsul_core::stt::{SttError, SttRegistry};
 use sulsul_llm::client::LlmError;
 
+use crate::autostart::AutostartError;
+use crate::dictation::DictationError;
+use crate::dictation::paste::ClipboardError;
+use crate::hotkey::HotkeyError;
 use crate::i18n::{microphone_settings_hint, tr};
 
 pub fn audio(error: &AudioError) -> String {
@@ -186,6 +190,42 @@ pub fn llm(error: &LlmError) -> String {
             t!("error.llm.bad_response", message = message).into_owned()
         }
         LlmError::Cancelled => t!("error.llm.cancelled").into_owned(),
+    }
+}
+
+/// 전역 단축키를 쓸 수 없는 이유
+pub fn hotkey(error: &HotkeyError) -> String {
+    match error {
+        HotkeyError::Unsupported => t!("dictation.hotkey_unsupported").into_owned(),
+        HotkeyError::Install(error) => {
+            t!("dictation.hotkey_unavailable", message = error).into_owned()
+        }
+    }
+}
+
+/// 단축키 받아쓰기가 실패한 이유 (`dictation.failed`의 `message` 자리)
+pub fn dictation(error: &DictationError, registry: &SttRegistry) -> String {
+    match error {
+        DictationError::Stt(error) => stt(error, registry),
+        DictationError::Audio(error) => audio(error),
+        DictationError::Crashed => t!("transcribe.error.crashed").into_owned(),
+    }
+}
+
+/// 클립보드를 쓰지 못한 이유 (`dictation.clipboard_failed`의 `message` 자리)
+pub fn clipboard(error: &ClipboardError) -> String {
+    match error {
+        ClipboardError::Busy => t!("dictation.clipboard_busy").into_owned(),
+        ClipboardError::Os(error) => error.to_string(),
+        ClipboardError::Unsupported => t!("dictation.clipboard_unsupported").into_owned(),
+    }
+}
+
+/// 로그인할 때 자동 실행 설정을 바꾸지 못한 이유
+pub fn autostart(error: &AutostartError) -> String {
+    match error {
+        AutostartError::Unsupported => t!("autostart.unsupported").into_owned(),
+        AutostartError::Os(error) => t!("autostart.failed", message = error).into_owned(),
     }
 }
 

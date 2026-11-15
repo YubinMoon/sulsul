@@ -1,8 +1,9 @@
 //! 받아쓰기 작업 스레드.
 //!
 //! 엔진 준비(모델 로딩)와 인식은 오래 걸릴 수 있어 화면 스레드 밖에서 돌립니다.
-//! 실제 흐름은 [`Transcriber`]가 맡고, 여기서는 스레드를 띄워 결과를 돌려주기만 합니다.
-//! `Transcriber`는 작업이 끝나면 결과와 함께 돌려받아 다음 작업에 다시 씁니다.
+//! 실제 흐름은 [`Transcriber`](sulsul_core::stt::Transcriber)가 맡고, 여기서는 스레드를 띄워
+//! 결과를 돌려주기만 합니다. 엔진은 단축키 받아쓰기와 함께 쓰는 [`SharedTranscriber`]에 보관되어
+//! 다음 작업에 다시 쓰입니다.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -11,13 +12,14 @@ use std::time::Duration;
 use sulsul_core::CancelToken;
 use sulsul_core::audio::{AudioClip, AudioError};
 use sulsul_core::config::SttConfig;
-use sulsul_core::stt::{ComputeDevice, SttError, TranscribeError, TranscribeJob, Transcriber};
+use sulsul_core::stt::{ComputeDevice, SttError, TranscribeError, TranscribeJob};
 
 use crate::session::Recorded;
+use crate::transcriber::SharedTranscriber;
 
 pub struct JobInput {
-    /// 이전 작업에서 쓴 엔진을 보관하고 있습니다. 엔진 ID와 설정이 같으면 다시 씁니다.
-    pub transcriber: Transcriber,
+    /// 엔진 보관소. 엔진 ID와 설정이 같으면 보관한 엔진을 다시 씁니다.
+    pub transcriber: SharedTranscriber,
     /// 설정 파일의 `[stt]` (엔진별 설정 포함)
     pub stt: SttConfig,
     pub engine_id: String,
@@ -43,8 +45,6 @@ impl JobAudio {
 }
 
 pub struct JobOutput {
-    /// 다음 작업에 다시 쓸 `Transcriber`
-    pub transcriber: Transcriber,
     pub result: Result<Success, Failure>,
 }
 
@@ -102,7 +102,7 @@ pub fn spawn(input: JobInput, ctx: egui::Context) -> Receiver<JobOutput> {
 
 fn run(input: JobInput) -> JobOutput {
     let JobInput {
-        mut transcriber,
+        transcriber,
         stt,
         engine_id,
         language,
@@ -116,7 +116,8 @@ fn run(input: JobInput) -> JobOutput {
         language: language.as_deref(),
         cancel,
     };
-    let result = match transcriber.transcribe(audio.clip(), &job) {
+    // 단축키 받아쓰기가 엔진을 쓰고 있으면 끝날 때까지 기다립니다.
+    let result = match transcriber.lock().transcribe(audio.clip(), &job) {
         Ok(done) => {
             tracing::info!(
                 engine = %engine_id,
@@ -139,32 +140,24 @@ fn run(input: JobInput) -> JobOutput {
         // 실패 원인은 결과를 받는 화면 쪽에서 기록합니다.
         Err(error) => Err(Failure::from(error)),
     };
-    JobOutput {
-        transcriber,
-        result,
-    }
+    JobOutput { result }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sulsul_core::AppPaths;
+    use sulsul_core::stt::SttRegistry;
     use sulsul_core::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
-    use sulsul_core::stt::{EngineContext, SttRegistry};
     use sulsul_core::toml::Value;
 
-    fn transcriber() -> Transcriber {
+    fn transcriber() -> SharedTranscriber {
         let mut registry = SttRegistry::new();
         registry.register(Arc::new(MockEngineFactory::new()));
-        Transcriber::new(
-            registry,
-            EngineContext {
-                paths: AppPaths::under("unused"),
-            },
-        )
+        SharedTranscriber::new(registry, AppPaths::under("unused"))
     }
 
-    fn input(engine_id: &str, text: &str, transcriber: Transcriber) -> JobInput {
+    fn input(engine_id: &str, text: &str, transcriber: SharedTranscriber) -> JobInput {
         let mut stt = SttConfig::default();
         let table = stt.engines.entry(MOCK_ENGINE_ID.to_owned()).or_default();
         table.insert("delay_ms".into(), Value::Integer(0));
@@ -187,8 +180,9 @@ mod tests {
     }
 
     #[test]
-    fn spawned_job_delivers_result_and_returns_transcriber() {
-        let first = run_on_thread(input(MOCK_ENGINE_ID, "스레드", transcriber()));
+    fn spawned_job_delivers_result_and_reuses_engine() {
+        let shared = transcriber();
+        let first = run_on_thread(input(MOCK_ENGINE_ID, "스레드", shared.clone()));
         let success = first.result.unwrap();
         assert_eq!(success.text, "스레드");
         // 엔진 설정에 언어가 없으면 기본값(한국어)으로 인식합니다.
@@ -197,20 +191,21 @@ mod tests {
         assert_eq!(success.device, ComputeDevice::Unknown);
         assert!(!success.reused);
 
-        // 돌려받은 `Transcriber`를 넘기면 엔진을 다시 씁니다.
-        let second = run_on_thread(input(MOCK_ENGINE_ID, "스레드", first.transcriber));
+        // 같은 보관소를 쓰면 엔진을 다시 씁니다.
+        let second = run_on_thread(input(MOCK_ENGINE_ID, "스레드", shared));
         assert!(second.result.unwrap().reused);
     }
 
     #[test]
-    fn failure_is_delivered_with_transcriber() {
-        let output = run_on_thread(input("nope", "", transcriber()));
+    fn failure_is_delivered_and_engine_store_stays_usable() {
+        let shared = transcriber();
+        let output = run_on_thread(input("nope", "", shared.clone()));
         assert!(matches!(
             output.result,
             Err(Failure::Stt(SttError::UnknownEngine(id))) if id == "nope"
         ));
-        // 실패한 뒤에도 같은 `Transcriber`로 다음 작업을 할 수 있습니다.
-        let next = run_on_thread(input(MOCK_ENGINE_ID, "다음", output.transcriber));
+        // 실패한 뒤에도 같은 보관소로 다음 작업을 할 수 있습니다.
+        let next = run_on_thread(input(MOCK_ENGINE_ID, "다음", shared));
         assert_eq!(next.result.unwrap().text, "다음");
     }
 

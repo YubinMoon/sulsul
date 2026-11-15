@@ -14,7 +14,6 @@ use sulsul_core::audio::{self, AudioClip};
 use sulsul_core::config::Config;
 use sulsul_core::stt::{
     ComputeDevice, EngineContext, EngineKind, LANGUAGE_KEY, LanguageSupport, SttRegistry,
-    Transcriber,
 };
 
 use self::job::{Failure, JobAudio, JobInput, JobOutput, Success};
@@ -53,9 +52,6 @@ pub struct TranscribePage {
     /// 이 화면에서만 임시로 바꾼 언어. `None`이면 엔진 설정의 언어를 따릅니다.
     language_override: Option<String>,
     running: Option<Running>,
-    /// 엔진을 보관해 모델 로딩을 반복하지 않게 합니다. 작업 중에는 작업 스레드에 가 있고,
-    /// 돌려받지 못했으면(`None`) 다음 작업 때 새로 만듭니다.
-    transcriber: Option<Transcriber>,
     attempts: Vec<Attempt>,
     /// 결과 카드에 보여 줄 시도 (`attempts`의 위치)
     selected: Option<usize>,
@@ -118,7 +114,6 @@ impl Default for TranscribePage {
             engine_override: None,
             language_override: None,
             running: None,
-            transcriber: None,
             attempts: Vec::new(),
             selected: None,
             reveal_result: false,
@@ -127,30 +122,11 @@ impl Default for TranscribePage {
 }
 
 impl TranscribePage {
-    /// 매 프레임 부릅니다(다른 화면을 보고 있어도). 작업 스레드가 끝났으면 결과를 기록하고,
-    /// 보관한 엔진을 모델 메모리 유지 시간 동안 쓰지 않았으면 내려놓습니다.
-    /// `config`는 지금 설정이라, 쉬는 동안 유지 시간을 바꾸면 다음 프레임부터 적용됩니다.
-    pub fn tick(&mut self, shared: &Shared, config: &Config, ctx: &egui::Context) {
+    /// 매 프레임 부릅니다(다른 화면을 보고 있어도). 작업 스레드가 끝났으면 결과를 기록합니다.
+    /// 쉬는 엔진을 내려놓는 일은 단축키 받아쓰기와 함께 쓰는 보관소라서 앱이 맡습니다
+    /// ([`SharedTranscriber::release_idle`](crate::transcriber::SharedTranscriber::release_idle)).
+    pub fn tick(&mut self, shared: &Shared) {
         self.collect_result(shared);
-        self.release_idle_engine(config, ctx);
-    }
-
-    /// 보관한 엔진을 내려놓을 시각이 지났으면 내려놓고, 아직이면 그 시각에 화면을 다시 그리게 합니다.
-    ///
-    /// 시각은 매번 지금 설정으로 다시 계산합니다. 화면에서 설정을 바꾸면 앱이 바로 다시 그리고
-    /// 파일을 다시 읽으면 이 함수보다 먼저 반영되므로, 줄여서 당겨진 시각도 다음 프레임에 다시
-    /// 걸립니다(egui는 가장 이른 요청을 따름). 늘렸으면 먼저 걸어 둔 시각에 한 번 깨어나 새 시각으로 다시 겁니다.
-    fn release_idle_engine(&mut self, config: &Config, ctx: &egui::Context) {
-        let Some(transcriber) = &mut self.transcriber else {
-            return;
-        };
-        let now = Instant::now();
-        if transcriber.unload_if_idle(&config.stt, now) {
-            return;
-        }
-        if let Some(deadline) = transcriber.idle_deadline(&config.stt) {
-            ctx.request_repaint_after(deadline.saturating_duration_since(now));
-        }
     }
 
     /// 작업 스레드가 끝났으면 결과를 기록합니다.
@@ -158,16 +134,15 @@ impl TranscribePage {
         let Some(running) = &self.running else {
             return;
         };
-        let (transcriber, result) = match running.output.try_recv() {
-            Ok(output) => (Some(output.transcriber), output.result),
+        let result = match running.output.try_recv() {
+            Ok(output) => output.result,
             Err(TryRecvError::Empty) => return,
             // 작업 스레드가 결과 없이 끝났습니다(엔진 내부 패닉 등).
-            Err(TryRecvError::Disconnected) => (None, Err(Failure::Crashed)),
+            Err(TryRecvError::Disconnected) => Err(Failure::Crashed),
         };
         let Some(running) = self.running.take() else {
             return;
         };
-        self.transcriber = transcriber;
         let outcome = result.map_err(|failure| match failure {
             Failure::Stt(error) => {
                 tracing::warn!("transcription failed: {error}");
@@ -248,17 +223,9 @@ impl TranscribePage {
         let engine_id = self.engine_id(cx.config);
         let language = self.expected_language(&cx.shared.registry, cx.config, &engine_id);
         let duration = audio.clip().duration();
-        let transcriber = self.transcriber.take().unwrap_or_else(|| {
-            Transcriber::new(
-                cx.shared.registry.clone(),
-                EngineContext {
-                    paths: cx.shared.paths.clone(),
-                },
-            )
-        });
         let cancel = CancelToken::new();
         let input = JobInput {
-            transcriber,
+            transcriber: cx.shared.transcriber.clone(),
             stt: cx.config.stt.clone(),
             engine_id: engine_id.clone(),
             language: self.language_override.clone(),
