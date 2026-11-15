@@ -64,6 +64,7 @@ impl CloudFactory {
                     )
                     .with_help("engine.cloud_api.settings.timeout_seconds_help"),
                 ],
+                retired_keys: Vec::new(),
             },
         }
     }

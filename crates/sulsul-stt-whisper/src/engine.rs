@@ -17,7 +17,7 @@ use whisper_rs::{
     whisper_rs_sys as sys,
 };
 
-/// 자동으로 정할 때 쓰는 스레드 수의 상한. 그보다 많이 써도 거의 빨라지지 않습니다.
+/// CPU 스레드 수의 상한. 그보다 많이 써도 거의 빨라지지 않습니다.
 const MAX_AUTO_THREADS: usize = 8;
 
 /// 이보다 짧은 오디오는 뒤에 무음을 붙여 이 길이로 맞춥니다 (1초).
@@ -32,8 +32,6 @@ const MIN_SAMPLES: usize = WHISPER_SAMPLE_RATE as usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EngineOptions {
     pub use_gpu: bool,
-    /// 0이면 자동
-    pub threads: usize,
     /// 1이면 greedy, 2 이상이면 beam search
     pub beam_size: i32,
 }
@@ -86,7 +84,7 @@ impl WhisperEngine {
             _context: context,
             state,
             device,
-            threads: resolve_threads(options.threads),
+            threads: auto_threads(),
             beam_size: options.beam_size,
         })
     }
@@ -225,11 +223,8 @@ unsafe extern "C" fn abort_trampoline(user_data: *mut c_void) -> bool {
     cancel.is_cancelled()
 }
 
-/// 설정의 스레드 수를 실제 값으로 바꿉니다. 0이면 코어 수와 8 중 작은 쪽입니다.
-fn resolve_threads(configured: usize) -> usize {
-    if configured > 0 {
-        return configured;
-    }
+/// 인식에 쓸 CPU 스레드 수. 코어 수와 [`MAX_AUTO_THREADS`] 중 작은 쪽입니다.
+fn auto_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .clamp(1, MAX_AUTO_THREADS)
@@ -340,9 +335,7 @@ mod tests {
 
     #[test]
     fn auto_threads_are_bounded() {
-        let auto = resolve_threads(0);
-        assert!((1..=MAX_AUTO_THREADS).contains(&auto));
-        assert_eq!(resolve_threads(12), 12);
+        assert!((1..=MAX_AUTO_THREADS).contains(&auto_threads()));
     }
 
     #[test]

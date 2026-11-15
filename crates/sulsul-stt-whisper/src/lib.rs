@@ -31,8 +31,9 @@ pub mod keys {
     pub const MODEL: &str = "model";
     pub const MODEL_PATH: &str = "model_path";
     pub const USE_GPU: &str = "use_gpu";
-    pub const THREADS: &str = "threads";
     pub const BEAM_SIZE: &str = "beam_size";
+    /// 예전의 CPU 스레드 수. 지금은 항상 자동으로 정하므로 파일에 남아 있어도 무시합니다.
+    pub const RETIRED_THREADS: &str = "threads";
 }
 
 /// 이 빌드에 들어 있는 GPU 백엔드. CPU 전용 빌드면 `None`입니다.
@@ -140,14 +141,6 @@ impl WhisperFactory {
                     .with_help("engine.whisper_local.settings.model_path_help"),
                     use_gpu,
                     SettingField::integer(
-                        keys::THREADS,
-                        "engine.whisper_local.settings.threads",
-                        0,
-                        0,
-                        64,
-                    )
-                    .with_help("engine.whisper_local.settings.threads_help"),
-                    SettingField::integer(
                         keys::BEAM_SIZE,
                         "engine.whisper_local.settings.beam_size",
                         5,
@@ -156,6 +149,7 @@ impl WhisperFactory {
                     )
                     .with_help("engine.whisper_local.settings.beam_size_help"),
                 ],
+                retired_keys: vec![keys::RETIRED_THREADS.into()],
             },
         }
     }
@@ -188,7 +182,6 @@ impl SttEngineFactory for WhisperFactory {
 
         let options = EngineOptions {
             use_gpu: settings.bool(keys::USE_GPU),
-            threads: settings.int(keys::THREADS).max(0) as usize,
             beam_size: settings.int(keys::BEAM_SIZE).clamp(1, 8) as i32,
         };
         Ok(Box::new(WhisperEngine::load(&path, options)?))
@@ -432,6 +425,19 @@ mod tests {
             assert_eq!(value(ModelAxis::Language), "multi", "{id}: 언어 값");
             assert_eq!(value(ModelAxis::Precision), precision, "{id}: 정밀도 값");
         }
+    }
+
+    /// 예전 설정 파일에 남은 `threads = 0`은 오류도 "모르는 키" 경고도 아닙니다.
+    #[test]
+    fn retired_threads_key_is_ignored() {
+        let mut registry = sulsul_core::stt::SttRegistry::new();
+        registry.register(factory());
+        let mut stt = sulsul_core::config::SttConfig::default();
+        let table = stt.engines.entry(ENGINE_ID.into()).or_default();
+        table.insert(keys::RETIRED_THREADS.into(), 0.into());
+        table.insert(keys::MODEL.into(), "tiny".into());
+        assert!(registry.validate(&stt, ENGINE_ID).unwrap().is_empty());
+        assert!(registry.unknown_keys(&stt, ENGINE_ID).is_empty());
     }
 
     #[test]

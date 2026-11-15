@@ -35,7 +35,6 @@ fn ort_environment() -> Result<&'static Environment, SttError> {
 
 pub struct EngineOptions {
     pub use_itn: bool,
-    pub threads: usize,
     pub device: DevicePreference,
 }
 
@@ -109,7 +108,7 @@ fn create_session(
         accel::DIRECTML_BUILT,
     );
     for target in targets {
-        match build_session(model_path, options.threads, &target) {
+        match build_session(model_path, &target) {
             Ok(session) => {
                 let device = target.compute_device();
                 tracing::info!(?device, "SenseVoice 세션을 만들었습니다");
@@ -127,15 +126,15 @@ fn create_session(
     unreachable!("plan_targets는 항상 CPU로 끝납니다")
 }
 
-fn build_session(model_path: &Path, threads: usize, target: &Target) -> Result<Session, SttError> {
+/// CPU 스레드 수는 ONNX Runtime 기본값(물리 코어 수)에 맡깁니다.
+fn build_session(model_path: &Path, target: &Target) -> Result<Session, SttError> {
     let env = ort_environment()?;
+    // DirectML을 붙일 때만 다시 대입합니다 (Windows 전용).
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut builder = Session::builder(env)
         .map_err(ort_error)?
         .with_optimization_level(optimization_level(target))
         .map_err(ort_error)?;
-    if threads > 0 {
-        builder = builder.with_intra_threads(threads).map_err(ort_error)?;
-    }
     match target {
         Target::Cpu => {}
         #[cfg(windows)]

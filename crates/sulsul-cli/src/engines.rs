@@ -182,7 +182,10 @@ mod tests {
             parsed("use_gpu=true"),
             ("use_gpu".into(), Value::Boolean(true))
         );
-        assert_eq!(parsed("threads=4"), ("threads".into(), Value::Integer(4)));
+        assert_eq!(
+            parsed("beam_size=4"),
+            ("beam_size".into(), Value::Integer(4))
+        );
         assert_eq!(
             parsed("delay_ms=-1"),
             ("delay_ms".into(), Value::Integer(-1))

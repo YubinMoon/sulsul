@@ -41,6 +41,7 @@ impl MockEngineFactory {
                     SettingField::text("text", "engine.mock.settings.text", "")
                         .with_help("engine.mock.settings.text_help"),
                 ],
+                retired_keys: Vec::new(),
             },
         }
     }

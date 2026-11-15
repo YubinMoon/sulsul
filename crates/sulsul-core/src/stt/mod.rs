@@ -2,6 +2,8 @@
 //!
 //! 새 엔진(로컬 모델, 클라우드 API 등)을 추가하는 방법:
 //! 1. [`SttEngineFactory`]를 구현해 [`EngineDescriptor`](ID, 번역 키, 설정 스키마)를 제공
+//!    - 더 이상 쓰지 않는 설정 키는 [`EngineDescriptor::retired_keys`]에 적어 두면 사용자 파일에
+//!      남아 있어도 오류나 "모르는 키" 경고 없이 무시됩니다.
 //! 2. [`SttEngine`]을 구현해 실제 인식을 수행
 //! 3. 앱 시작 시 [`SttRegistry::register`]로 등록
 //! 4. `locales/*.yml`의 `engine.<ID>.*` 아래에 이름·설명·설정 항목 문구 추가
@@ -48,6 +50,11 @@ pub struct EngineDescriptor {
     pub kind: EngineKind,
     pub capabilities: EngineCapabilities,
     pub settings: Vec<SettingField>,
+    /// 더 이상 쓰지 않아 조용히 무시할 설정 키 (예: 예전의 `threads`).
+    ///
+    /// 사용자 설정 파일에 남아 있어도 검사([`SttRegistry::validate`])와 "모르는 키" 목록
+    /// ([`SttRegistry::unknown_keys`])에서 빠집니다. 파일에서 지우지는 않습니다.
+    pub retired_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

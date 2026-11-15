@@ -440,12 +440,8 @@ fn stt_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
                 let table = stt.engines.entry(engine_id.clone()).or_default();
                 setting_fields(ui, &engine_id, &descriptor.settings, table, cx.frame);
 
-                // 스키마에 없는 키 (오타일 가능성)
-                let unknown_keys: Vec<_> = table
-                    .keys()
-                    .filter(|key| !descriptor.settings.iter().any(|field| &field.key == *key))
-                    .cloned()
-                    .collect();
+                // 스키마에 없는 키 (오타일 가능성). 더 이상 쓰지 않는 키는 빠집니다.
+                let unknown_keys = registry.unknown_keys(stt, &engine_id);
                 if !unknown_keys.is_empty() {
                     ui.add_space(4.0);
                     ui.label(

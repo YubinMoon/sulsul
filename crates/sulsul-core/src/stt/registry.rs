@@ -40,16 +40,41 @@ impl SttRegistry {
         self.factories.iter().map(|f| f.descriptor())
     }
 
+    fn factory(&self, id: &str) -> Result<&Arc<dyn SttEngineFactory>, SttError> {
+        self.get(id)
+            .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))
+    }
+
     /// 설정 파일에 저장된 엔진 설정을 검사합니다.
+    ///
+    /// 더 이상 쓰지 않는 키([`EngineDescriptor::retired_keys`])는 문제로 보지 않습니다.
     pub fn validate(&self, config: &SttConfig, id: &str) -> Result<Vec<SettingIssue>, SttError> {
-        let descriptor = self
-            .descriptor(id)
-            .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
+        let descriptor = self.factory(id)?.descriptor();
         Ok(config
             .engines
             .get(id)
             .map(|table| settings::validate(&descriptor.settings, table))
-            .unwrap_or_default())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|issue| !is_retired(descriptor, &issue.key))
+            .collect())
+    }
+
+    /// 엔진 설정 표에 있지만 스키마에 없는 키 (오타일 가능성). 설정 화면의 경고에 씁니다.
+    ///
+    /// 더 이상 쓰지 않는 키([`EngineDescriptor::retired_keys`])는 빼고, 모르는 엔진이면 빈 목록입니다.
+    pub fn unknown_keys(&self, config: &SttConfig, id: &str) -> Vec<String> {
+        let (Some(descriptor), Some(table)) = (self.descriptor(id), config.engines.get(id)) else {
+            return Vec::new();
+        };
+        table
+            .keys()
+            .filter(|key| {
+                !descriptor.settings.iter().any(|field| &field.key == *key)
+                    && !is_retired(descriptor, key)
+            })
+            .cloned()
+            .collect()
     }
 
     /// 기본값을 채운 엔진 설정
@@ -151,6 +176,10 @@ impl SttRegistry {
     }
 }
 
+fn is_retired(descriptor: &EngineDescriptor, key: &str) -> bool {
+    descriptor.retired_keys.iter().any(|retired| retired == key)
+}
+
 impl fmt::Debug for SttRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list()
@@ -243,5 +272,47 @@ mod tests {
 
         let err = registry.create_active(&ctx(), &config).err().unwrap();
         assert!(matches!(err, SttError::InvalidSettings { .. }));
+    }
+
+    /// 가짜 엔진 설명자에 `threads`를 은퇴한 키로 적은 엔진
+    struct Retiring(EngineDescriptor);
+
+    impl SttEngineFactory for Retiring {
+        fn descriptor(&self) -> &EngineDescriptor {
+            &self.0
+        }
+
+        fn create(
+            &self,
+            ctx: &EngineContext,
+            settings: &ResolvedSettings,
+        ) -> Result<Box<dyn SttEngine>, SttError> {
+            MockEngineFactory::new().create(ctx, settings)
+        }
+    }
+
+    fn retiring_registry() -> SttRegistry {
+        let mut descriptor = MockEngineFactory::new().descriptor().clone();
+        descriptor.retired_keys = vec!["threads".into()];
+        let mut registry = SttRegistry::new();
+        registry.register(Arc::new(Retiring(descriptor)));
+        registry
+    }
+
+    #[test]
+    fn retired_keys_are_neither_problems_nor_unknown() {
+        let registry = retiring_registry();
+        let mut config = SttConfig::default();
+        let table = config.engines.entry(MOCK_ENGINE_ID.into()).or_default();
+        table.insert("threads".into(), toml::Value::Integer(0));
+        table.insert("typo".into(), toml::Value::Integer(1));
+
+        let issues = registry.validate(&config, MOCK_ENGINE_ID).unwrap();
+        let keys: Vec<_> = issues.iter().map(|issue| issue.key.as_str()).collect();
+        assert_eq!(keys, ["typo"], "은퇴한 키가 문제로 보고됐습니다");
+        assert_eq!(registry.unknown_keys(&config, MOCK_ENGINE_ID), ["typo"]);
+        assert!(registry.unknown_keys(&config, "nope").is_empty());
+        // 은퇴한 키가 남아 있어도 엔진을 만들 수 있습니다.
+        assert!(registry.create(&ctx(), &config, MOCK_ENGINE_ID).is_ok());
     }
 }

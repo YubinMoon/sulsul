@@ -32,9 +32,10 @@ pub mod keys {
     pub const MODEL: &str = "model";
     pub const MODEL_PATH: &str = "model_path";
     pub const USE_ITN: &str = "use_itn";
-    pub const THREADS: &str = "threads";
     /// 가속 장치: `auto` / `npu` / `gpu` / `cpu` ([`crate::DevicePreference`])
     pub const DEVICE: &str = "device";
+    /// 예전의 CPU 스레드 수. 지금은 항상 ONNX Runtime 기본값을 쓰므로 파일에 남아 있어도 무시합니다.
+    pub const RETIRED_THREADS: &str = "threads";
 }
 
 /// `device` 설정의 선택지. 이 PC에 없는 장치는 쓸 수 없음으로 표시하고, 있으면 장치 이름을 붙입니다.
@@ -118,15 +119,8 @@ impl SenseVoiceFactory {
                         device_options(detected_devices(), accel::DIRECTML_BUILT),
                     )
                     .with_help("engine.sense_voice_local.settings.device_help"),
-                    SettingField::integer(
-                        keys::THREADS,
-                        "engine.sense_voice_local.settings.threads",
-                        0,
-                        0,
-                        64,
-                    )
-                    .with_help("engine.sense_voice_local.settings.threads_help"),
                 ],
+                retired_keys: vec![keys::RETIRED_THREADS.into()],
             },
         }
     }
@@ -170,7 +164,6 @@ impl SttEngineFactory for SenseVoiceFactory {
             .ok_or_else(|| SttError::Backend("선택된 SenseVoice 모델을 찾을 수 없습니다".into()))?;
         let options = EngineOptions {
             use_itn: settings.bool(keys::USE_ITN),
-            threads: settings.int(keys::THREADS).max(0) as usize,
             device: DevicePreference::from_setting(settings.str(keys::DEVICE))
                 .unwrap_or(DevicePreference::Auto),
         };
@@ -213,6 +206,18 @@ impl SttEngineFactory for SenseVoiceFactory {
 mod tests {
     use super::*;
     use sulsul_core::settings;
+
+    /// 예전 설정 파일에 남은 `threads = 0`은 오류도 "모르는 키" 경고도 아닙니다.
+    #[test]
+    fn retired_threads_key_is_ignored() {
+        let mut registry = sulsul_core::stt::SttRegistry::new();
+        registry.register(factory());
+        let mut stt = sulsul_core::config::SttConfig::default();
+        let table = stt.engines.entry(ENGINE_ID.into()).or_default();
+        table.insert(keys::RETIRED_THREADS.into(), 0.into());
+        assert!(registry.validate(&stt, ENGINE_ID).unwrap().is_empty());
+        assert!(registry.unknown_keys(&stt, ENGINE_ID).is_empty());
+    }
 
     #[test]
     fn device_setting_defaults_to_auto() {
