@@ -17,6 +17,7 @@ M5 VAD·환각 필터·오버레이 → M6 배포. 지금 어디까지 왔는지
 | `sulsul-stt-whisper` | 로컬 Whisper(whisper.cpp, `whisper-rs`) 엔진 |
 | `sulsul-stt-sensevoice` | 로컬 SenseVoice(ONNX, `ort`) 엔진, Windows는 DirectML 가속 |
 | `sulsul-stt-cloud` | OpenAI 호환 `/audio/transcriptions` 클라우드 엔진 |
+| `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·연결 테스트, 모델 선택 규칙 |
 | `sulsul-app` | 데스크톱 앱(eframe/egui), 실행 파일 이름은 `sulsul` |
 | `sulsul-cli` | 개발용 명령줄 도구 (`devices`, `record`, `transcribe`, `models`) |
 | `locales/` | 화면 문구 번역 파일 (`ko.yml`이 기본) |

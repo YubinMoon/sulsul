@@ -1,0 +1,21 @@
+[package]
+name = "sulsul-llm"
+description = "술술 글 다듬기(LLM) 모델 카탈로그와 외부 제공자"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+sulsul-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -4442,6 +4442,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sulsul-llm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sulsul-core",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "ureq",
+]
+
+[[package]]
 name = "sulsul-stt-cloud"
 version = "0.1.0"
 dependencies = [
