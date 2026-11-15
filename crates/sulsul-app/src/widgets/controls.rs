@@ -343,6 +343,8 @@ pub struct ComboItem<T> {
     pub label: String,
     /// 번역하지 않는 부가 정보 (흐리게 표시)
     pub detail: Option<String>,
+    /// 지금은 고를 수 없는 항목이면 그 이유. 항목을 꺼진 상태로 보여 주고 아래에 이유를 적습니다.
+    pub unavailable: Option<String>,
 }
 
 impl<T> ComboItem<T> {
@@ -351,6 +353,7 @@ impl<T> ComboItem<T> {
             value,
             label: label.into(),
             detail: None,
+            unavailable: None,
         }
     }
 
@@ -358,11 +361,20 @@ impl<T> ComboItem<T> {
         self.detail = Some(detail.into());
         self
     }
+
+    /// 고를 수 없는 항목으로 표시합니다. `reason`은 사용자에게 보일 이유입니다.
+    pub fn unavailable(mut self, reason: impl Into<String>) -> Self {
+        self.unavailable = Some(reason.into());
+        self
+    }
 }
 
 /// 값 하나를 고르는 콤보 상자. 값이 바뀌면 `true`를 돌려줍니다.
 ///
 /// `current`가 목록에 없으면 `fallback_label`을 선택된 글로 보여 줍니다.
+///
+/// 고를 수 없는 항목([`ComboItem::unavailable`])은 누를 수 없고, 이유가 함께 보입니다.
+/// `current`가 그런 항목이어도 값은 바꾸지 않고, 닫힌 상태에서 경고색으로 알립니다.
 pub fn combo<T: PartialEq + Clone>(
     ui: &mut Ui,
     id_salt: impl egui::AsIdSalt,
@@ -373,7 +385,22 @@ pub fn combo<T: PartialEq + Clone>(
 ) -> bool {
     let palette = Palette::of(ui);
     let selected = items.iter().find(|item| item.value == *current);
-    let selected_text = selected.map_or(fallback_label, |item| item.label.as_str());
+    let selected_label = selected.map_or(fallback_label, |item| item.label.as_str());
+    let selected_unavailable = selected.is_some_and(|item| item.unavailable.is_some());
+    let selected_text = if selected_unavailable {
+        // 고를 수 없는 값이 선택되어 있으면 경고 아이콘과 경고색으로 보여 줍니다.
+        let mut job = icons::with_text_in(
+            Icon::TriangleAlert,
+            selected_label,
+            theme::regular(size::BODY),
+        );
+        for section in &mut job.sections {
+            section.format.color = palette.warning_text;
+        }
+        egui::WidgetText::from(job)
+    } else {
+        egui::WidgetText::from(selected_label)
+    };
     let mut changed = false;
     ComboBox::from_id_salt(id_salt)
         .width(width)
@@ -381,21 +408,21 @@ pub fn combo<T: PartialEq + Clone>(
         .truncate()
         .icon(combo_chevron)
         .show_ui(ui, |ui| {
+            // 목록의 처음 너비(= 버튼 너비). 이유 문구는 이 너비 안에서 줄을 바꿉니다.
+            let reason_width = ui.available_width();
             for item in items {
                 let is_selected = item.value == *current;
+                let enabled = item.unavailable.is_none();
+                let label_color = match (enabled, is_selected) {
+                    (false, _) => palette.text_faint,
+                    (true, true) => palette.accent_text,
+                    (true, false) => palette.text,
+                };
                 let mut job = egui::text::LayoutJob::default();
-                let font = theme::regular(size::BODY);
                 job.append(
                     &item.label,
                     0.0,
-                    egui::TextFormat::simple(
-                        font.clone(),
-                        if is_selected {
-                            palette.accent_text
-                        } else {
-                            palette.text
-                        },
-                    ),
+                    egui::TextFormat::simple(theme::regular(size::BODY), label_color),
                 );
                 if let Some(detail) = &item.detail {
                     job.append(
@@ -404,11 +431,45 @@ pub fn combo<T: PartialEq + Clone>(
                         egui::TextFormat::simple(theme::regular(size::CAPTION), palette.text_faint),
                     );
                 }
-                if ui.selectable_label(is_selected, job).clicked() && !is_selected {
+                let response = ui.add_enabled(enabled, Button::selectable(is_selected, job));
+                if let Some(reason) = &item.unavailable {
+                    response.on_disabled_hover_text(reason);
+                    combo_item_reason(ui, reason, reason_width);
+                } else if response.clicked() && !is_selected {
                     *current = item.value.clone();
                     changed = true;
                 }
             }
         });
     changed
+}
+
+/// 고를 수 없는 콤보 항목 아래에 적는 이유. 항목 글자와 왼쪽을 맞추고, 길면 줄을 바꿉니다.
+fn combo_item_reason(ui: &mut Ui, reason: &str, width: f32) {
+    let palette = Palette::of(ui);
+    let padding = ui.spacing().button_padding.x;
+    ui.allocate_ui_with_layout(
+        vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_max_width(width);
+            egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: padding as i8,
+                    right: padding as i8,
+                    top: 0,
+                    bottom: 4,
+                })
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(reason)
+                                .size(size::CAPTION)
+                                .color(palette.warning_text),
+                        )
+                        .wrap(),
+                    );
+                });
+        },
+    );
 }

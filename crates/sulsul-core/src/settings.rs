@@ -17,6 +17,11 @@ pub struct SettingField {
     pub label_key: String,
     /// 도움말 번역 키
     pub help_key: Option<String>,
+    /// 이 빌드·환경에서 쓸 수 없는 항목이면 그 이유의 번역 키.
+    ///
+    /// 화면은 항목을 꺼진 상태로 잠그고 이유를 보여 줍니다. 저장된 값은 건드리지 않으므로
+    /// 쓸 수 있는 빌드로 바꾸면 사용자가 정한 값이 그대로 적용됩니다.
+    pub unavailable_key: Option<String>,
     pub kind: SettingKind,
     pub default: Value,
 }
@@ -54,6 +59,11 @@ pub struct ChoiceOption {
     pub label_key: Option<String>,
     /// 번역하지 않는 부가 정보 (예: "547 MB")
     pub detail: Option<String>,
+    /// 이 빌드·환경에서 고를 수 없는 선택지면 그 이유의 번역 키.
+    ///
+    /// 화면은 선택지를 꺼진 상태로 보여 주고 이유를 알려 줍니다. 저장된 값은 건드리지 않고
+    /// 검사([`SettingField::check`])도 통과시키므로, 그 선택지를 어떻게 처리할지는 엔진이 정합니다.
+    pub unavailable_key: Option<String>,
 }
 
 impl ChoiceOption {
@@ -62,6 +72,7 @@ impl ChoiceOption {
             value: value.into(),
             label_key: None,
             detail: None,
+            unavailable_key: None,
         }
     }
 
@@ -72,6 +83,12 @@ impl ChoiceOption {
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    /// 이 빌드·환경에서 고를 수 없는 선택지로 표시합니다 ([`ChoiceOption::unavailable_key`]).
+    pub fn unavailable(mut self, reason_key: impl Into<String>) -> Self {
+        self.unavailable_key = Some(reason_key.into());
         self
     }
 }
@@ -87,6 +104,7 @@ impl SettingField {
             key: key.into(),
             label_key: label_key.into(),
             help_key: None,
+            unavailable_key: None,
             kind,
             default,
         }
@@ -171,6 +189,12 @@ impl SettingField {
 
     pub fn with_help(mut self, help_key: impl Into<String>) -> Self {
         self.help_key = Some(help_key.into());
+        self
+    }
+
+    /// 이 빌드·환경에서 쓸 수 없는 항목으로 표시합니다 ([`SettingField::unavailable_key`]).
+    pub fn unavailable(mut self, reason_key: impl Into<String>) -> Self {
+        self.unavailable_key = Some(reason_key.into());
         self
     }
 

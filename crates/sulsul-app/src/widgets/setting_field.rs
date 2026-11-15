@@ -5,7 +5,7 @@
 
 use egui::{DragValue, TextEdit, Ui};
 use rust_i18n::t;
-use sulsul_core::settings::{PathKind, SettingField, SettingKind};
+use sulsul_core::settings::{ChoiceOption, PathKind, SettingField, SettingKind};
 use sulsul_core::toml::{Table, Value};
 
 use super::controls::{self, ComboItem};
@@ -67,6 +67,16 @@ pub fn setting_field(
         Some(value) if warning.is_none() => value.clone(),
         _ => field.default.clone(),
     };
+    // 이 빌드에서 쓸 수 없는 항목은 조작을 잠그고, 값 문제보다 그 이유를 먼저 알립니다.
+    let unavailable = field.unavailable_key.as_deref().map(tr);
+    let enabled = unavailable.is_none();
+    // 저장된 값이 지금은 고를 수 없는 선택지여도 값은 바꾸지 않습니다. 장치를 다시 꽂는 등
+    // 상황이 바뀌면 그대로 쓰여야 하기 때문입니다. 대신 같은 자리에 경고로 알립니다.
+    let stale_choice = match &field.kind {
+        SettingKind::Choice { options } => unavailable_choice_warning(options, &current),
+        _ => None,
+    };
+    let warning = unavailable.or(warning).or(stale_choice);
     let widget_id = (id_salt, field.key.as_str());
 
     let row = Row::new(&label)
@@ -75,13 +85,18 @@ pub fn setting_field(
 
     let new_value = match &field.kind {
         SettingKind::Bool => {
-            let mut value = current.as_bool().unwrap_or_default();
-            row.show(ui, |ui| controls::toggle(ui, &mut value, &label));
+            // 잠긴 켜기/끄기는 실제로 적용되는 상태(꺼짐)로 보여 줍니다.
+            let mut value = enabled && current.as_bool().unwrap_or_default();
+            row.show(ui, |ui| {
+                lock(ui, enabled);
+                controls::toggle(ui, &mut value, &label)
+            });
             Value::Boolean(value)
         }
         SettingKind::Integer { min, max } => {
             let mut value = current.as_integer().unwrap_or(*min);
             row.show(ui, |ui| {
+                lock(ui, enabled);
                 if max.saturating_sub(*min) <= SLIDER_MAX_SPAN {
                     // 슬라이더와 숫자 칸이 순서대로 놓이도록 너비를 잡아 줍니다.
                     let spacing = ui.spacing();
@@ -101,6 +116,7 @@ pub fn setting_field(
         SettingKind::Text { multiline: false } => {
             let mut value = current.as_str().unwrap_or_default().to_owned();
             row.show(ui, |ui| {
+                lock(ui, enabled);
                 ui.add(
                     TextEdit::singleline(&mut value)
                         .id_salt(widget_id)
@@ -112,6 +128,7 @@ pub fn setting_field(
         SettingKind::Text { multiline: true } => {
             let mut value = current.as_str().unwrap_or_default().to_owned();
             row.show_below(ui, |ui| {
+                lock(ui, enabled);
                 ui.add(
                     TextEdit::multiline(&mut value)
                         .id_salt(widget_id)
@@ -126,6 +143,7 @@ pub fn setting_field(
             let visible_id = ui.make_persistent_id((widget_id, "visible"));
             let mut visible = ui.data(|data| data.get_temp::<bool>(visible_id).unwrap_or(false));
             row.show(ui, |ui| {
+                lock(ui, enabled);
                 let (icon, tooltip) = if visible {
                     (Icon::EyeOff, t!("settings.field.hide_secret"))
                 } else {
@@ -147,6 +165,7 @@ pub fn setting_field(
         SettingKind::Path { kind } => {
             let mut value = current.as_str().unwrap_or_default().to_owned();
             row.show_below(ui, |ui| {
+                lock(ui, enabled);
                 // 버튼을 오른쪽 끝에 먼저 놓고, 남은 너비를 입력 칸이 씁니다.
                 let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
                 let layout = egui::Layout::right_to_left(egui::Align::Center);
@@ -176,35 +195,61 @@ pub fn setting_field(
             let items: Vec<ComboItem<String>> = options
                 .iter()
                 .map(|option| {
-                    let label = option
-                        .label_key
-                        .as_deref()
-                        .map_or_else(|| option.value.clone(), tr);
-                    let mut item = ComboItem::new(option.value.clone(), label);
+                    let mut item = ComboItem::new(option.value.clone(), choice_label(option));
                     if let Some(detail) = &option.detail {
                         item = item.detail(detail);
+                    }
+                    if let Some(reason_key) = &option.unavailable_key {
+                        item = item.unavailable(tr(reason_key));
                     }
                     item
                 })
                 .collect();
             row.show(ui, |ui| {
+                lock(ui, enabled);
                 let fallback = value.clone();
-                controls::combo(
-                    ui,
-                    widget_id,
-                    row::CONTROL_WIDTH,
-                    &mut value,
-                    &items,
-                    &fallback,
-                );
+                // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+                let width = row::CONTROL_WIDTH.min(ui.available_width());
+                controls::combo(ui, widget_id, width, &mut value, &items, &fallback);
             });
             Value::String(value)
         }
     };
 
-    if new_value == current {
+    // 잠긴 항목은 보여 주는 값이 저장된 값과 달라도 쓰지 않습니다.
+    if !enabled || new_value == current {
         return false;
     }
     table.insert(field.key.clone(), new_value);
     true
+}
+
+/// 쓸 수 없는 항목이면 이 영역의 조작 위젯을 잠급니다.
+fn lock(ui: &mut Ui, enabled: bool) {
+    if !enabled {
+        ui.disable();
+    }
+}
+
+/// 선택지를 화면에 보일 이름. 번역 키가 없으면 값을 그대로 보여 줍니다.
+fn choice_label(option: &ChoiceOption) -> String {
+    option
+        .label_key
+        .as_deref()
+        .map_or_else(|| option.value.clone(), tr)
+}
+
+/// `current`가 지금은 고를 수 없는 선택지면, 그 사실과 이유를 알리는 문구를 돌려줍니다.
+fn unavailable_choice_warning(options: &[ChoiceOption], current: &Value) -> Option<String> {
+    let current = current.as_str()?;
+    let option = options.iter().find(|option| option.value == current)?;
+    let reason = tr(option.unavailable_key.as_deref()?);
+    Some(
+        t!(
+            "settings.field.choice_unavailable",
+            option = choice_label(option),
+            reason = reason
+        )
+        .into_owned(),
+    )
 }

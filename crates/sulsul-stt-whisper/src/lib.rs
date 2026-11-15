@@ -77,6 +77,19 @@ pub fn resolve_model_path(paths: &AppPaths, settings: &ResolvedSettings) -> Opti
     find_model(settings.str(keys::MODEL)).map(|m| paths.models_dir().join(m.file_name))
 }
 
+/// GPU 가속 항목을 잠글 이유의 번역 키. GPU를 쓸 수 있으면 `None`입니다.
+fn gpu_unavailable_reason() -> Option<&'static str> {
+    if compiled_gpu_backend().is_none() {
+        // CPU 전용으로 빌드함 (`--no-default-features`)
+        Some("engine.whisper_local.settings.use_gpu_unavailable")
+    } else if gpu_device().is_none() {
+        // GPU 백엔드는 넣었지만 이 컴퓨터에 쓸 수 있는 GPU가 없음
+        Some("engine.whisper_local.settings.use_gpu_no_device")
+    } else {
+        None
+    }
+}
+
 pub fn factory() -> Arc<dyn SttEngineFactory> {
     Arc::new(WhisperFactory::new())
 }
@@ -91,6 +104,14 @@ impl WhisperFactory {
             .iter()
             .map(|m| ChoiceOption::new(m.id).with_detail(m.size_label()))
             .collect();
+        let mut use_gpu =
+            SettingField::bool(keys::USE_GPU, "engine.whisper_local.settings.use_gpu", true)
+                .with_help("engine.whisper_local.settings.use_gpu_help");
+        // GPU를 쓸 수 없으면 켜 둬도 쓰이지 않으므로(engine.rs) 화면에서 잠그고 이유를 보여 줍니다.
+        // 저장된 값은 그대로 둡니다.
+        if let Some(reason) = gpu_unavailable_reason() {
+            use_gpu = use_gpu.unavailable(reason);
+        }
         Self {
             descriptor: EngineDescriptor {
                 id: ENGINE_ID.into(),
@@ -117,12 +138,7 @@ impl WhisperFactory {
                         PathKind::File,
                     )
                     .with_help("engine.whisper_local.settings.model_path_help"),
-                    SettingField::bool(
-                        keys::USE_GPU,
-                        "engine.whisper_local.settings.use_gpu",
-                        true,
-                    )
-                    .with_help("engine.whisper_local.settings.use_gpu_help"),
+                    use_gpu,
                     SettingField::integer(
                         keys::THREADS,
                         "engine.whisper_local.settings.threads",
@@ -279,6 +295,24 @@ mod tests {
             None
         };
         assert_eq!(compiled_gpu_backend(), expected);
+    }
+
+    /// 쓸 수 있는 GPU가 없으면 GPU 가속 항목을 화면에서 잠그고, 이유를 구분해 보여 줘야 합니다.
+    #[test]
+    fn gpu_setting_is_locked_only_without_usable_gpu() {
+        let factory = WhisperFactory::new();
+        let field = factory
+            .descriptor()
+            .settings
+            .iter()
+            .find(|f| f.key == keys::USE_GPU)
+            .unwrap();
+        let expected = match (compiled_gpu_backend(), gpu_device()) {
+            (None, _) => Some("engine.whisper_local.settings.use_gpu_unavailable"),
+            (Some(_), None) => Some("engine.whisper_local.settings.use_gpu_no_device"),
+            (Some(_), Some(_)) => None,
+        };
+        assert_eq!(field.unavailable_key.as_deref(), expected);
     }
 
     #[test]

@@ -40,8 +40,10 @@ mod tests {
             for field in &descriptor.settings {
                 keys.push(field.label_key.clone());
                 keys.extend(field.help_key.clone());
+                keys.extend(field.unavailable_key.clone());
                 if let SettingKind::Choice { options } = &field.kind {
                     keys.extend(options.iter().filter_map(|o| o.label_key.clone()));
+                    keys.extend(options.iter().filter_map(|o| o.unavailable_key.clone()));
                 }
             }
         }
