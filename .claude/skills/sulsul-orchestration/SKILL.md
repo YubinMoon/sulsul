@@ -23,11 +23,11 @@ description: >-
 
 ## 2. 워커 배정
 
-| 종류 | `--agent` | `--model` | `--effort` | 띄우는 수 |
-|---|---|---|---|---|
-| 일반 코드 | `claude` | `claude-opus-5-5` | `xhigh` | 서로 안 겹치는 조각마다 하나씩, 병렬 |
-| GUI | `claude` | `claude-fable-5-2` | `xhigh` | 보통 하나 (화면이 완전히 나뉘면 여럿) |
-| 실행 테스트 (computer use) | `codex` | `gpt-6.1-terra` | `xhigh` | 하나 |
+| 종류                    | `--agent` | `--model`          | `--effort` | 띄우는 수                  |
+| --------------------- | --------- | ------------------ | ---------- | ---------------------- |
+| 일반 코드                 | `claude`  | `claude-opus-5-5`  | `xhigh`    | 서로 안 겹치는 조각마다 하나씩, 병렬  |
+| GUI                   | `claude`  | `claude-fable-5-2` | `xhigh`    | 보통 하나 (화면이 완전히 나뉘면 여럿) |
+| 실행 테스트 (computer use) | `codex`   | `gpt-6.1-terra`    | `high`     | 하나                     |
 
 orchestration 가이드에는 "사용자가 모델을 말했을 때만 `--model`을 붙인다"고 되어 있지만, 이 표가 사용자가 정한
 모델이므로 **항상 `--model`과 `--effort`를 붙입니다**. 빼면 각 에이전트의 기본 설정 모델로 떠서 배정이 무너집니다.
