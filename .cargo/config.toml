@@ -11,4 +11,4 @@ GGML_NATIVE = "OFF"
 CMAKE_PROJECT_INCLUDE = { value = ".cargo/whisper-short-paths.cmake", relative = true }
 
 [build]
-jobs = 8
+jobs = 6
