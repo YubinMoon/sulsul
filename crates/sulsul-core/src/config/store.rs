@@ -124,10 +124,14 @@ impl ConfigStore {
         };
         merge_document(&mut doc, &fresh);
         // `Vec::is_empty`로 직렬화가 생략되는 배열 테이블은 모두 삭제됐을 때 명시적으로 비워 줍니다.
-        if config.stt.api_profiles.is_empty()
-            && let Some(stt_table) = doc.get_mut("stt").and_then(|item| item.as_table_mut())
-        {
-            stt_table.remove("api_profiles");
+        for (section, empty) in [
+            ("stt", config.stt.api_profiles.is_empty()),
+            ("postprocess", config.postprocess.api_profiles.is_empty()),
+        ] {
+            if empty && let Some(table) = doc.get_mut(section).and_then(|item| item.as_table_mut())
+            {
+                table.remove("api_profiles");
+            }
         }
         self.write_text(&doc.to_string())
     }
@@ -391,5 +395,185 @@ mod tests {
 
         let text = fs::read_to_string(store.path()).unwrap();
         assert!(text.contains("# 술술(sulsul) 설정 파일"));
+    }
+
+    fn llm_profile(id: &str, model: &str) -> crate::config::ApiProfile {
+        crate::config::ApiProfile {
+            id: id.into(),
+            name: format!("이름 {id}"),
+            provider: "openai".into(),
+            endpoint: "https://api.openai.com/v1".into(),
+            api_key: "sk-1".into(),
+            model: model.into(),
+        }
+    }
+
+    fn position(text: &str, needle: &str) -> usize {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("`{needle}`이(가) 파일에 없습니다:\n{text}"))
+    }
+
+    /// 기본 파일에 글 다듬기 프로필과 로컬 모델 선택을 처음 넣으면 `[postprocess]` 아래에 붙고,
+    /// 다시 읽으면 같은 값이 나와야 합니다.
+    #[test]
+    fn postprocess_profiles_and_local_model_round_trip_from_template() {
+        let (_dir, store) = store();
+        let mut config = store.load_or_create().unwrap().config;
+        config
+            .stt
+            .api_profiles
+            .push(llm_profile("stt-1", "whisper-1"));
+        config.postprocess.processor = "llm_cloud".into();
+        config.postprocess.api_profile = "p2".into();
+        config.postprocess.api_profiles = vec![llm_profile("p1", "m1"), llm_profile("p2", "m2")];
+        config
+            .postprocess
+            .processors
+            .entry("llm_local".into())
+            .or_default()
+            .insert("model".into(), toml::Value::String("qwen-4b".into()));
+        store.save(&config).unwrap();
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(
+            text.contains("# 글 다듬기(LLM) 설정"),
+            "템플릿 주석이 사라졌습니다"
+        );
+        let postprocess = position(&text, "\n[postprocess]\n");
+        assert!(
+            position(&text, "[[stt.api_profiles]]") < position(&text, "\n[output]\n"),
+            "STT 프로필은 [stt] 아래에 있어야 합니다:\n{text}"
+        );
+        assert!(
+            postprocess < position(&text, "[[postprocess.api_profiles]]"),
+            "글 다듬기 프로필은 [postprocess] 아래에 있어야 합니다:\n{text}"
+        );
+        assert!(postprocess < position(&text, "[postprocess.processors.llm_local]"));
+
+        let loaded = store.load().unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(loaded.config, config);
+        assert_eq!(
+            loaded.config.postprocess.active_api_profile().unwrap().id,
+            "p2"
+        );
+    }
+
+    /// 사용자가 직접 쓴 글 다듬기 설정의 주석·순서·직접 넣은 키가 저장 뒤에도 남아야 합니다.
+    #[test]
+    fn postprocess_profiles_keep_user_comments_and_order() {
+        let (_dir, store) = store();
+        let original = "\
+# 내 설정
+
+[postprocess]
+# 다듬기 켜기
+enabled = true
+processor = \"llm_cloud\"
+api_profile = \"p1\"
+
+# 첫 제공자
+[[postprocess.api_profiles]]
+id = \"p1\"
+name = \"이름 p1\"
+provider = \"openai\"
+endpoint = \"https://api.openai.com/v1\"
+api_key = \"sk-1\" # 비밀 키
+model = \"m1\"
+
+# 둘째 제공자
+[[postprocess.api_profiles]]
+id = \"p2\"
+name = \"이름 p2\"
+provider = \"openai\"
+endpoint = \"https://api.openai.com/v1\"
+api_key = \"sk-1\"
+model = \"m2\"
+
+# 이 PC의 모델
+[postprocess.processors.llm_local]
+# 고른 모델
+model = \"qwen-4b\"
+memo = \"직접 넣은 키\"
+
+[output]
+mode = \"clipboard\"
+";
+        fs::write(store.path(), original).unwrap();
+        let mut config = store.load().unwrap().config;
+
+        // p1의 모델을 바꾸고, p2를 지우고, p3을 더하고, 로컬 모델을 바꿉니다.
+        config.postprocess.api_profiles[0].model = "m1-new".into();
+        config.postprocess.api_profiles.remove(1);
+        config
+            .postprocess
+            .api_profiles
+            .push(llm_profile("p3", "m3"));
+        config
+            .postprocess
+            .processors
+            .get_mut("llm_local")
+            .unwrap()
+            .insert("model".into(), toml::Value::String("gemma-e4b".into()));
+        store.save(&config).unwrap();
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        for kept in [
+            "# 내 설정",
+            "# 다듬기 켜기\nenabled = true",
+            "# 첫 제공자\n[[postprocess.api_profiles]]\nid = \"p1\"",
+            "api_key = \"sk-1\" # 비밀 키\nmodel = \"m1-new\"",
+            "# 이 PC의 모델\n[postprocess.processors.llm_local]\n# 고른 모델\nmodel = \"gemma-e4b\"\nmemo = \"직접 넣은 키\"",
+        ] {
+            assert!(text.contains(kept), "`{kept}`이(가) 남아야 합니다:\n{text}");
+        }
+        assert!(
+            !text.contains("id = \"p2\""),
+            "지운 프로필이 남았습니다:\n{text}"
+        );
+        assert!(
+            !text.contains("# 둘째 제공자"),
+            "지운 프로필의 주석이 남았습니다"
+        );
+
+        // 순서: [postprocess] → p1 → p3 → [postprocess.processors.llm_local] → [output]
+        let order = [
+            position(&text, "\n[postprocess]\n"),
+            position(&text, "id = \"p1\""),
+            position(&text, "id = \"p3\""),
+            position(&text, "[postprocess.processors.llm_local]"),
+            position(&text, "\n[output]\n"),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "섹션 순서가 바뀌었습니다:\n{text}"
+        );
+
+        let reloaded = store.load().unwrap().config;
+        assert_eq!(reloaded, config);
+        let ids: Vec<_> = reloaded
+            .postprocess
+            .api_profiles
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["p1", "p3"]);
+
+        // 프로필을 모두 지우면 파일에서도 사라집니다.
+        config.postprocess.api_profiles.clear();
+        config.postprocess.api_profile.clear();
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(!text.contains("[[postprocess.api_profiles]]"), "{text}");
+        assert!(text.contains("# 이 PC의 모델"));
+        assert!(
+            store
+                .load()
+                .unwrap()
+                .config
+                .postprocess
+                .api_profiles
+                .is_empty()
+        );
     }
 }

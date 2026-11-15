@@ -121,7 +121,7 @@ impl Default for AudioConfig {
     }
 }
 
-/// 저장된 원격 STT API 프로필 (`[[stt.api_profiles]]`).
+/// 저장된 원격 API 프로필. STT(`[[stt.api_profiles]]`)와 글 다듬기(`[[postprocess.api_profiles]]`)가 함께 씁니다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ApiProfile {
@@ -129,13 +129,13 @@ pub struct ApiProfile {
     pub id: String,
     /// 화면에 표시할 이름
     pub name: String,
-    /// API 공급자 프리셋 (`openai`, `groq`, `custom`)
+    /// API 공급자 프리셋 ID (예: `openai`, `groq`, `custom`). 쓸 수 있는 값은 쓰는 쪽(STT·글 다듬기)마다 다릅니다.
     pub provider: String,
-    /// 기본 URL 또는 전체 `/audio/transcriptions` 엔드포인트
+    /// 기본 URL 또는 전체 엔드포인트 주소 (STT는 `/audio/transcriptions`, 글 다듬기는 `/chat/completions`)
     pub endpoint: String,
     /// 인증 키
     pub api_key: String,
-    /// 사용할 모델 이름 (예: `whisper-1`, `whisper-large-v3-turbo`)
+    /// 사용할 모델 이름 (예: STT `whisper-1`, 글 다듬기 `gpt-6-luna`)
     pub model: String,
 }
 
@@ -220,14 +220,36 @@ pub enum OutputMode {
     Clipboard,
 }
 
+/// 글 다듬기(LLM 후처리) 설정 (`[postprocess]`)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct PostProcessConfig {
     pub enabled: bool,
-    /// 사용할 후처리기 ID (비어 있으면 사용 안 함)
+    /// 사용할 후처리기 ID: `""`(안 고름), `"llm_local"`, `"llm_cloud"`
     pub processor: String,
+    /// `llm_cloud`일 때 고른 프로필 ID. 비어 있으면 첫 프로필을 씁니다
+    /// ([`SttConfig::active_api_profile`]과 같은 규칙).
+    pub api_profile: String,
+    /// 저장된 외부 제공자 프로필 목록 (`[[postprocess.api_profiles]]`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_profiles: Vec<ApiProfile>,
+    /// 후처리기별 설정 (`[postprocess.processors.<ID>]`). 로컬 모델 선택은
+    /// `[postprocess.processors.llm_local] model = "<변형 ID>"`에 둡니다.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub processors: BTreeMap<String, toml::Table>,
+}
+
+impl PostProcessConfig {
+    /// 지금 고른 외부 제공자 프로필을 돌려줍니다.
+    ///
+    /// `api_profile` ID가 일치하는 항목을 찾고, ID가 비어 있으면 첫 번째 프로필을 씁니다.
+    pub fn active_api_profile(&self) -> Option<&ApiProfile> {
+        let selected = self.api_profile.trim();
+        if selected.is_empty() {
+            return self.api_profiles.first();
+        }
+        self.api_profiles.iter().find(|p| p.id == selected)
+    }
 }
 
 /// 설정 값 문제 (파일은 읽혔지만 일부 값이 이상한 경우)
@@ -328,5 +350,51 @@ mod tests {
         config.hotkey.key = " ".into();
         let issues = config.validate();
         assert_eq!(issues.len(), 2);
+    }
+
+    #[test]
+    fn postprocess_active_api_profile_follows_stt_rule() {
+        let profile = |id: &str| ApiProfile {
+            id: id.into(),
+            ..ApiProfile::default()
+        };
+        let mut post = PostProcessConfig::default();
+        assert_eq!(
+            post.active_api_profile(),
+            None,
+            "프로필이 없으면 None이어야 합니다"
+        );
+
+        post.api_profiles = vec![profile("a"), profile("b")];
+        assert_eq!(
+            post.active_api_profile().map(|p| p.id.as_str()),
+            Some("a"),
+            "ID가 비어 있으면 첫 프로필이어야 합니다"
+        );
+        post.api_profile = " b ".into();
+        assert_eq!(post.active_api_profile().map(|p| p.id.as_str()), Some("b"));
+        post.api_profile = "missing".into();
+        assert_eq!(
+            post.active_api_profile(),
+            None,
+            "없는 ID를 고르면 None이어야 합니다"
+        );
+    }
+
+    #[test]
+    fn postprocess_profiles_and_processor_tables_parse() {
+        let parsed: Config = toml::from_str(
+            "[postprocess]\nprocessor = \"llm_cloud\"\napi_profile = \"p1\"\n\
+             [[postprocess.api_profiles]]\nid = \"p1\"\nprovider = \"openai\"\nmodel = \"m\"\n\
+             [postprocess.processors.llm_local]\nmodel = \"v1\"\n",
+        )
+        .unwrap();
+        let post = &parsed.postprocess;
+        assert_eq!(post.api_profiles.len(), 1);
+        assert_eq!(post.active_api_profile().unwrap().model, "m");
+        assert_eq!(
+            post.processors["llm_local"].get("model"),
+            Some(&toml::Value::String("v1".into()))
+        );
     }
 }

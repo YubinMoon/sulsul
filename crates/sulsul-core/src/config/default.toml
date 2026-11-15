@@ -50,6 +50,11 @@ restore_clipboard = true
 restore_delay_ms = 150
 
 [postprocess]
-# 인식 결과 후처리 (LLM 다듬기 등, 준비 중)
+# 글 다듬기(LLM) 설정: 받아쓰기 결과의 문장 부호·띄어쓰기·오탈자를 다듬습니다.
+# 글 다듬기를 쓸지
 enabled = false
+# 다듬기에 쓸 모델 종류: ""(고르지 않음), llm_local(이 PC에 내려받은 모델), llm_cloud(외부 제공자)
+# 이 PC의 모델은 [postprocess.processors.llm_local]의 model에 적힙니다.
 processor = ""
+# 외부 제공자(llm_cloud)를 쓸 때 고른 프로필 ID. 비워 두면 첫 프로필을 씁니다.
+api_profile = ""
