@@ -13,6 +13,7 @@ use sulsul_core::config::{Config, Theme};
 use sulsul_core::stt::SttRegistry;
 
 use crate::config_sync::{ConfigSync, ProblemKind};
+use crate::desktop::{Desktop, Launch};
 use crate::error_text;
 use crate::i18n;
 use crate::icons::{self, Icon};
@@ -39,6 +40,8 @@ pub struct SulsulApp {
     transcribe: TranscribePage,
     models: ModelsPage,
     settings: SettingsPage,
+    /// 전역 단축키·단축키 받아쓰기·트레이·자동 실행
+    desktop: Desktop,
     /// 지금 화면에 적용된 언어·테마 (설정이 바뀌었는지 비교용)
     applied_locale: String,
     applied_theme: Theme,
@@ -59,6 +62,7 @@ impl SulsulApp {
         paths: AppPaths,
         registry: SttRegistry,
         mut sync: ConfigSync,
+        launch: Launch,
     ) -> Self {
         let ctx = &cc.egui_ctx;
         crate::fonts::install(ctx);
@@ -66,8 +70,11 @@ impl SulsulApp {
         theme::apply(ctx, sync.config.general.theme);
         sync.start_watching(ctx.clone());
 
+        let mut shared = Shared::new(paths, registry);
+        let desktop = Desktop::start(cc, &mut shared, &sync.config, launch);
         let mut app = Self {
-            shared: Shared::new(paths, registry),
+            shared,
+            desktop,
             applied_locale: sync.config.general.ui_language.clone(),
             applied_theme: sync.config.general.theme,
             sync,
@@ -382,8 +389,15 @@ impl eframe::App for SulsulApp {
             ctx.request_repaint_after(remaining + Duration::from_millis(10));
         }
         self.record.tick(&mut self.shared, ctx);
-        self.transcribe.tick(&self.shared, &self.sync.config, ctx);
+        self.transcribe.tick(&self.shared);
         self.models.tick(&mut self.shared, ctx);
+        self.desktop.tick(
+            ctx,
+            &mut self.shared,
+            &self.sync.config,
+            self.sync.locked(),
+            self.page,
+        );
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
@@ -402,6 +416,8 @@ impl eframe::App for SulsulApp {
     }
 
     fn on_exit(&mut self) {
+        // 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌리고, 키보드 후크와 트레이를 뗍니다.
+        self.desktop.shutdown();
         // 저장을 기다리던 변경이 있으면 끝내기 전에 씁니다.
         if self.sync.has_pending_save() && !self.sync.locked() {
             self.sync.save_now();
