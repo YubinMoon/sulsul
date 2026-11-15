@@ -204,13 +204,25 @@ pub fn chosen_variant_id(
     Some(resolved.str(key).to_owned())
 }
 
-/// 항목이 인식할 수 있는 언어(지금 엔진 설정 기준). 모르는 엔진이면 `None`입니다.
+/// 항목이 인식할 수 있는 언어. 모르는 엔진이면 `None`입니다.
+///
+/// 카탈로그 모델은 지금 설정이 같은 엔진의 다른 모델을 가리키고 있어도 그 모델을 기준으로 봅니다
+/// (영어 전용 모델 카드는 영어만). 나머지 항목은 지금 엔진 설정을 기준으로 봅니다.
 pub fn entry_languages(
     registry: &SttRegistry,
     stt: &SttConfig,
     key: &EntryKey,
 ) -> Option<LanguageSupport> {
-    registry.languages(stt, key.engine_id()).ok()
+    match key {
+        EntryKey::Variant {
+            engine_id,
+            variant_id,
+        } => registry.variant_languages(engine_id, variant_id),
+        EntryKey::Custom { .. } | EntryKey::Engine { .. } | EntryKey::Provider { .. } => {
+            registry.languages(stt, key.engine_id())
+        }
+    }
+    .ok()
 }
 
 /// 항목을 켭니다 (받아쓰기에 쓸 엔진·모델·제공자로 고릅니다).
@@ -770,6 +782,44 @@ mod tests {
             [&tiny],
             "다시 읽은 뒤에도 켠 모델만 켜져 있어야 합니다"
         );
+    }
+
+    #[test]
+    fn card_languages_follow_the_card_model_not_the_selected_one() {
+        let fixture = Fixture::new();
+        let registry = &fixture.registry;
+        let english_key = EntryKey::variant(WHISPER, "tiny-en");
+        let multi_key = EntryKey::variant(WHISPER, "tiny");
+        // 영어 전용 모델을 켜 둔 상태
+        let mut stt = SttConfig::default();
+        activate(registry, &mut stt, &english_key);
+
+        let english = entry_languages(registry, &stt, &english_key).unwrap();
+        assert_eq!(
+            english.single(),
+            Some("en"),
+            "영어 전용 모델은 영어만 인식합니다"
+        );
+
+        // 다국어 모델 카드는 켜 둔 모델과 상관없이 여러 언어를 고를 수 있습니다.
+        let multi = entry_languages(registry, &stt, &multi_key).unwrap();
+        assert_eq!(multi.single(), None);
+        let choices = multi.choices();
+        assert_eq!(choices.first().map(String::as_str), Some("auto"));
+        assert!(choices.iter().any(|code| code == "ko"));
+
+        // 다국어 모델을 켜 둔 상태에서도 영어 전용 모델 카드는 영어만입니다.
+        activate(registry, &mut stt, &multi_key);
+        let english = entry_languages(registry, &stt, &english_key).unwrap();
+        assert_eq!(english.single(), Some("en"));
+
+        // 제공자와 모델이 필요 없는 엔진은 엔진 설정을 기준으로 봅니다.
+        let provider = entry_languages(registry, &stt, &EntryKey::provider("openai")).unwrap();
+        assert_eq!(provider, registry.languages(&stt, CLOUD_ENGINE_ID).unwrap());
+        let unknown = EntryKey::Engine {
+            engine_id: "nope".into(),
+        };
+        assert_eq!(entry_languages(registry, &stt, &unknown), None);
     }
 
     #[test]

@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use egui::{Align, Layout, Ui, vec2};
 use rust_i18n::t;
 use sulsul_core::stt::{
-    EngineContext, EngineKind, LanguageSupport, ModelAxis, ModelVariant, VariantChoice,
-    axis_options, catalog_axes, find_by_choices, format_bytes,
+    EngineContext, EngineKind, ModelAxis, ModelVariant, VariantChoice, axis_options, catalog_axes,
+    find_by_choices, format_bytes,
 };
 
 use super::entries::{EntryKey, variant_label};
@@ -142,7 +142,6 @@ fn default_value(
 struct CatalogEngine {
     id: String,
     name: String,
-    languages: LanguageSupport,
     supports_prompt: bool,
     catalog: Vec<ModelVariant>,
 }
@@ -166,7 +165,6 @@ impl ModelsPage {
                 (!catalog.is_empty()).then(|| CatalogEngine {
                     id: descriptor.id.clone(),
                     name: tr(&descriptor.name_key),
-                    languages: descriptor.capabilities.languages.clone(),
                     supports_prompt: descriptor.capabilities.supports_prompt,
                     catalog,
                 })
@@ -299,6 +297,12 @@ impl ModelsPage {
             .primary_path()
             .and_then(|path| path.parent())
             .map_or_else(|| cx.shared.paths.models_dir(), PathBuf::from);
+        // 인식 언어는 엔진이 아니라 고른 모델을 따릅니다 (같은 엔진에도 영어 전용 모델이 있습니다).
+        let languages = cx
+            .shared
+            .registry
+            .variant_languages(&engine.id, &variant.id)
+            .ok();
 
         let mut start = false;
         let mut cancel = false;
@@ -340,7 +344,9 @@ impl ModelsPage {
             }
             row::title_line(ui, |ui| {
                 controls::badge(ui, &engine.name);
-                controls::badge(ui, &parts::language_support_label(&engine.languages));
+                if let Some(languages) = &languages {
+                    controls::badge(ui, &parts::language_support_label(languages));
+                }
                 if engine.supports_prompt {
                     controls::badge(ui, &t!("models.cap.prompt"));
                 }
@@ -643,6 +649,56 @@ mod tests {
         let mut picker = Picker::default();
         picker.select_engine(ENGINE, &catalog);
         assert_eq!(picked_id(&picker, &catalog).as_deref(), Some("only"));
+    }
+
+    /// 실제 Whisper 카탈로그에서 언어 단계가 "다국어 / 영어 전용"으로 보이고,
+    /// 고른 모델에 따라 언어 배지가 달라지는지 봅니다.
+    #[test]
+    fn whisper_language_step_offers_multilingual_and_english_only() {
+        use sulsul_stt_whisper::models::{ENGLISH_ONLY, MULTILINGUAL};
+
+        rust_i18n::set_locale("ko");
+        let whisper = sulsul_stt_whisper::ENGINE_ID;
+        let registry = crate::engines::registry();
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = EngineContext {
+            paths: sulsul_core::AppPaths::under(dir.path()),
+        };
+        let catalog = registry.model_variants(&ctx, whisper).unwrap();
+
+        let mut picker = Picker::default();
+        picker.select_engine(whisper, &catalog);
+        picker.pick(&catalog, ModelAxis::Size, "tiny");
+        let labels: Vec<String> = axis_options(
+            &catalog,
+            &picker.before(ModelAxis::Language),
+            ModelAxis::Language,
+        )
+        .into_iter()
+        .map(|choice| tr(&choice.label_key))
+        .collect();
+        assert_eq!(labels, ["다국어", "영어 전용"]);
+
+        // 고른 모델의 ID와 카드에 보일 언어 배지
+        let shown = |picker: &Picker| {
+            let variant = picker.variant(&catalog).unwrap();
+            let languages = registry.variant_languages(whisper, &variant.id).unwrap();
+            (
+                variant.id.clone(),
+                parts::language_support_label(&languages),
+            )
+        };
+        picker.pick(&catalog, ModelAxis::Language, MULTILINGUAL);
+        assert_eq!(
+            shown(&picker),
+            ("tiny".to_owned(), "다국어 · 자동 감지".to_owned())
+        );
+        picker.pick(&catalog, ModelAxis::Language, ENGLISH_ONLY);
+        assert_eq!(
+            shown(&picker),
+            ("tiny-en".to_owned(), "영어 전용".to_owned()),
+            "영어 전용 모델을 고르면 배지도 영어 전용이어야 합니다"
+        );
     }
 
     #[test]

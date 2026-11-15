@@ -17,9 +17,9 @@ use std::sync::{Arc, OnceLock};
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, ModelFile,
-    ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
-    keep_loaded_field, language_field,
+    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind,
+    LanguageSupport, ModelFile, ModelRequirement, ModelVariant, SttEngine, SttEngineFactory,
+    SttError, WHISPER_SAMPLE_RATE, keep_loaded_field, language_field,
 };
 
 use engine::{EngineOptions, WhisperEngine};
@@ -115,6 +115,7 @@ impl WhisperFactory {
             use_gpu = use_gpu.unavailable(reason);
         }
         // 엔진 설정은 이 엔진의 모든 모델이 함께 쓰므로 선택지는 다국어 모델 기준입니다.
+        // 영어 전용 모델은 고른 언어와 상관없이 영어로 인식합니다 (`languages`).
         let languages = models::multilingual();
         Self {
             descriptor: EngineDescriptor {
@@ -190,6 +191,15 @@ impl SttEngineFactory for WhisperFactory {
             beam_size: settings.int(keys::BEAM_SIZE).clamp(1, 8) as i32,
         };
         Ok(Box::new(WhisperEngine::load(&path, options)?))
+    }
+
+    /// 영어 전용 모델을 고르면 영어만, 그 밖(다국어 모델, 직접 지정한 파일)은 설명자의 언어입니다.
+    fn languages(&self, settings: &ResolvedSettings) -> LanguageSupport {
+        let custom = !settings.str(keys::MODEL_PATH).trim().is_empty();
+        match find_model(settings.str(keys::MODEL)) {
+            Some(model) if !custom && model.is_english_only() => model.languages(),
+            _ => self.descriptor.capabilities.languages.clone(),
+        }
     }
 
     fn model(&self, ctx: &EngineContext, settings: &ResolvedSettings) -> Option<ModelRequirement> {
@@ -413,23 +423,49 @@ mod tests {
     #[test]
     fn choice_values_match_model_ids() {
         let expected = [
-            ("tiny", "tiny", "f16"),
-            ("base", "base", "f16"),
-            ("small", "small", "f16"),
-            ("medium", "medium", "f16"),
-            ("large-v3-turbo-q5_0", "large-v3-turbo", "q5_0"),
-            ("large-v3-turbo", "large-v3-turbo", "f16"),
-            ("large-v3", "large-v3", "f16"),
+            ("tiny", "tiny", "multi", "f16"),
+            ("tiny-en", "tiny", "en", "f16"),
+            ("base", "base", "multi", "f16"),
+            ("base-en", "base", "en", "f16"),
+            ("small", "small", "multi", "f16"),
+            ("small-en", "small", "en", "f16"),
+            ("medium", "medium", "multi", "f16"),
+            ("medium-en", "medium", "en", "f16"),
+            ("large-v3-turbo-q5_0", "large-v3-turbo", "multi", "q5_0"),
+            ("large-v3-turbo", "large-v3-turbo", "multi", "f16"),
+            ("large-v3", "large-v3", "multi", "f16"),
         ];
         let catalog = catalog();
         assert_eq!(catalog.len(), expected.len());
-        for (variant, (id, size, precision)) in catalog.iter().zip(expected) {
+        for (variant, (id, size, language, precision)) in catalog.iter().zip(expected) {
             assert_eq!(variant.id, id, "모델 목록 순서가 다릅니다");
             let value = |axis| variant.choice(axis).unwrap().value.as_str();
             assert_eq!(value(ModelAxis::Size), size, "{id}: 크기 값");
-            assert_eq!(value(ModelAxis::Language), "multi", "{id}: 언어 값");
+            assert_eq!(value(ModelAxis::Language), language, "{id}: 언어 값");
             assert_eq!(value(ModelAxis::Precision), precision, "{id}: 정밀도 값");
         }
+        let recommended: Vec<_> = catalog
+            .iter()
+            .filter(|v| v.recommended)
+            .map(|v| v.id.as_str())
+            .collect();
+        assert_eq!(recommended, ["large-v3-turbo"]);
+    }
+
+    #[test]
+    fn language_options_list_multilingual_first() {
+        let catalog = catalog();
+        let languages = |size: &str| -> Vec<String> {
+            axis_options(&catalog, &[(ModelAxis::Size, size)], ModelAxis::Language)
+                .into_iter()
+                .map(|c| c.value.clone())
+                .collect()
+        };
+        for size in ["tiny", "base", "small", "medium"] {
+            assert_eq!(languages(size), ["multi", "en"], "{size}: 언어 선택지");
+        }
+        assert_eq!(languages("large-v3-turbo"), ["multi"]);
+        assert_eq!(languages("large-v3"), ["multi"]);
     }
 
     /// whisper.cpp가 아는 언어 목록과 코어의 언어 목록(다국어 모델이 아는 언어)이 순서까지 같아야 합니다.
@@ -482,6 +518,33 @@ mod tests {
         table.insert(keys::MODEL.into(), "tiny".into());
         assert!(registry.validate(&stt, ENGINE_ID).unwrap().is_empty());
         assert!(registry.unknown_keys(&stt, ENGINE_ID).is_empty());
+    }
+
+    #[test]
+    fn english_only_model_supports_only_english() {
+        let mut registry = sulsul_core::stt::SttRegistry::new();
+        registry.register(factory());
+        let english = LanguageSupport::Only(vec!["en".into()]);
+        for id in ["tiny-en", "base-en", "small-en", "medium-en"] {
+            assert_eq!(registry.variant_languages(ENGINE_ID, id).unwrap(), english);
+        }
+        assert_eq!(
+            registry.variant_languages(ENGINE_ID, "large-v3").unwrap(),
+            models::multilingual()
+        );
+
+        let mut stt = sulsul_core::config::SttConfig::default();
+        let table = stt.engines.entry(ENGINE_ID.into()).or_default();
+        table.insert(keys::MODEL.into(), "base-en".into());
+        assert_eq!(registry.languages(&stt, ENGINE_ID).unwrap(), english);
+
+        // 직접 지정한 파일은 어떤 모델인지 알 수 없으므로 다국어로 봅니다.
+        let table = stt.engines.get_mut(ENGINE_ID).unwrap();
+        table.insert(keys::MODEL_PATH.into(), "D:/models/custom.bin".into());
+        assert_eq!(
+            registry.languages(&stt, ENGINE_ID).unwrap(),
+            models::multilingual()
+        );
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use toml::Value;
+
 use super::fields::{effective_language, legacy_language};
 use super::{
     EngineContext, EngineDescriptor, LANGUAGE_KEY, Language, LanguageSupport, ModelRequirement,
@@ -114,6 +116,22 @@ impl SttRegistry {
             config,
             requested,
         )
+    }
+
+    /// 카탈로그 모델 하나(`variant_id`)를 고른다고 했을 때 인식할 수 있는 언어.
+    /// 내려받기 화면이나 아직 켜지 않은 모델 카드처럼 설정과 상관없이 모델을 보여 줄 때 씁니다.
+    pub fn variant_languages(
+        &self,
+        id: &str,
+        variant_id: &str,
+    ) -> Result<LanguageSupport, SttError> {
+        let factory = self.factory(id)?;
+        // 스키마 기본값에서는 직접 지정 경로(`model_path`)가 비어 있습니다.
+        let mut resolved = settings::resolve(&factory.descriptor().settings, None);
+        if let Some(key) = factory.model_setting_key() {
+            resolved.set(key, Value::String(variant_id.to_owned()));
+        }
+        Ok(factory.languages(&resolved))
     }
 
     /// 지금 설정으로 이 엔진이 쓸 모델 파일 (모델 파일을 쓰지 않는 엔진이면 `None`)
@@ -464,8 +482,16 @@ mod tests {
             registry.languages(&config, MOCK_ENGINE_ID).unwrap(),
             LanguageSupport::Any
         );
+        assert_eq!(
+            registry.variant_languages(MOCK_ENGINE_ID, "any").unwrap(),
+            LanguageSupport::Any
+        );
         assert!(matches!(
             registry.languages(&config, "nope"),
+            Err(SttError::UnknownEngine(_))
+        ));
+        assert!(matches!(
+            registry.variant_languages("nope", "any"),
             Err(SttError::UnknownEngine(_))
         ));
     }

@@ -132,13 +132,24 @@ struct EntryHead {
 }
 
 impl EntryHead {
-    fn of(engine_name: &str, engine_description: Option<String>, entry: &Entry) -> Self {
+    /// `languages`는 이 항목이 인식할 수 있는 언어입니다 (`entry_languages`).
+    fn of(
+        engine_name: &str,
+        engine_description: Option<String>,
+        entry: &Entry,
+        languages: Option<&LanguageSupport>,
+    ) -> Self {
         match &entry.kind {
             EntryKind::Variant(variant) => {
                 let mut badges = vec![
                     Badge::plain(engine_name),
                     Badge::plain(format_bytes(variant.total_bytes())),
                 ];
+                // 한 언어만 인식하는 모델(영어 전용 등)은 카드를 펼치지 않아도 알 수 있게 합니다.
+                if let Some(languages) = languages.filter(|languages| languages.single().is_some())
+                {
+                    badges.push(Badge::plain(parts::language_support_label(languages)));
+                }
                 if variant.recommended {
                     badges.push(Badge::accent(t!("models.badge.recommended")));
                 }
@@ -292,9 +303,9 @@ impl ModelsPage {
             |descriptor| tr(&descriptor.name_key),
         );
         let engine_description = descriptor.and_then(|d| tr_opt(&d.description_key));
-        let head = EntryHead::of(&engine_name, engine_description, entry);
         let languages = entry_languages(&cx.shared.registry, &cx.config.stt, &entry.key);
         let languages = languages.as_ref();
+        let head = EntryHead::of(&engine_name, engine_description, entry, languages);
 
         let open = self.expanded.as_ref() == Some(&entry.key);
         let shown_on = entry.shown_on();

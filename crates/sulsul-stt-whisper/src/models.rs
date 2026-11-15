@@ -1,11 +1,12 @@
 //! 내려받을 수 있는 whisper.cpp GGML 모델 목록.
 //!
-//! 모델을 추가하려면 [`MODELS`]에 한 줄을 더합니다. 크기와 SHA-256은 Hugging Face API
-//! (`https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main`)의 `size`와
-//! `lfs.oid` 값을 그대로 옮겨 적습니다.
+//! 모델을 추가하려면 [`MODELS`]에 한 줄을 더합니다. 크기와 SHA-256은 고정한 리비전의
+//! Hugging Face API (`https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/<REPO_REVISION>`)에서
+//! 그 파일의 `size`와 `lfs.oid` 값을 그대로 옮겨 적습니다.
 //!
 //! 목록 순서가 내려받기 화면의 단계별 선택지 순서가 되므로 작은 모델부터 적고, 같은 크기 안에서는
-//! 작은 양자화 파일을 먼저 둡니다. 새 단계 값을 넣었다면 `locales/*.yml`의
+//! 다국어 모델 바로 뒤에 영어 전용 모델을, 작은 양자화 파일을 먼저 둡니다. 모델 ID에는 점을 쓰지
+//! 않습니다(번역 키 경로가 깨짐). 새 단계 값을 넣었다면 `locales/*.yml`의
 //! `engine.whisper_local.choices.<축 ID>.<값 ID>` 문구도 추가합니다.
 
 use sulsul_core::stt::{LanguageSupport, ModelAsset, ModelAxis, VariantChoice, WHISPER_LANGUAGES};
@@ -21,13 +22,20 @@ const REPO: &str = "ggerganov/whisper.cpp";
 /// 시점의 커밋에 고정합니다.
 const REPO_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
+/// 다국어 모델의 언어 단계 값
+pub const MULTILINGUAL: &str = "multi";
+
+/// 영어 전용(`*.en`) 모델의 언어 단계 값
+pub const ENGLISH_ONLY: &str = "en";
+
 /// 내려받을 수 있는 whisper.cpp GGML 모델
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhisperModel {
     pub id: &'static str,
     /// 내려받기 화면의 크기 단계 값 (예: `large-v3-turbo`)
     pub size: &'static str,
-    /// 내려받기 화면의 언어 단계 값. 공식 다국어 모델은 `multi`입니다.
+    /// 내려받기 화면의 언어 단계 값. 공식 다국어 모델은 [`MULTILINGUAL`], 영어 전용 모델은
+    /// [`ENGLISH_ONLY`]입니다.
     pub language: &'static str,
     /// 내려받기 화면의 정밀도 단계 값 (예: 원본 `f16`, 양자화 `q5_0`)
     pub precision: &'static str,
@@ -43,7 +51,7 @@ pub const MODELS: &[WhisperModel] = &[
     WhisperModel {
         id: "tiny",
         size: "tiny",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-tiny.bin",
         size_bytes: 77_691_713,
@@ -51,9 +59,19 @@ pub const MODELS: &[WhisperModel] = &[
         recommended: false,
     },
     WhisperModel {
+        id: "tiny-en",
+        size: "tiny",
+        language: ENGLISH_ONLY,
+        precision: "f16",
+        file_name: "ggml-tiny.en.bin",
+        size_bytes: 77_704_715,
+        sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+        recommended: false,
+    },
+    WhisperModel {
         id: "base",
         size: "base",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-base.bin",
         size_bytes: 147_951_465,
@@ -61,9 +79,19 @@ pub const MODELS: &[WhisperModel] = &[
         recommended: false,
     },
     WhisperModel {
+        id: "base-en",
+        size: "base",
+        language: ENGLISH_ONLY,
+        precision: "f16",
+        file_name: "ggml-base.en.bin",
+        size_bytes: 147_964_211,
+        sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+        recommended: false,
+    },
+    WhisperModel {
         id: "small",
         size: "small",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-small.bin",
         size_bytes: 487_601_967,
@@ -71,9 +99,19 @@ pub const MODELS: &[WhisperModel] = &[
         recommended: false,
     },
     WhisperModel {
+        id: "small-en",
+        size: "small",
+        language: ENGLISH_ONLY,
+        precision: "f16",
+        file_name: "ggml-small.en.bin",
+        size_bytes: 487_614_201,
+        sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+        recommended: false,
+    },
+    WhisperModel {
         id: "medium",
         size: "medium",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-medium.bin",
         size_bytes: 1_533_763_059,
@@ -81,9 +119,19 @@ pub const MODELS: &[WhisperModel] = &[
         recommended: false,
     },
     WhisperModel {
+        id: "medium-en",
+        size: "medium",
+        language: ENGLISH_ONLY,
+        precision: "f16",
+        file_name: "ggml-medium.en.bin",
+        size_bytes: 1_533_774_781,
+        sha256: "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+        recommended: false,
+    },
+    WhisperModel {
         id: "large-v3-turbo-q5_0",
         size: "large-v3-turbo",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "q5_0",
         file_name: "ggml-large-v3-turbo-q5_0.bin",
         size_bytes: 574_041_195,
@@ -93,7 +141,7 @@ pub const MODELS: &[WhisperModel] = &[
     WhisperModel {
         id: "large-v3-turbo",
         size: "large-v3-turbo",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-large-v3-turbo.bin",
         size_bytes: 1_624_555_275,
@@ -103,7 +151,7 @@ pub const MODELS: &[WhisperModel] = &[
     WhisperModel {
         id: "large-v3",
         size: "large-v3",
-        language: "multi",
+        language: MULTILINGUAL,
         precision: "f16",
         file_name: "ggml-large-v3.bin",
         size_bytes: 3_095_033_483,
@@ -134,6 +182,21 @@ impl WhisperModel {
     /// 화면에 보일 파일 크기 (예: `2.9 GB`)
     pub fn size_label(&self) -> String {
         format_size(self.size_bytes)
+    }
+
+    /// 영어 전용(`*.en`) 모델인지
+    pub fn is_english_only(&self) -> bool {
+        self.language == ENGLISH_ONLY
+    }
+
+    /// 이 모델로 인식할 수 있는 언어. 영어 전용 모델은 영어만, 다국어 모델은 자동 감지와
+    /// whisper.cpp의 모든 언어입니다.
+    pub fn languages(&self) -> LanguageSupport {
+        if self.is_english_only() {
+            LanguageSupport::Only(vec![ENGLISH_ONLY.to_owned()])
+        } else {
+            multilingual()
+        }
     }
 
     /// 내려받기 화면의 단계별 선택 값 (크기 → 언어 → 정밀도 순서)
@@ -222,6 +285,38 @@ mod tests {
         assert_eq!(asset.url, model.download_url());
         assert_eq!(asset.size_bytes, model.size_bytes);
         assert_eq!(asset.sha256, model.sha256);
+    }
+
+    #[test]
+    fn english_only_models_support_only_english() {
+        let english: Vec<_> = MODELS.iter().filter(|m| m.is_english_only()).collect();
+        let ids: Vec<_> = english.iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["tiny-en", "base-en", "small-en", "medium-en"]);
+        for model in english {
+            assert_eq!(
+                model.languages(),
+                LanguageSupport::Only(vec!["en".into()]),
+                "{}",
+                model.id
+            );
+            assert!(
+                model.file_name.ends_with(".en.bin"),
+                "{}: 영어 전용 원본 파일이 아닙니다",
+                model.id
+            );
+        }
+        assert_eq!(find_model("large-v3").unwrap().languages(), multilingual());
+    }
+
+    #[test]
+    fn model_ids_have_no_dots() {
+        for model in MODELS {
+            assert!(
+                !model.id.contains('.'),
+                "{}: 모델 ID에 점이 있으면 번역 키 경로가 깨집니다",
+                model.id
+            );
+        }
     }
 
     #[test]

@@ -9,7 +9,9 @@ use egui::{
 use rust_i18n::t;
 use sulsul_core::config::ApiProfile;
 use sulsul_core::download::DownloadPhase;
-use sulsul_core::stt::{ComputeDevice, EngineKind, LanguageSupport, format_bytes};
+use sulsul_core::stt::{
+    ComputeDevice, EngineKind, LanguageSupport, WHISPER_LANGUAGES, format_bytes,
+};
 use sulsul_stt_cloud::{find_preset, normalize_transcriptions_url};
 
 use super::jobs::{ActiveTest, DownloadSnapshot, TestFailure, TestOutcome, TestTarget};
@@ -19,6 +21,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{self, Palette, radius, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::controls;
+use crate::widgets::language::language_name;
 use crate::widgets::row::{self, Row};
 use crate::widgets::text;
 use crate::widgets::tile;
@@ -431,14 +434,63 @@ pub fn profile_fields(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile, reve
     });
 }
 
-/// 엔진이 인식할 수 있는 언어를 짧게 적은 글
+/// 모델이 인식할 수 있는 언어를 배지에 넣을 만큼 짧게 적은 글
+/// (예: "다국어 · 자동 감지", "영어 전용", "자동 감지 + 5개 언어")
 pub fn language_support_label(support: &LanguageSupport) -> String {
+    if let Some(only) = support.single() {
+        return t!(
+            "models.cap.languages_single",
+            language = language_name(only)
+        )
+        .into_owned();
+    }
     match support {
         LanguageSupport::Any => t!("models.cap.languages_any"),
         LanguageSupport::Only(codes) => t!("models.cap.languages_count", count = codes.len()),
+        // Whisper 언어를 모두 인식하는 모델은 개수를 세지 않고 "다국어"로 줄여 적습니다.
+        LanguageSupport::AutoAnd(codes) if codes.len() >= WHISPER_LANGUAGES.len() => {
+            t!("models.cap.languages_any")
+        }
         LanguageSupport::AutoAnd(codes) => {
             t!("models.cap.languages_count_auto", count = codes.len())
         }
     }
     .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn codes(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|code| (*code).to_owned()).collect()
+    }
+
+    #[test]
+    fn language_badge_is_short_for_each_kind_of_model() {
+        rust_i18n::set_locale("ko");
+        let label = language_support_label;
+
+        assert_eq!(label(&LanguageSupport::Any), "다국어 · 자동 감지");
+        // Whisper 다국어 모델: 언어 100개를 세지 않고 줄여 적습니다.
+        assert_eq!(
+            label(&LanguageSupport::AutoAnd(codes(WHISPER_LANGUAGES))),
+            "다국어 · 자동 감지"
+        );
+        assert_eq!(
+            label(&LanguageSupport::Only(codes(&["en"]))),
+            "영어 전용",
+            "한 언어만 인식하는 모델은 그 언어 전용이라고 적어야 합니다"
+        );
+        assert_eq!(
+            label(&LanguageSupport::AutoAnd(codes(&[
+                "zh", "en", "ja", "ko", "yue"
+            ]))),
+            "자동 감지 + 5개 언어"
+        );
+        assert_eq!(
+            label(&LanguageSupport::Only(codes(&["ko", "en"]))),
+            "2개 언어 지원"
+        );
+    }
 }

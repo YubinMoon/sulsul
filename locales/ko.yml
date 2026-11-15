@@ -634,6 +634,7 @@ models:
   cap:
     prompt: 용어 힌트 지원
     languages_any: 다국어 · 자동 감지
+    languages_single: "%{language} 전용"
     languages_count: "%{count}개 언어 지원"
     languages_count_auto: "자동 감지 + %{count}개 언어"
 
@@ -656,18 +657,30 @@ engine:
       tiny:
         name: Tiny
         description: 약 78 MB. 매우 가볍고 빠르며 저사양 환경이나 빠른 테스트에 알맞습니다.
+      tiny-en:
+        name: Tiny (영어 전용)
+        description: 약 78 MB. Tiny의 영어 전용 모델로, 영어만 인식하지만 같은 크기의 다국어 모델보다 정확합니다.
       base:
         name: Base
         description: 약 148 MB. 가볍고 빠른 기본 입문형 모델입니다.
+      base-en:
+        name: Base (영어 전용)
+        description: 약 148 MB. Base의 영어 전용 모델로, 영어만 인식하지만 같은 크기의 다국어 모델보다 정확합니다.
       small:
         name: Small
         description: 약 488 MB. 속도와 정확도의 균형이 무난한 중소형 모델입니다.
+      small-en:
+        name: Small (영어 전용)
+        description: 약 488 MB. Small의 영어 전용 모델로, 영어만 인식하며 영어에서는 같은 크기의 다국어 모델보다 조금 더 정확합니다.
       large-v3-turbo-q5_0:
         name: Large V3 Turbo (Q5_0 경량)
         description: 약 574 MB. Large V3 Turbo를 5비트 양자화해 메모리 부담을 줄였습니다.
       medium:
         name: Medium
         description: 약 1.5 GB. 안정적인 정확도를 갖춘 중형 다국어 모델입니다.
+      medium-en:
+        name: Medium (영어 전용)
+        description: 약 1.5 GB. Medium의 영어 전용 모델로, 영어만 인식하며 영어에서는 같은 크기의 다국어 모델과 비슷하거나 조금 더 정확합니다.
       large-v3-turbo:
         name: Large V3 Turbo
         description: 약 1.6 GB. Large V3급 한국어·다국어 정확도를 훨씬 빠르게 제공합니다.
@@ -685,6 +698,7 @@ engine:
         large-v3: Large v3
       language:
         multi: 다국어
+        en: 영어 전용
       precision:
         f16: 원본 (F16)
         q5_0: Q5_0 양자화
