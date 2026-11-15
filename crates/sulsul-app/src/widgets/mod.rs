@@ -10,3 +10,4 @@ pub mod row;
 pub mod setting_field;
 pub mod stat;
 pub mod text;
+pub mod tile;

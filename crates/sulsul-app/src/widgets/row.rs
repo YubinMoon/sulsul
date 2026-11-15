@@ -125,6 +125,81 @@ pub fn first_line_offset(ui: &Ui) -> f32 {
     ((ui.spacing().interact_size.y - line_height) / 2.0).max(0.0)
 }
 
+/// 버튼이 여럿인 줄에서, 버튼 묶음을 내용 옆에 놓을 수 있는 최소 너비.
+/// 이보다 좁으면 [`with_actions`]에 `beside = false`를 넘겨 버튼을 아래 줄로 내립니다.
+///
+/// 창이 최소 크기일 때 카드 안쪽 너비(약 476)에서는 버튼이 옆에 놓이고, 화면을 확대해
+/// 그보다 좁아졌을 때만 아래로 내려가도록 잡은 값입니다. 버튼 세 개(약 190)를 옆에 두어도
+/// 내용에 200 넘게 남습니다.
+pub const ACTIONS_BESIDE_WIDTH: f32 = 420.0;
+
+/// 왼쪽에 내용, 오른쪽 끝에 버튼 묶음을 놓는 줄.
+///
+/// 버튼을 먼저 오른쪽 끝에 놓고 남은 너비만 내용에 주므로, 내용이 길어도 버튼과 겹치지
+/// 않고 줄을 바꿉니다. 줄 높이는 내용과 버튼 중 큰 쪽에 맞고, 내용의 첫 줄은 버튼과
+/// 세로 가운데가 맞습니다. `beside`가 `false`면 버튼을 내용 아래 줄에 오른쪽 정렬로 놓습니다.
+///
+/// `add_actions`는 오른쪽에서 왼쪽 순서로 놓입니다(먼저 더한 것이 가장 오른쪽).
+///
+/// 남은 영역 전체를 차지하는 `ui.with_layout(right_to_left(Align::Center))`는 쓰지 않습니다.
+/// 영역의 높이가 내용보다 크면 버튼이 그 가운데로 내려가 빈 공간이 생기기 때문입니다.
+pub fn with_actions<R>(
+    ui: &mut Ui,
+    beside: bool,
+    add_actions: impl FnOnce(&mut Ui),
+    add_content: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    const CONTENT_GAP: f32 = 12.0;
+    const ACTION_GAP: f32 = 6.0;
+    let width = ui.available_width();
+    if beside {
+        ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::right_to_left(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.x = CONTENT_GAP;
+            // 오른쪽에서 왼쪽으로 놓는 칸 안이므로 버튼 높이의 줄에 오른쪽 끝부터 놓입니다.
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = ACTION_GAP;
+                add_actions(ui);
+            });
+            let remaining = ui.available_width().max(0.0);
+            ui.allocate_ui_with_layout(vec2(remaining, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(remaining);
+                ui.add_space(first_line_offset(ui));
+                add_content(ui)
+            })
+            .inner
+        })
+        .inner
+    } else {
+        ui.vertical(|ui| {
+            let result = add_content(ui);
+            ui.allocate_ui_with_layout(
+                vec2(width, ui.spacing().interact_size.y),
+                Layout::right_to_left(Align::Center).with_main_wrap(true),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = ACTION_GAP;
+                    add_actions(ui);
+                },
+            );
+            result
+        })
+        .inner
+    }
+}
+
+/// 이름과 배지를 한 줄에 놓습니다. 너비가 모자라면 다음 줄로 넘깁니다.
+pub fn title_line<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope(|ui| {
+        // 줄 높이를 글자 높이에 맞춰 배지가 붙어도 줄이 커지지 않게 합니다.
+        ui.spacing_mut().interact_size.y = ui.text_style_height(&TextStyle::Body);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+            add_contents(ui)
+        })
+        .inner
+    })
+    .inner
+}
+
 /// 오른쪽 정렬 칸 안에서 위젯 여러 개를 왼쪽에서 오른쪽 순서로 놓습니다.
 ///
 /// 오른쪽 정렬 칸에서는 묶음 위젯(슬라이더와 숫자 등)의 순서가 뒤집히므로,

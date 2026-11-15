@@ -6,10 +6,10 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    ComputeDevice, EngineContext, Language, SttEngine, SttError, SttRegistry, TranscribeRequest,
-    Transcript,
+    ComputeDevice, EngineContext, Language, LanguageSupport, SttEngine, SttError, SttRegistry,
+    TranscribeRequest, Transcript, WHISPER_SAMPLE_RATE,
 };
-use crate::audio::{AudioClip, AudioError};
+use crate::audio::{AudioClip, AudioError, test_audio_clip};
 use crate::cancel::CancelToken;
 use crate::config::SttConfig;
 use crate::settings::ResolvedSettings;
@@ -64,6 +64,78 @@ pub struct Prepared {
     /// 엔진을 만드는 데 걸린 시간 (다시 쓴 경우 0)
     pub elapsed: Duration,
     pub reused: bool,
+}
+
+/// [`test_engine`]의 End-to-End 점검 결과
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineTestResult {
+    pub device: ComputeDevice,
+    pub prepare: Duration,
+    pub recognize: Duration,
+    pub transcript: Transcript,
+}
+
+/// 지정한 엔진을 새로 생성하고 짧은 테스트 오디오를 실제로 넣어 동작과 지연 시간을 확인합니다.
+pub fn test_engine(
+    registry: &SttRegistry,
+    ctx: &EngineContext,
+    stt: &SttConfig,
+    engine_id: &str,
+    cancel: CancelToken,
+) -> Result<EngineTestResult, TranscribeError> {
+    if cancel.is_cancelled() {
+        return Err(SttError::Cancelled.into());
+    }
+    let descriptor = registry
+        .descriptor(engine_id)
+        .ok_or_else(|| SttError::UnknownEngine(engine_id.to_owned()))?;
+    let capabilities = descriptor.capabilities.clone();
+
+    let prepare_started = Instant::now();
+    let mut engine = registry.create(ctx, stt, engine_id)?;
+    let prepare = prepare_started.elapsed();
+    if cancel.is_cancelled() {
+        return Err(SttError::Cancelled.into());
+    }
+
+    let preferred = Language::from_config(&stt.language);
+    let language = pick_test_language(&capabilities.languages, preferred);
+    let sample_rate = capabilities.input_sample_rate.max(1);
+    let clip = if sample_rate == WHISPER_SAMPLE_RATE {
+        test_audio_clip(WHISPER_SAMPLE_RATE)
+    } else {
+        test_audio_clip(WHISPER_SAMPLE_RATE).resampled(sample_rate)?
+    };
+    let request = TranscribeRequest {
+        language,
+        prompt: None,
+        cancel,
+    };
+
+    let recognize_started = Instant::now();
+    let transcript = engine.transcribe(&clip, &request)?;
+    Ok(EngineTestResult {
+        device: engine.device(),
+        prepare,
+        recognize: recognize_started.elapsed(),
+        transcript,
+    })
+}
+
+fn pick_test_language(support: &LanguageSupport, preferred: Language) -> Language {
+    if support.supports(&preferred) {
+        return preferred;
+    }
+    if support.supports(&Language::Auto) {
+        return Language::Auto;
+    }
+    match support {
+        LanguageSupport::Any => Language::Auto,
+        LanguageSupport::Only(codes) | LanguageSupport::AutoAnd(codes) => codes
+            .first()
+            .map(|c| Language::Code(c.clone()))
+            .unwrap_or(Language::Auto),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -375,5 +447,19 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
         // 인식 단계의 오류이므로 엔진은 그대로 보관합니다.
         assert!(transcriber.prepare(&stt, MOCK_ENGINE_ID).unwrap().reused);
+    }
+
+    #[test]
+    fn test_engine_runs_end_to_end() {
+        let mut registry = SttRegistry::new();
+        registry.register(Arc::new(MockEngineFactory::new()));
+        let ctx = EngineContext {
+            paths: AppPaths::under("unused"),
+        };
+        let stt = mock_config(0, "연결 확인");
+        let report =
+            test_engine(&registry, &ctx, &stt, MOCK_ENGINE_ID, CancelToken::new()).unwrap();
+        assert_eq!(report.transcript.text, "연결 확인");
+        assert_eq!(report.device, ComputeDevice::Unknown);
     }
 }

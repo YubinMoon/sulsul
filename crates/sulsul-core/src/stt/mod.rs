@@ -24,7 +24,10 @@ pub use model::{
     ModelAsset, ModelFile, ModelRequirement, ModelVariant, delete_variant, format_bytes,
 };
 pub use registry::SttRegistry;
-pub use transcriber::{Prepared, TranscribeError, TranscribeJob, Transcriber, Transcription};
+pub use transcriber::{
+    EngineTestResult, Prepared, TranscribeError, TranscribeJob, Transcriber, Transcription,
+    test_engine,
+};
 
 use crate::audio::AudioClip;
 use crate::cancel::CancelToken;

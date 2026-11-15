@@ -53,8 +53,7 @@ pub struct Success {
     pub text: String,
     /// 엔진이 판단한 언어 (알 수 있을 때)
     pub detected_language: Option<String>,
-    /// 엔진이 계산에 쓴 장치. 화면에 표시하게 되면 쓰입니다.
-    #[allow(dead_code)]
+    /// 엔진이 계산에 쓴 장치 (결과 카드에 표시)
     pub device: ComputeDevice,
     /// 엔진을 만드는 데 걸린 시간 (다시 쓴 경우 0)
     pub prepare: Duration,

@@ -12,10 +12,11 @@ use rust_i18n::t;
 use sulsul_core::CancelToken;
 use sulsul_core::audio::{self, AudioClip};
 use sulsul_core::config::Config;
-use sulsul_core::stt::{EngineContext, Transcriber};
+use sulsul_core::stt::{ComputeDevice, EngineContext, EngineKind, Transcriber};
 
 use self::job::{Failure, JobAudio, JobInput, JobOutput, Success};
 use super::{Page, SECTION_GAP, header, language_items};
+use crate::accel::{self, AccelEnv, EngineAccel};
 use crate::error_text::{self, engine_name};
 use crate::format::{elapsed_text, hertz_text, seconds_text};
 use crate::i18n::tr;
@@ -413,9 +414,15 @@ impl TranscribePage {
                     });
             });
 
-            if engine_id == sulsul_stt_whisper::ENGINE_ID {
+            if engine_id == sulsul_stt_cloud::ENGINE_ID
+                || cx
+                    .shared
+                    .registry
+                    .descriptor(&engine_id)
+                    .is_some_and(|d| d.kind == EngineKind::Local)
+            {
                 row::separator(ui);
-                whisper_model_row(ui, cx.shared, cx.config);
+                active_setup_row(ui, cx.shared, cx.config, &engine_id);
             }
 
             ui.add_space(10.0);
@@ -573,6 +580,16 @@ fn result_card(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
                             t!("transcribe.result.detected", language = detected).into_owned(),
                         );
                     }
+                    // 엔진이 보고한 실제 장치. 클라우드처럼 장치를 알 수 없으면 생략합니다.
+                    if success.device != ComputeDevice::Unknown {
+                        details.push(
+                            t!(
+                                "transcribe.result.device",
+                                device = accel::device_label(&success.device)
+                            )
+                            .into_owned(),
+                        );
+                    }
                     ui.label(text::caption(ui, details.join(" · ")));
                 });
 
@@ -621,51 +638,121 @@ fn result_card(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
         });
 }
 
-/// 로컬 Whisper를 고른 경우: 모델 파일 위치와 있는지 여부
-fn whisper_model_row(ui: &mut Ui, shared: &mut Shared, config: &Config) {
+/// 로컬 모델(Whisper·SenseVoice 등) 또는 클라우드 API의 현재 준비 상태와 모델 관리 이동 버튼
+fn active_setup_row(ui: &mut Ui, shared: &mut Shared, config: &Config, engine_id: &str) {
     let palette = Palette::of(ui);
-    let path = shared
-        .registry
-        .resolve_settings(&config.stt, sulsul_stt_whisper::ENGINE_ID)
-        .ok()
-        .and_then(|settings| sulsul_stt_whisper::resolve_model_path(&shared.paths, &settings));
-    let exists = path.as_deref().is_some_and(|path| path.is_file());
-
     Row::new(&t!("transcribe.model.label")).show_below(ui, |ui| {
-        if exists {
-            controls::tone_badge(
-                ui,
-                &t!("transcribe.model.found"),
-                palette.success_soft,
-                palette.success_text,
-            );
-        } else {
-            controls::tone_badge(
-                ui,
-                &t!("transcribe.model.missing"),
-                palette.warning_soft,
-                palette.warning_text,
-            );
+        if engine_id == sulsul_stt_cloud::ENGINE_ID {
+            let profile = config.stt.active_api_profile();
+            let ready = profile.is_some_and(|p| {
+                sulsul_stt_cloud::normalize_transcriptions_url(&p.endpoint).is_ok()
+                    && !p.model.trim().is_empty()
+                    && (!sulsul_stt_cloud::find_preset(&p.provider)
+                        .is_some_and(|preset| preset.requires_api_key)
+                        || !p.api_key.trim().is_empty())
+            });
+            status_badge(ui, &palette, ready);
+            match profile {
+                Some(p) => {
+                    let name = if p.name.trim().is_empty() {
+                        p.id.as_str()
+                    } else {
+                        p.name.as_str()
+                    };
+                    let model = if p.model.trim().is_empty() {
+                        "-"
+                    } else {
+                        p.model.as_str()
+                    };
+                    ui.label(text::muted(
+                        ui,
+                        t!(
+                            "transcribe.model.cloud_profile",
+                            profile = name,
+                            model = model
+                        ),
+                    ));
+                }
+                None => {
+                    ui.label(
+                        text::caption(ui, t!("transcribe.model.cloud_missing"))
+                            .color(palette.warning_text),
+                    );
+                }
+            }
+            if controls::icon_text_button(ui, Icon::Boxes, t!("transcribe.model.manage")).clicked()
+            {
+                shared.navigate = Some(Page::Models);
+            }
+            return;
         }
-        match &path {
-            Some(path) => ui.add(text::path_label(ui, path)),
+
+        let engine_ctx = EngineContext {
+            paths: shared.paths.clone(),
+        };
+        let req = shared
+            .registry
+            .model(&engine_ctx, &config.stt, engine_id)
+            .ok()
+            .flatten();
+        let exists = req.as_ref().is_some_and(|r| r.is_installed());
+        status_badge(ui, &palette, exists);
+        match &req {
+            Some(r) => ui.add(text::path_label(ui, &r.path)),
             None => ui.label(text::muted(ui, t!("transcribe.model.unknown"))),
         };
+        // 지금 설정으로 쓸 것으로 예상하는 장치. 실제로 쓴 장치는 결과 카드에 나옵니다.
+        if let Some(report) = EngineAccel::of(
+            &shared.registry,
+            &config.stt,
+            engine_id,
+            AccelEnv::current(),
+        ) {
+            ui.label(text::caption(
+                ui,
+                t!(
+                    "transcribe.model.expected_device",
+                    device = accel::device_label(&report.plan.device)
+                ),
+            ));
+        }
+        let folder = req
+            .as_ref()
+            .and_then(|r| r.path.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| shared.paths.models_dir());
         ui.horizontal(|ui| {
             if controls::icon_text_button(ui, Icon::FolderOpen, t!("transcribe.model.open_folder"))
                 .clicked()
-                && let Err(message) = system::open_dir(&shared.paths.models_dir())
+                && let Err(message) = system::open_dir(&folder)
             {
                 shared
                     .toasts
                     .error(t!("common.open_failed", message = message));
             }
-            ui.add_enabled_ui(false, |ui| {
-                controls::icon_text_button(ui, Icon::Download, t!("transcribe.model.download"));
-            });
-            controls::badge(ui, &t!("common.coming_soon"));
+            if controls::icon_text_button(ui, Icon::Boxes, t!("transcribe.model.manage")).clicked()
+            {
+                shared.navigate = Some(Page::Models);
+            }
         });
     });
+}
+
+fn status_badge(ui: &mut Ui, palette: &Palette, ready: bool) {
+    if ready {
+        controls::tone_badge(
+            ui,
+            &t!("transcribe.model.found"),
+            palette.success_soft,
+            palette.success_text,
+        );
+    } else {
+        controls::tone_badge(
+            ui,
+            &t!("transcribe.model.missing"),
+            palette.warning_soft,
+            palette.warning_text,
+        );
+    }
 }
 
 fn clip_summary(clip: &AudioClip) -> String {

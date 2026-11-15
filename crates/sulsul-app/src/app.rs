@@ -16,6 +16,7 @@ use crate::config_sync::{ConfigSync, ProblemKind};
 use crate::error_text;
 use crate::i18n;
 use crate::icons::{self, Icon};
+use crate::pages::models::ModelsPage;
 use crate::pages::record::RecordPage;
 use crate::pages::settings::SettingsPage;
 use crate::pages::transcribe::TranscribePage;
@@ -36,6 +37,7 @@ pub struct SulsulApp {
     page: Page,
     record: RecordPage,
     transcribe: TranscribePage,
+    models: ModelsPage,
     settings: SettingsPage,
     /// 지금 화면에 적용된 언어·테마 (설정이 바뀌었는지 비교용)
     applied_locale: String,
@@ -72,6 +74,7 @@ impl SulsulApp {
             page: Page::Record,
             record: RecordPage::default(),
             transcribe: TranscribePage::default(),
+            models: ModelsPage::default(),
             settings: SettingsPage::default(),
             pending: None,
         };
@@ -150,7 +153,8 @@ impl SulsulApp {
                 ui.add_space(18.0);
 
                 for page in Page::ALL {
-                    let dot = page == Page::Record && self.record.is_recording();
+                    let dot = (page == Page::Record && self.record.is_recording())
+                        || (page == Page::Models && self.models.is_busy());
                     let selected = self.page == page;
                     if nav_item(ui, page.icon(), &page.title(), selected, dot).clicked() {
                         self.page = page;
@@ -241,6 +245,7 @@ impl SulsulApp {
         match self.page {
             Page::Record => self.record.ui(ui, &mut cx),
             Page::Transcribe => self.transcribe.ui(ui, &mut cx),
+            Page::Models => self.models.ui(ui, &mut cx),
             Page::Settings => self.settings.ui(ui, &mut cx, &issues),
             Page::About => pages::about::ui(ui, &mut cx),
         }
@@ -378,6 +383,7 @@ impl eframe::App for SulsulApp {
         }
         self.record.tick(&mut self.shared, ctx);
         self.transcribe.tick(&self.shared);
+        self.models.tick(&mut self.shared, ctx);
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {

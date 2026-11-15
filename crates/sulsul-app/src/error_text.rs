@@ -5,6 +5,7 @@
 use rust_i18n::t;
 use sulsul_core::audio::AudioError;
 use sulsul_core::config::{ConfigError, ConfigIssue, ConfigProblem};
+use sulsul_core::download::DownloadError;
 use sulsul_core::settings::{SettingIssue, SettingProblem};
 use sulsul_core::stt::{SttError, SttRegistry};
 
@@ -139,5 +140,28 @@ pub fn setting_issue(issue: &SettingIssue) -> String {
             t!("issue.unknown_choice", key = issue.key, value = value).into_owned()
         }
         SettingProblem::UnknownKey => t!("issue.unknown_key", key = issue.key).into_owned(),
+    }
+}
+
+pub fn download(error: &DownloadError) -> String {
+    match error {
+        DownloadError::Cancelled => t!("error.download.cancelled").into_owned(),
+        DownloadError::Http { status } => t!("error.download.http", status = status).into_owned(),
+        DownloadError::Network(message) => {
+            t!("error.download.network", message = message).into_owned()
+        }
+        DownloadError::Io { path, source } => t!(
+            "error.download.io",
+            path = path.display().to_string(),
+            message = source.to_string()
+        )
+        .into_owned(),
+        DownloadError::SizeMismatch { expected, actual } => t!(
+            "error.download.size_mismatch",
+            expected = expected,
+            actual = actual
+        )
+        .into_owned(),
+        DownloadError::HashMismatch { .. } => t!("error.download.hash_mismatch").into_owned(),
     }
 }

@@ -1,6 +1,7 @@
 //! 화면(페이지).
 
 pub mod about;
+pub mod models;
 pub mod record;
 pub mod settings;
 pub mod transcribe;
@@ -17,17 +18,25 @@ use crate::widgets::text;
 pub enum Page {
     Record,
     Transcribe,
+    Models,
     Settings,
     About,
 }
 
 impl Page {
-    pub const ALL: [Self; 4] = [Self::Record, Self::Transcribe, Self::Settings, Self::About];
+    pub const ALL: [Self; 5] = [
+        Self::Record,
+        Self::Transcribe,
+        Self::Models,
+        Self::Settings,
+        Self::About,
+    ];
 
     pub fn title(self) -> String {
         match self {
             Self::Record => t!("nav.record"),
             Self::Transcribe => t!("nav.transcribe"),
+            Self::Models => t!("nav.models"),
             Self::Settings => t!("nav.settings"),
             Self::About => t!("nav.about"),
         }
@@ -38,6 +47,7 @@ impl Page {
         match self {
             Self::Record => Icon::Mic,
             Self::Transcribe => Icon::AudioLines,
+            Self::Models => Icon::Boxes,
             Self::Settings => Icon::Settings,
             Self::About => Icon::Info,
         }

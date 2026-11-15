@@ -9,7 +9,7 @@ use sulsul_core::settings;
 use sulsul_core::stt::SttRegistry;
 
 use super::record::{hotkey_key_name, hotkey_mode_name};
-use super::{SECTION_GAP, header, language_items};
+use super::{Page, SECTION_GAP, header, language_items};
 use crate::error_text;
 use crate::i18n::{self, tr};
 use crate::icons::Icon;
@@ -349,6 +349,43 @@ fn stt_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
                     &fallback,
                 );
             });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if controls::icon_text_button(ui, Icon::Boxes, t!("settings.stt.open_models")).clicked()
+            {
+                cx.shared.navigate = Some(Page::Models);
+            }
+            if stt.engine == sulsul_stt_cloud::ENGINE_ID {
+                match stt.active_api_profile() {
+                    Some(profile) => {
+                        let name = if profile.name.trim().is_empty() {
+                            profile.id.as_str()
+                        } else {
+                            profile.name.as_str()
+                        };
+                        let provider_label = sulsul_stt_cloud::find_preset(&profile.provider)
+                            .map(|p| tr(p.name_key))
+                            .unwrap_or_else(|| profile.provider.clone());
+                        ui.label(text::caption(
+                            ui,
+                            t!(
+                                "settings.stt.active_api_profile",
+                                profile = name,
+                                provider = provider_label,
+                                model = profile.model.as_str()
+                            ),
+                        ));
+                    }
+                    None => {
+                        ui.label(
+                            text::caption(ui, t!("settings.stt.no_active_api_profile"))
+                                .color(palette.warning_text),
+                        );
+                    }
+                }
+            }
+        });
         row::separator(ui);
 
         // 언어
