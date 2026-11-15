@@ -23,6 +23,7 @@ use sulsul_core::stt::{
 };
 
 pub use accel::{DetectedDevices, DevicePreference, detected_devices};
+pub use engine::ort_environment;
 use engine::{EngineOptions, SenseVoiceEngine};
 pub use models::{DEFAULT_MODEL, SenseVoiceVariant, VARIANTS, find_variant};
 

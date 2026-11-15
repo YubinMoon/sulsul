@@ -15,6 +15,7 @@ M5 VAD·환각 필터·오버레이 → M6 배포. 지금 어디까지 왔는지
 |---|---|
 | `sulsul-core` | 설정(TOML), 오디오(녹음·리샘플·WAV), STT·후처리 추상화, 모델 내려받기, 취소 신호 |
 | `sulsul-stt-whisper` | 로컬 Whisper(whisper.cpp, `whisper-rs`) 엔진 |
+| `sulsul-stt-whisper-onnx` | 로컬 Whisper ONNX(sherpa-onnx 내보내기, `ort`) 엔진, Windows는 인코더만 DirectML 가속 |
 | `sulsul-stt-sensevoice` | 로컬 SenseVoice(ONNX, `ort`) 엔진, Windows는 DirectML 가속 |
 | `sulsul-stt-cloud` | OpenAI 호환 `/audio/transcriptions` 클라우드 엔진 |
 | `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·연결 테스트, 모델 선택 규칙 |

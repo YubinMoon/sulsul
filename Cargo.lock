@@ -4403,6 +4403,7 @@ dependencies = [
  "sulsul-stt-cloud",
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
+ "sulsul-stt-whisper-onnx",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -4418,6 +4419,7 @@ dependencies = [
  "sulsul-stt-cloud",
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
+ "sulsul-stt-whisper-onnx",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4486,6 +4488,19 @@ dependencies = [
  "sulsul-core",
  "tracing",
  "whisper-rs",
+]
+
+[[package]]
+name = "sulsul-stt-whisper-onnx"
+version = "0.1.0"
+dependencies = [
+ "ort",
+ "rustfft",
+ "sulsul-core",
+ "sulsul-stt-sensevoice",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

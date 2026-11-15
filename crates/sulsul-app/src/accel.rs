@@ -12,6 +12,7 @@ use rust_i18n::t;
 use sulsul_core::config::SttConfig;
 use sulsul_core::stt::{ComputeDevice, EngineKind, SttRegistry};
 use sulsul_stt_sensevoice::{DetectedDevices, DevicePreference};
+use sulsul_stt_whisper_onnx::DevicePreference as OnnxDevice;
 
 use crate::i18n::tr;
 
@@ -22,9 +23,9 @@ pub struct AccelEnv {
     pub whisper_backend: Option<&'static str>,
     /// Whisper가 실행 중에 쓸 수 있는 GPU 장치 이름
     pub whisper_gpu: Option<String>,
-    /// 이 빌드가 DirectML(SenseVoice 가속)을 지원하는지
+    /// 이 빌드가 DirectML(SenseVoice·Whisper ONNX 가속)을 지원하는지
     pub directml_built: bool,
-    /// DirectML이 쓸 수 있는 NPU·GPU
+    /// DirectML이 쓸 수 있는 NPU·GPU. 두 ONNX 엔진이 같은 감지 결과를 씁니다.
     pub directml: DetectedDevices,
 }
 
@@ -77,8 +78,12 @@ impl DeviceKind {
 /// 엔진 설정이 요청한 가속
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccelRequest {
-    Whisper { use_gpu: bool },
+    Whisper {
+        use_gpu: bool,
+    },
     SenseVoice(DevicePreference),
+    /// Whisper ONNX. GPU를 써도 GPU에서 도는 것은 인코더뿐이고 디코더는 CPU입니다.
+    WhisperOnnx(OnnxDevice),
 }
 
 impl AccelRequest {
@@ -94,6 +99,11 @@ impl AccelRequest {
                 DevicePreference::from_setting(resolved.str(sulsul_stt_sensevoice::keys::DEVICE))
                     .unwrap_or(DevicePreference::Auto);
             Some(Self::SenseVoice(preference))
+        } else if engine_id == sulsul_stt_whisper_onnx::ENGINE_ID {
+            let preference =
+                OnnxDevice::from_setting(resolved.str(sulsul_stt_whisper_onnx::keys::DEVICE))
+                    .unwrap_or(OnnxDevice::Auto);
+            Some(Self::WhisperOnnx(preference))
         } else {
             None
         }
@@ -108,6 +118,10 @@ impl AccelRequest {
                 "engine.sense_voice_local.settings.device_{}",
                 preference.as_str()
             )),
+            Self::WhisperOnnx(preference) => tr(&format!(
+                "engine.whisper_onnx.settings.device_{}",
+                preference.as_str()
+            )),
         }
     }
 }
@@ -119,7 +133,7 @@ pub enum Why {
     Configured,
     /// 자동 선택이 NPU를 골랐습니다.
     AutoNpu,
-    /// 자동 선택이 NPU가 없어 GPU를 골랐습니다.
+    /// 자동 선택이 GPU를 골랐습니다. NPU도 고를 수 있는 엔진(SenseVoice)에서는 NPU가 없었다는 뜻입니다.
     AutoGpu,
     /// 자동 선택인데 쓸 수 있는 가속 장치가 없습니다.
     AutoNone,
@@ -159,7 +173,8 @@ impl Plan {
 /// 설정과 환경으로 예상 장치를 구합니다.
 ///
 /// 엔진이 장치를 고르는 규칙을 그대로 따릅니다. Whisper는 `WhisperEngine::load`,
-/// SenseVoice는 `plan_targets`(둘 다 엔진 크레이트의 `engine.rs`)입니다.
+/// SenseVoice는 `plan_targets`(둘 다 엔진 크레이트의 `engine.rs`), Whisper ONNX는
+/// `plan_targets`(`sulsul-stt-whisper-onnx`의 `accel.rs`)입니다.
 pub fn plan(request: AccelRequest, env: &AccelEnv) -> Plan {
     match request {
         AccelRequest::Whisper { use_gpu } => match (env.whisper_backend, &env.whisper_gpu) {
@@ -203,6 +218,27 @@ pub fn plan(request: AccelRequest, env: &AccelEnv) -> Plan {
                 },
             }
         }
+        AccelRequest::WhisperOnnx(preference) => {
+            // 엔진은 인코더가 쓰는 장치를 SenseVoice와 같은 형식으로 보고합니다.
+            let gpu = env
+                .directml
+                .gpu()
+                .map(|name| ComputeDevice::Gpu(format!("DirectML ({name})")));
+            match (preference, gpu) {
+                (OnnxDevice::Cpu, _) => Plan::cpu(Why::TurnedOff),
+                _ if !env.directml_built => Plan::cpu(Why::NotBuilt),
+                (OnnxDevice::Gpu, Some(device)) => Plan {
+                    device,
+                    why: Why::Configured,
+                },
+                (OnnxDevice::Gpu, None) => Plan::cpu(Why::NoGpu),
+                (OnnxDevice::Auto, Some(device)) => Plan {
+                    device,
+                    why: Why::AutoGpu,
+                },
+                (OnnxDevice::Auto, None) => Plan::cpu(Why::AutoNone),
+            }
+        }
     }
 }
 
@@ -243,7 +279,12 @@ impl EngineAccel {
                     (DeviceKind::Gpu, env.directml.gpus.clone()),
                 ],
             ),
-            AccelRequest::SenseVoice(_) => (None, Vec::new()),
+            // Whisper ONNX는 NPU를 고를 수 없으므로 GPU만 보여 줍니다.
+            AccelRequest::WhisperOnnx(_) if env.directml_built => (
+                Some("DirectML"),
+                vec![(DeviceKind::Gpu, env.directml.gpus.clone())],
+            ),
+            AccelRequest::SenseVoice(_) | AccelRequest::WhisperOnnx(_) => (None, Vec::new()),
         };
         Some(Self {
             backend,
@@ -280,6 +321,15 @@ impl EngineAccel {
                     "models.accel.sense_voice.missing",
                     device = DeviceKind::Npu.label()
                 ),
+            }
+            .into_owned(),
+            (AccelRequest::WhisperOnnx(_), why) => match why {
+                Why::Configured => t!("models.accel.whisper_onnx.gpu_chosen"),
+                Why::AutoGpu | Why::AutoNpu => t!("models.accel.whisper_onnx.auto_gpu"),
+                Why::AutoNone => t!("models.accel.whisper_onnx.auto_none"),
+                Why::TurnedOff => t!("models.accel.whisper_onnx.cpu_chosen"),
+                Why::NotBuilt => t!("models.accel.whisper_onnx.not_built"),
+                Why::NoGpu | Why::NoNpu => t!("models.accel.whisper_onnx.gpu_missing"),
             }
             .into_owned(),
         }
@@ -352,6 +402,7 @@ pub fn fallback(request: AccelRequest, actual: &ComputeDevice, env: &AccelEnv) -
         AccelRequest::SenseVoice(preference) => {
             matches!(preference, DevicePreference::Npu | DevicePreference::Gpu)
         }
+        AccelRequest::WhisperOnnx(preference) => preference == OnnxDevice::Gpu,
     };
     if !explicit || actual != DeviceKind::Cpu {
         return None;
@@ -390,26 +441,40 @@ pub fn fallback_text(
                     DeviceKind::of(&planned.device).unwrap_or(DeviceKind::Cpu)
                 }
             };
-            match fallback {
-                Fallback::NotBuilt => t!("models.test.accel_not_built", device = kind.label()),
-                Fallback::NoDevice => t!("models.test.accel_missing", device = kind.label()),
-                Fallback::LoadFailed => {
-                    let name = match kind {
-                        DeviceKind::Npu => env.directml.npu(),
-                        DeviceKind::Gpu => env.directml.gpu(),
-                        DeviceKind::Cpu => None,
-                    };
-                    t!(
-                        "models.test.accel_fallback",
-                        device = kind.label(),
-                        name = name.unwrap_or_default(),
-                        actual = device_label(actual)
-                    )
-                }
-            }
-            .into_owned()
+            directml_fallback_text(kind, fallback, actual, env)
+        }
+        // Whisper ONNX가 쓸 수 있는 가속 장치는 GPU뿐입니다.
+        AccelRequest::WhisperOnnx(_) => {
+            directml_fallback_text(DeviceKind::Gpu, fallback, actual, env)
         }
     }
+}
+
+/// DirectML 엔진(SenseVoice, Whisper ONNX)이 `kind` 장치로 실행하지 못한 이유
+fn directml_fallback_text(
+    kind: DeviceKind,
+    fallback: Fallback,
+    actual: &ComputeDevice,
+    env: &AccelEnv,
+) -> String {
+    match fallback {
+        Fallback::NotBuilt => t!("models.test.accel_not_built", device = kind.label()),
+        Fallback::NoDevice => t!("models.test.accel_missing", device = kind.label()),
+        Fallback::LoadFailed => {
+            let name = match kind {
+                DeviceKind::Npu => env.directml.npu(),
+                DeviceKind::Gpu => env.directml.gpu(),
+                DeviceKind::Cpu => None,
+            };
+            t!(
+                "models.test.accel_fallback",
+                device = kind.label(),
+                name = name.unwrap_or_default(),
+                actual = device_label(actual)
+            )
+        }
+    }
+    .into_owned()
 }
 
 /// 가속을 요청했는데 그 장치로 실행하지 못했으면, 사용자에게 알릴 문장을 돌려줍니다.
@@ -479,6 +544,10 @@ mod tests {
 
     fn sense_voice(preference: DevicePreference) -> AccelRequest {
         AccelRequest::SenseVoice(preference)
+    }
+
+    fn whisper_onnx(preference: OnnxDevice) -> AccelRequest {
+        AccelRequest::WhisperOnnx(preference)
     }
 
     fn gpu(name: &str) -> ComputeDevice {
@@ -553,6 +622,102 @@ mod tests {
             planned(DevicePreference::Cpu, &not_built),
             Plan::cpu(Why::TurnedOff)
         );
+    }
+
+    #[test]
+    fn whisper_onnx_plan_uses_gpu_only() {
+        let both = directml_env(true, true, true);
+        let npu_only = directml_env(true, true, false);
+        let none = directml_env(true, false, false);
+        let dml_gpu = gpu(&format!("DirectML ({RTX})"));
+        let planned = |preference, env: &AccelEnv| plan(whisper_onnx(preference), env);
+
+        // 자동: GPU → CPU. NPU가 있어도 고르지 않습니다.
+        assert_eq!(
+            planned(OnnxDevice::Auto, &both),
+            Plan {
+                device: dml_gpu.clone(),
+                why: Why::AutoGpu
+            }
+        );
+        assert_eq!(
+            planned(OnnxDevice::Auto, &npu_only),
+            Plan::cpu(Why::AutoNone)
+        );
+        assert_eq!(planned(OnnxDevice::Auto, &none), Plan::cpu(Why::AutoNone));
+
+        // 직접 고른 장치
+        assert_eq!(
+            planned(OnnxDevice::Gpu, &both),
+            Plan {
+                device: dml_gpu,
+                why: Why::Configured
+            }
+        );
+        assert_eq!(planned(OnnxDevice::Gpu, &npu_only), Plan::cpu(Why::NoGpu));
+        assert_eq!(planned(OnnxDevice::Cpu, &both), Plan::cpu(Why::TurnedOff));
+
+        // DirectML이 없는 빌드에서는 장치가 있어도 CPU입니다.
+        let not_built = directml_env(false, false, true);
+        assert_eq!(
+            planned(OnnxDevice::Auto, &not_built),
+            Plan::cpu(Why::NotBuilt)
+        );
+        assert_eq!(
+            planned(OnnxDevice::Gpu, &not_built),
+            Plan::cpu(Why::NotBuilt)
+        );
+        assert_eq!(
+            planned(OnnxDevice::Cpu, &not_built),
+            Plan::cpu(Why::TurnedOff)
+        );
+    }
+
+    #[test]
+    fn whisper_onnx_fallback_and_notes() {
+        rust_i18n::set_locale("ko");
+        let registry = crate::engines::registry();
+        let gpu_only = directml_env(true, false, true);
+        let none = directml_env(true, false, false);
+        let not_built = directml_env(false, false, false);
+        let cpu = ComputeDevice::Cpu;
+        let dml_gpu = gpu(&format!("DirectML ({RTX})"));
+        let auto = whisper_onnx(OnnxDevice::Auto);
+        let pick_gpu = whisper_onnx(OnnxDevice::Gpu);
+
+        // 예정대로 GPU(인코더)로 실행했거나, 자동인데 GPU가 없어 CPU로 실행했으면 알리지 않습니다.
+        assert_eq!(fallback(auto, &dml_gpu, &gpu_only), None);
+        assert_eq!(fallback(pick_gpu, &dml_gpu, &gpu_only), None);
+        assert_eq!(fallback(auto, &cpu, &none), None);
+        assert_eq!(
+            fallback(whisper_onnx(OnnxDevice::Cpu), &cpu, &gpu_only),
+            None
+        );
+        // GPU가 있는데 쓰지 못했거나, 직접 고른 GPU가 없으면 알립니다.
+        assert_eq!(fallback(auto, &cpu, &gpu_only), Some(Fallback::LoadFailed));
+        assert_eq!(fallback(pick_gpu, &cpu, &none), Some(Fallback::NoDevice));
+        assert_eq!(
+            fallback(pick_gpu, &cpu, &not_built),
+            Some(Fallback::NotBuilt)
+        );
+        let text = fallback_note(pick_gpu, &cpu, &gpu_only).unwrap();
+        assert!(text.contains(RTX) && text.contains("CPU"), "{text}");
+
+        // 예상 장치 안내: GPU를 쓸 때는 디코더가 CPU에서 돈다고 알립니다.
+        let report = |request, env: &AccelEnv| EngineAccel {
+            backend: Some("DirectML"),
+            devices: Vec::new(),
+            request,
+            plan: plan(request, env),
+        };
+        for request in [auto, pick_gpu] {
+            let note = report(request, &gpu_only).note(&registry);
+            assert!(note.contains("디코더") && note.contains("CPU"), "{note}");
+        }
+        let note = report(pick_gpu, &none).note(&registry);
+        assert!(note.contains("GPU를 골랐지만"), "{note}");
+        assert!(first_run_hint(auto, &gpu_only).is_some());
+        assert_eq!(first_run_hint(auto, &none), None);
     }
 
     #[test]
@@ -783,5 +948,24 @@ mod tests {
         );
         assert_eq!(report.plan, Plan::cpu(Why::NoNpu));
         assert!(report.plan.why.is_blocked());
+
+        // Whisper ONNX는 DirectML GPU만 보여 줍니다.
+        let onnx_id = sulsul_stt_whisper_onnx::ENGINE_ID;
+        let report = EngineAccel::of(&registry, &stt, onnx_id, &env).unwrap();
+        assert_eq!(report.backend, Some("DirectML"));
+        assert_eq!(report.request, AccelRequest::WhisperOnnx(OnnxDevice::Auto));
+        assert_eq!(report.plan.why, Why::AutoGpu);
+        assert_eq!(
+            report.devices,
+            vec![(DeviceKind::Gpu, vec![RTX.to_owned()])]
+        );
+        stt.engines
+            .entry(onnx_id.to_owned())
+            .or_default()
+            .insert(sulsul_stt_whisper_onnx::keys::DEVICE.into(), "cpu".into());
+        let report = EngineAccel::of(&registry, &stt, onnx_id, &env).unwrap();
+        assert_eq!(report.request, AccelRequest::WhisperOnnx(OnnxDevice::Cpu));
+        assert_eq!(report.plan, Plan::cpu(Why::TurnedOff));
+        assert!(!report.plan.why.is_blocked());
     }
 }

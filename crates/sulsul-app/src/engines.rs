@@ -5,6 +5,7 @@ use sulsul_core::stt::SttRegistry;
 pub fn registry() -> SttRegistry {
     let mut registry = SttRegistry::new();
     registry.register(sulsul_stt_whisper::factory());
+    registry.register(sulsul_stt_whisper_onnx::factory());
     registry.register(sulsul_stt_sensevoice::factory());
     registry.register(sulsul_stt_cloud::factory());
     // 가짜 엔진은 화면 흐름 확인용이라 개발 빌드에만 넣습니다.
@@ -22,11 +23,23 @@ mod tests {
     use sulsul_core::settings::SettingKind;
 
     #[test]
-    fn whisper_is_registered() {
+    fn engines_are_registered_in_order() {
         let reg = registry();
-        assert!(reg.descriptor(sulsul_stt_whisper::ENGINE_ID).is_some());
-        assert!(reg.descriptor(sulsul_stt_sensevoice::ENGINE_ID).is_some());
-        assert!(reg.descriptor(sulsul_stt_cloud::ENGINE_ID).is_some());
+        let ids: Vec<_> = reg
+            .descriptors()
+            .map(|d| d.id.as_str())
+            .filter(|id| *id != sulsul_core::stt::mock::MOCK_ENGINE_ID)
+            .collect();
+        // 설정·모델 관리 화면에 이 순서로 보입니다. Whisper ONNX는 whisper.cpp 엔진 바로 뒤입니다.
+        assert_eq!(
+            ids,
+            [
+                sulsul_stt_whisper::ENGINE_ID,
+                sulsul_stt_whisper_onnx::ENGINE_ID,
+                sulsul_stt_sensevoice::ENGINE_ID,
+                sulsul_stt_cloud::ENGINE_ID,
+            ]
+        );
     }
 
     /// 엔진 설명자가 가리키는 번역 키가 번역 파일에 모두 있어야 합니다.

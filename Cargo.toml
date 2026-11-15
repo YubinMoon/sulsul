@@ -13,6 +13,7 @@ repository = "https://github.com/YubinMoon/sulsul"
 sulsul-core = { path = "crates/sulsul-core" }
 sulsul-stt-whisper = { path = "crates/sulsul-stt-whisper" }
 sulsul-stt-sensevoice = { path = "crates/sulsul-stt-sensevoice" }
+sulsul-stt-whisper-onnx = { path = "crates/sulsul-stt-whisper-onnx" }
 sulsul-stt-cloud = { path = "crates/sulsul-stt-cloud" }
 sulsul-llm = { path = "crates/sulsul-llm" }
 

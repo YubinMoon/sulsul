@@ -118,6 +118,7 @@ impl Selected {
 fn registry() -> SttRegistry {
     let mut registry = SttRegistry::new();
     registry.register(sulsul_stt_whisper::factory());
+    registry.register(sulsul_stt_whisper_onnx::factory());
     registry.register(sulsul_stt_sensevoice::factory());
     registry.register(sulsul_stt_cloud::factory());
     registry.register(Arc::new(MockEngineFactory::new()));
@@ -242,6 +243,22 @@ mod tests {
             stt,
             engine_id: MOCK_ENGINE_ID.to_owned(),
         }
+    }
+
+    #[test]
+    fn engines_are_registered_in_order() {
+        let registry = registry();
+        let ids: Vec<_> = registry.descriptors().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                sulsul_stt_whisper::ENGINE_ID,
+                sulsul_stt_whisper_onnx::ENGINE_ID,
+                sulsul_stt_sensevoice::ENGINE_ID,
+                sulsul_stt_cloud::ENGINE_ID,
+                MOCK_ENGINE_ID,
+            ]
+        );
     }
 
     #[test]

@@ -24,7 +24,11 @@ use crate::features;
 
 static ORT_ENV: OnceLock<Result<Environment, String>> = OnceLock::new();
 
-fn ort_environment() -> Result<&'static Environment, SttError> {
+/// 프로세스 공용 ONNX Runtime 환경. 처음 부를 때 한 번 만들고 계속 씁니다.
+///
+/// `ort`는 프로세스마다 환경을 하나만 만들 수 있으므로(두 번째 `ort::init().build()`는 실패)
+/// ONNX 엔진 두 개(SenseVoice, `sulsul-stt-whisper-onnx`의 Whisper ONNX)가 모두 이 환경으로 세션을 만듭니다.
+pub fn ort_environment() -> Result<&'static Environment, SttError> {
     match ORT_ENV.get_or_init(|| ort::init().build().map_err(|e| e.to_string())) {
         Ok(env) => Ok(env),
         Err(message) => Err(SttError::Backend(format!(
