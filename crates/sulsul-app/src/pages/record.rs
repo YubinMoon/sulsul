@@ -16,14 +16,15 @@ use crate::format::{
     SILENCE_DBFS, clock_text, clock_text_short, dbfs, dbfs_text, hertz_text, percent_text,
     seconds_text,
 };
-use crate::i18n::{microphone_settings_hint, tr_opt};
+use crate::i18n::microphone_settings_hint;
 use crate::icons::{self, Icon};
-use crate::session::{PageContext, Recorded, Shared};
+use crate::session::{DictationState, DictationStatus, PageContext, Recorded, Shared};
 use crate::system;
 use crate::theme::{self, Palette, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
 use crate::widgets::device_combo::device_combo;
+use crate::widgets::hotkey_field::keycaps;
 use crate::widgets::level_meter::{MeterState, level_meter};
 use crate::widgets::stat::{Stat, stats};
 use crate::widgets::{controls, row, text};
@@ -278,7 +279,7 @@ impl RecordPage {
             });
 
             row::separator(ui);
-            hotkey_hint(ui, cx.config);
+            hotkey_hint(ui, cx.config, &cx.shared.dictation);
         });
     }
 
@@ -390,11 +391,12 @@ fn record_button(ui: &mut Ui, recording: bool, label: &str) -> Response {
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// 단축키 안내 (전역 단축키는 아직 연결되지 않음)
-fn hotkey_hint(ui: &mut Ui, config: &Config) {
+/// 단축키 안내: 지금 단축키와 동작 방식, 단축키로 받아쓰는 중이면 그 상태.
+/// 전역 단축키를 쓸 수 없으면 그 이유를 아래에 경고로 보여 줍니다.
+fn hotkey_hint(ui: &mut Ui, config: &Config, dictation: &DictationStatus) {
+    let palette = Palette::of(ui);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        let palette = Palette::of(ui);
+        ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
         ui.label(
             icons::text(Icon::Keyboard)
                 .size(size::BODY)
@@ -403,18 +405,42 @@ fn hotkey_hint(ui: &mut Ui, config: &Config) {
         ui.label(text::caption(
             ui,
             t!(
-                "record.hotkey_hint",
-                key = hotkey_key_name(&config.hotkey.key),
+                "record.hotkey.label",
                 mode = hotkey_mode_name(config.hotkey.mode)
             ),
         ));
-        controls::badge(ui, &t!("record.hotkey_not_connected"));
+        keycaps(ui, &config.hotkey.key);
+        match dictation.state {
+            DictationState::Idle => {}
+            DictationState::Recording => {
+                controls::tone_badge(
+                    ui,
+                    &t!("record.hotkey.recording"),
+                    palette.danger_soft,
+                    palette.danger_text,
+                );
+            }
+            DictationState::Transcribing => {
+                controls::tone_badge(
+                    ui,
+                    &t!("record.hotkey.transcribing"),
+                    palette.accent_soft,
+                    palette.accent_text,
+                );
+            }
+            DictationState::WaitingPaste => {
+                controls::tone_badge(
+                    ui,
+                    &t!("record.hotkey.waiting_paste"),
+                    palette.success_soft,
+                    palette.success_text,
+                );
+            }
+        }
     });
-}
-
-/// 단축키 이름 (번역이 없는 키는 설정 값 그대로)
-pub fn hotkey_key_name(key: &str) -> String {
-    tr_opt(&format!("hotkey.keys.{key}")).unwrap_or_else(|| key.to_owned())
+    if let Some(error) = &dictation.hotkey_error {
+        ui.label(text::caption(ui, error).color(palette.warning_text));
+    }
 }
 
 pub fn hotkey_mode_name(mode: HotkeyMode) -> String {

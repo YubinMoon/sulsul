@@ -31,6 +31,17 @@ pub fn language_name(code: &str) -> String {
     tr_opt(&format!("language.{code}")).unwrap_or_else(|| code.to_owned())
 }
 
+/// 단축키 설정 값(`"RightCtrl"`, `"Ctrl+Shift+Space"`)을 화면에 보일 키 이름으로 나눕니다.
+///
+/// `+`로 나눈 부분마다 `hotkey.keys.<이름>` 번역으로 바꾸고, 번역이 없는 키는 이름 그대로 둡니다.
+pub fn hotkey_key_parts(key: &str) -> Vec<String> {
+    key.split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| tr_opt(&format!("hotkey.keys.{part}")).unwrap_or_else(|| part.to_owned()))
+        .collect()
+}
+
 /// 설정의 화면 언어를 적용합니다. 번역 파일이 없는 언어면 기본 언어로 표시됩니다.
 pub fn apply_locale(code: &str) {
     if *rust_i18n::locale() != *code {
@@ -208,6 +219,30 @@ mod tests {
             .filter(|key| tr_opt(key).is_none())
             .collect();
         assert!(missing.is_empty(), "번역이 없는 키: {missing:#?}");
+    }
+
+    #[test]
+    fn hotkey_names_are_translated_part_by_part() {
+        rust_i18n::set_locale("ko");
+        assert_eq!(hotkey_key_parts("RightCtrl"), ["오른쪽 Ctrl"]);
+        assert_eq!(
+            hotkey_key_parts("Ctrl+Shift+Space"),
+            ["Ctrl", "Shift", "스페이스"]
+        );
+        // 번역이 없는 키는 이름 그대로, 빈 부분은 건너뜁니다.
+        assert_eq!(hotkey_key_parts(" Alt + F13 +"), ["Alt", "F13"]);
+        assert!(hotkey_key_parts("").is_empty());
+        assert_eq!(
+            hotkey_key_parts("Ctrl+Alt+HangulMode"),
+            ["Ctrl", "Alt", "한/영"]
+        );
+        // 기본 단축키는 설정 값 그대로가 아니라 화면 이름으로 보여야 합니다.
+        let default_key = sulsul_core::config::Config::default().hotkey.key;
+        assert_ne!(
+            hotkey_key_parts(&default_key),
+            [default_key.as_str()],
+            "기본 단축키의 화면 이름이 없습니다"
+        );
     }
 
     #[test]

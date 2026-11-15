@@ -5,14 +5,13 @@
 
 use egui::{DragValue, Ui};
 use rust_i18n::t;
-use sulsul_core::config::{
-    Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, OutputMode, RESTORE_DELAY_MS, Theme,
-};
+use sulsul_core::config::{Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, Theme};
 use sulsul_core::settings;
 use sulsul_core::stt::SttRegistry;
 
-use super::record::{hotkey_key_name, hotkey_mode_name};
-use super::{SECTION_GAP, header};
+use super::prompts::prompt_display_name;
+use super::record::hotkey_mode_name;
+use super::{Page, SECTION_GAP, header};
 use crate::error_text;
 use crate::i18n;
 use crate::icons::Icon;
@@ -23,29 +22,9 @@ use crate::widgets::card::Section;
 use crate::widgets::confirm::{Answer, Confirm};
 use crate::widgets::controls::{self, ComboItem};
 use crate::widgets::device_combo::device_combo;
+use crate::widgets::hotkey_field::hotkey_field;
 use crate::widgets::row::{self, CONTROL_WIDTH, Row};
 use crate::widgets::text;
-
-/// 단축키로 고를 수 있는 키. 화면에서 좌우 Ctrl을 구분해 입력받을 수 없어 목록에서 고릅니다.
-const HOTKEY_PRESETS: [&str; 17] = [
-    "RightCtrl",
-    "RightAlt",
-    "RightShift",
-    "F13",
-    "F14",
-    "F15",
-    "F16",
-    "F17",
-    "F18",
-    "F19",
-    "F20",
-    "F21",
-    "F22",
-    "F23",
-    "F24",
-    "ScrollLock",
-    "Pause",
-];
 
 #[derive(Default)]
 pub struct SettingsPage {
@@ -68,15 +47,13 @@ impl SettingsPage {
         ui.add_enabled_ui(!cx.locked, |ui| {
             let soon = t!("common.coming_soon");
             ui.add_space(SECTION_GAP);
-            general_section(ui, cx.config, &soon);
+            general_section(ui, cx.config);
             ui.add_space(SECTION_GAP);
-            hotkey_section(ui, cx.config, &soon);
+            hotkey_section(ui, cx);
             ui.add_space(SECTION_GAP);
-            audio_section(ui, cx, &soon);
+            audio_section(ui, cx);
             ui.add_space(SECTION_GAP);
-            output_section(ui, cx.config, &soon);
-            ui.add_space(SECTION_GAP);
-            postprocess_section(ui, cx.config, &soon);
+            postprocess_section(ui, cx, &soon);
         });
 
         if self.confirm_reset {
@@ -149,7 +126,7 @@ fn issues_banner(ui: &mut Ui, issues: &[ConfigIssue]) {
         .show(ui);
 }
 
-fn general_section(ui: &mut Ui, config: &mut Config, soon: &str) {
+fn general_section(ui: &mut Ui, config: &mut Config) {
     Section::new(Icon::SlidersHorizontal, &t!("settings.general.title")).show(ui, |ui| {
         let general = &mut config.general;
 
@@ -200,76 +177,60 @@ fn general_section(ui: &mut Ui, config: &mut Config, soon: &str) {
         row::separator(ui);
 
         let label = t!("settings.general.launch_at_startup");
-        Row::new(&label).badge_opt(Some(soon)).show(ui, |ui| {
-            controls::toggle(ui, &mut general.launch_at_startup, &label)
-        });
-        row::separator(ui);
-
-        let label = t!("settings.general.start_minimized");
         Row::new(&label)
-            .help(&t!("settings.general.start_minimized_help"))
-            .badge_opt(Some(soon))
+            .help(&t!("settings.general.launch_at_startup_help"))
             .show(ui, |ui| {
-                controls::toggle(ui, &mut general.start_minimized, &label)
+                controls::toggle(ui, &mut general.launch_at_startup, &label)
             });
     });
 }
 
-fn hotkey_section(ui: &mut Ui, config: &mut Config, soon: &str) {
-    Section::new(Icon::Keyboard, &t!("settings.hotkey.title"))
-        .badge(soon)
-        .show(ui, |ui| {
-            let hotkey = &mut config.hotkey;
+fn hotkey_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
+    Section::new(Icon::Keyboard, &t!("settings.hotkey.title")).show(ui, |ui| {
+        let hotkey = &mut cx.config.hotkey;
 
-            // 설정 파일에 목록에 없는 키(조합 키 등)가 있으면 그 값도 보여 줍니다.
-            let mut items: Vec<_> = HOTKEY_PRESETS
-                .iter()
-                .map(|key| ComboItem::new((*key).to_owned(), hotkey_key_name(key)))
-                .collect();
-            if !HOTKEY_PRESETS.contains(&hotkey.key.as_str()) {
-                items.push(ComboItem::new(
-                    hotkey.key.clone(),
-                    hotkey_key_name(&hotkey.key),
-                ));
-            }
-            Row::new(&t!("settings.hotkey.key"))
-                .help(&t!("settings.hotkey.key_help"))
-                .show(ui, |ui| {
-                    let fallback = hotkey.key.clone();
-                    controls::combo(
-                        ui,
-                        "hotkey_key",
-                        CONTROL_WIDTH,
-                        &mut hotkey.key,
-                        &items,
-                        &fallback,
-                    );
-                });
-            row::separator(ui);
+        // 전역 단축키를 쓸 수 없으면(등록 실패, 쓸 수 없는 키) 그 이유를 이 줄에서 알립니다.
+        let label = t!("settings.hotkey.key");
+        Row::new(&label)
+            .help(&t!("settings.hotkey.key_help"))
+            .warning_opt(cx.shared.dictation.hotkey_error.as_deref())
+            .show(ui, |ui| {
+                // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+                let width = CONTROL_WIDTH.min(ui.available_width());
+                hotkey_field(
+                    ui,
+                    "hotkey_key",
+                    width,
+                    &label,
+                    &mut hotkey.key,
+                    &cx.shared.key_capture,
+                );
+            });
+        row::separator(ui);
 
-            let help = match hotkey.mode {
-                HotkeyMode::Toggle => t!("settings.hotkey.mode_toggle_help"),
-                HotkeyMode::PushToTalk => t!("settings.hotkey.mode_push_to_talk_help"),
-            };
-            Row::new(&t!("settings.hotkey.mode"))
-                .help(&help)
-                .show(ui, |ui| {
-                    controls::segmented(
-                        ui,
-                        &mut hotkey.mode,
-                        &[
-                            (HotkeyMode::Toggle, hotkey_mode_name(HotkeyMode::Toggle)),
-                            (
-                                HotkeyMode::PushToTalk,
-                                hotkey_mode_name(HotkeyMode::PushToTalk),
-                            ),
-                        ],
-                    );
-                });
-        });
+        let help = match hotkey.mode {
+            HotkeyMode::Toggle => t!("settings.hotkey.mode_toggle_help"),
+            HotkeyMode::PushToTalk => t!("settings.hotkey.mode_push_to_talk_help"),
+        };
+        Row::new(&t!("settings.hotkey.mode"))
+            .help(&help)
+            .show(ui, |ui| {
+                controls::segmented(
+                    ui,
+                    &mut hotkey.mode,
+                    &[
+                        (HotkeyMode::Toggle, hotkey_mode_name(HotkeyMode::Toggle)),
+                        (
+                            HotkeyMode::PushToTalk,
+                            hotkey_mode_name(HotkeyMode::PushToTalk),
+                        ),
+                    ],
+                );
+            });
+    });
 }
 
-fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
+fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
     Section::new(Icon::Mic, &t!("settings.audio.title")).show(ui, |ui| {
         let audio = &mut cx.config.audio;
 
@@ -308,71 +269,13 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
         let label = t!("settings.audio.feedback_sounds");
         Row::new(&label)
             .help(&t!("settings.audio.feedback_sounds_help"))
-            .badge_opt(Some(soon))
             .show(ui, |ui| {
                 controls::toggle(ui, &mut audio.feedback_sounds, &label)
             });
     });
 }
 
-fn output_section(ui: &mut Ui, config: &mut Config, soon: &str) {
-    Section::new(Icon::ClipboardPaste, &t!("settings.output.title"))
-        .badge(soon)
-        .show(ui, |ui| {
-            let output = &mut config.output;
-
-            let items = [
-                ComboItem::new(OutputMode::Paste, t!("settings.output.mode_paste")),
-                ComboItem::new(OutputMode::Type, t!("settings.output.mode_type")),
-                ComboItem::new(OutputMode::Clipboard, t!("settings.output.mode_clipboard")),
-            ];
-            let help = match output.mode {
-                OutputMode::Paste => t!("settings.output.mode_paste_help"),
-                OutputMode::Type => t!("settings.output.mode_type_help"),
-                OutputMode::Clipboard => t!("settings.output.mode_clipboard_help"),
-            };
-            Row::new(&t!("settings.output.mode"))
-                .help(&help)
-                .show(ui, |ui| {
-                    controls::combo(
-                        ui,
-                        "output_mode",
-                        CONTROL_WIDTH,
-                        &mut output.mode,
-                        &items,
-                        "",
-                    );
-                });
-            row::separator(ui);
-
-            let label = t!("settings.output.restore_clipboard");
-            Row::new(&label)
-                .help(&t!("settings.output.restore_clipboard_help"))
-                .show(ui, |ui| {
-                    controls::toggle(ui, &mut output.restore_clipboard, &label)
-                });
-            row::separator(ui);
-
-            let (min, max) = RESTORE_DELAY_MS;
-            Row::new(&t!("settings.output.restore_delay"))
-                .help(&t!(
-                    "settings.output.restore_delay_help",
-                    min = min,
-                    max = max
-                ))
-                .show(ui, |ui| {
-                    ui.add(
-                        DragValue::new(&mut output.restore_delay_ms)
-                            .range(min..=max)
-                            .clamp_existing_to_range(false)
-                            .speed(5.0)
-                            .suffix(t!("unit.milliseconds_suffix")),
-                    );
-                });
-        });
-}
-
-fn postprocess_section(ui: &mut Ui, config: &Config, soon: &str) {
+fn postprocess_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
     Section::new(Icon::Sparkles, &t!("settings.postprocess.title"))
         .badge(soon)
         .show(ui, |ui| {
@@ -381,13 +284,31 @@ fn postprocess_section(ui: &mut Ui, config: &Config, soon: &str) {
                 .help(&t!("settings.postprocess.llm_help"))
                 .show(ui, |ui| {
                     // 아직 후처리기가 없어 켤 수 없습니다. 파일의 값만 보여 줍니다.
-                    let mut enabled = config.postprocess.enabled;
+                    let mut enabled = cx.config.postprocess.enabled;
                     ui.add_enabled_ui(false, |ui| controls::toggle(ui, &mut enabled, &label));
+                });
+            row::separator(ui);
+
+            // 다듬을 때 쓸 지시문은 프롬프트 화면에서 만들고 고릅니다. 여기서는 고른 것만 알려 줍니다.
+            let help = match cx.config.postprocess.active_prompt() {
+                Some(prompt) => t!(
+                    "settings.postprocess.prompt_current",
+                    name = prompt_display_name(prompt)
+                ),
+                None => t!("settings.postprocess.prompt_help"),
+            };
+            Row::new(&t!("settings.postprocess.prompt"))
+                .help(&help)
+                .show(ui, |ui| {
+                    let open = t!("settings.postprocess.open_prompts");
+                    if controls::icon_text_button(ui, Icon::ArrowRight, open).clicked() {
+                        cx.shared.navigate = Some(Page::Prompts);
+                    }
                 });
         });
 }
 
-/// 모든 값을 기본값으로 되돌립니다.
+/// 값을 기본값으로 되돌립니다. 사용자가 만들어 둔 것(등록한 외부 제공자, 프롬프트)은 남깁니다.
 ///
 /// 저장은 기존 파일에 값을 합치는 방식이라 `[stt.engines.*]` 표 자체는 파일에 남습니다.
 /// 그래서 표를 비우는 대신, 등록된 엔진의 항목을 스키마 기본값으로 덮어씁니다.
@@ -407,6 +328,9 @@ fn reset_to_defaults(config: &mut Config, registry: &SttRegistry) {
     fresh.postprocess.api_profile = config.postprocess.api_profile.clone();
     fresh.postprocess.api_profiles = config.postprocess.api_profiles.clone();
     fresh.postprocess.processors = config.postprocess.processors.clone();
+    // 사용자가 만든 프롬프트와 고른 프롬프트도 같은 이유로 남깁니다.
+    fresh.postprocess.prompt = config.postprocess.prompt.clone();
+    fresh.postprocess.prompts = config.postprocess.prompts.clone();
     let engine = fresh.stt.engine.clone();
     registry.ensure_engine_defaults(&mut fresh.stt, &engine);
     *config = fresh;
@@ -416,6 +340,7 @@ fn reset_to_defaults(config: &mut Config, registry: &SttRegistry) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use sulsul_core::config::Prompt;
     use sulsul_core::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
     use sulsul_core::toml::Value;
 
@@ -451,6 +376,15 @@ mod tests {
         config.postprocess.processor = sulsul_llm::CLOUD_PROCESSOR_ID.into();
         config.postprocess.api_profile = llm_profile.id.clone();
         config.postprocess.api_profiles.push(llm_profile.clone());
+        // 사용자가 만들어 고른 프롬프트
+        let prompt = Prompt {
+            id: "prompt-1".into(),
+            name: "회의록".into(),
+            text: "회의록 말투로 다듬어 주세요.".into(),
+        };
+        config.postprocess.prompt = prompt.id.clone();
+        config.postprocess.prompts.push(prompt.clone());
+        let prompts = config.postprocess.prompts.clone();
 
         reset_to_defaults(&mut config, &registry);
 
@@ -459,6 +393,9 @@ mod tests {
         assert_eq!(config.stt.api_profiles, [stt_profile]);
         assert_eq!(config.postprocess.api_profile, llm_profile.id);
         assert_eq!(config.postprocess.api_profiles, [llm_profile]);
+        // 만들어 둔 프롬프트 목록과 고른 프롬프트도 남습니다.
+        assert_eq!(config.postprocess.prompt, prompt.id);
+        assert_eq!(config.postprocess.prompts, prompts);
         // 나머지 후처리 설정은 기본값으로 돌아갑니다.
         assert_eq!(
             config.postprocess.enabled,
@@ -484,10 +421,5 @@ mod tests {
             config.stt.engines["someone_else"]["custom"],
             Value::Boolean(true)
         );
-    }
-
-    #[test]
-    fn hotkey_presets_include_default_key() {
-        assert!(HOTKEY_PRESETS.contains(&Config::default().hotkey.key.as_str()));
     }
 }

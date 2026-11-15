@@ -136,16 +136,69 @@ device:
   missing: "%{name} (연결되지 않음)"
 
 hotkey:
-  # 설정 파일의 키 이름 → 화면에 보일 이름. 여기 없는 키는 설정 값 그대로 보입니다.
+  # 설정 파일의 키 이름 → 화면에 보일 이름. 여기 없는 키(Ctrl, A, F13 등)는 설정 값 그대로 보입니다.
+  # 조합(Ctrl+Shift+Space)은 + 로 나눈 부분마다 이 목록에서 찾습니다.
   keys:
     RightCtrl: 오른쪽 Ctrl
+    LeftCtrl: 왼쪽 Ctrl
     RightAlt: 오른쪽 Alt
+    LeftAlt: 왼쪽 Alt
     RightShift: 오른쪽 Shift
+    LeftShift: 왼쪽 Shift
+    RightWin: 오른쪽 Win
+    LeftWin: 왼쪽 Win
+    Space: 스페이스
+    Enter: 엔터
+    PageUp: Page Up
+    PageDown: Page Down
+    Up: ↑
+    Down: ↓
+    Left: ←
+    Right: →
+    CapsLock: Caps Lock
     ScrollLock: Scroll Lock
+    NumLock: Num Lock
     Pause: Pause/Break
+    PrintScreen: Print Screen
+    ContextMenu: 메뉴
+    HangulMode: 한/영
+    Hanja: 한자
+    Numpad0: 숫자 패드 0
+    Numpad1: 숫자 패드 1
+    Numpad2: 숫자 패드 2
+    Numpad3: 숫자 패드 3
+    Numpad4: 숫자 패드 4
+    Numpad5: 숫자 패드 5
+    Numpad6: 숫자 패드 6
+    Numpad7: 숫자 패드 7
+    Numpad8: 숫자 패드 8
+    Numpad9: 숫자 패드 9
+    NumpadAdd: 숫자 패드 +
+    NumpadSubtract: 숫자 패드 -
+    NumpadMultiply: 숫자 패드 *
+    NumpadDivide: 숫자 패드 /
+    NumpadDecimal: 숫자 패드 .
+    Minus: "-"
+    Equal: "="
+    BracketLeft: "["
+    BracketRight: "]"
+    Backslash: "\\"
+    Semicolon: ";"
+    Quote: "'"
+    Comma: ","
+    Period: "."
+    Slash: "/"
+    Backquote: "`"
   mode:
     toggle: 토글
     push_to_talk: 누르는 동안
+  # 단축키가 비어 있을 때 키 이름 자리에 보이는 글
+  unset: 지정 안 됨
+  # 단축키 입력란 (눌러서 새 단축키를 등록하는 칸)
+  capture:
+    start: 눌러서 새 단축키 등록
+    prompt: 새 단축키를 누르세요
+    cancel_hint: Esc로 취소
 
 stt:
   engine:
@@ -273,8 +326,12 @@ record:
   error_title: 녹음하지 못했습니다
   empty_title: 녹음된 소리가 없습니다
   empty_body: 장치에서 오디오를 받지 못했습니다. 조금 더 길게 녹음하거나 다른 입력 장치를 골라 보세요.
-  hotkey_hint: "단축키: %{key} · %{mode}"
-  hotkey_not_connected: 전역 단축키는 아직 연결되지 않았습니다
+  # 녹음 테스트 카드 아래쪽의 단축키 안내 줄 (글 뒤에 단축키가 키캡 모양으로 붙습니다)
+  hotkey:
+    label: "단축키 · %{mode}"
+    recording: 단축키로 녹음 중
+    transcribing: 받아쓰는 중
+    waiting_paste: 붙여넣기를 기다리는 중
   device:
     title: 입력 장치
     refresh: 장치 목록 새로 고침
@@ -413,7 +470,7 @@ settings:
   reset:
     button: 기본값으로 되돌리기
     confirm_title: 모든 설정을 기본값으로 되돌릴까요?
-    confirm_body: 화면 언어, 단축키, 엔진 설정을 포함한 모든 값이 처음 상태로 돌아갑니다. 설정 파일의 주석은 그대로 남습니다.
+    confirm_body: 화면 언어, 단축키, 엔진 설정을 포함한 값이 처음 상태로 돌아갑니다. 등록한 외부 제공자와 프롬프트, 설정 파일의 주석은 그대로 남습니다.
     confirm: 되돌리기
     done: 설정을 기본값으로 되돌렸습니다.
   issues:
@@ -428,12 +485,11 @@ settings:
     theme_light: 라이트
     theme_system: 시스템
     launch_at_startup: 로그인할 때 자동 실행
-    start_minimized: 시작할 때 트레이로만 실행
-    start_minimized_help: 창을 띄우지 않고 트레이 아이콘만 표시합니다.
+    launch_at_startup_help: 컴퓨터에 로그인하면 창을 띄우지 않고 알림 영역(트레이)에서 시작합니다.
   hotkey:
     title: 단축키
     key: 녹음 단축키
-    key_help: 다른 앱의 단축키와 겹치지 않는 키를 고르세요. 조합 키는 설정 파일에서 직접 지정할 수 있습니다.
+    key_help: "입력란을 누른 뒤 쓸 키를 누르면 그대로 등록됩니다. 한 키(예: 오른쪽 Ctrl)나 조합(예: Ctrl+Shift+Space)을 쓸 수 있습니다."
     mode: 동작 방식
     mode_toggle_help: 한 번 눌러 녹음을 시작하고, 다시 눌러 끝냅니다.
     mode_push_to_talk_help: 키를 누르고 있는 동안만 녹음합니다.
@@ -444,24 +500,15 @@ settings:
     max_record_seconds: 최대 녹음 길이
     max_record_seconds_help: "이 시간을 넘으면 녹음을 자동으로 끝냅니다. (%{min} ~ %{max}초)"
     feedback_sounds: 효과음
-    feedback_sounds_help: 녹음을 시작하고 끝낼 때 소리로 알려 줍니다.
-  output:
-    title: 출력
-    mode: 입력 방식
-    mode_paste: 붙여넣기
-    mode_paste_help: 클립보드를 거쳐 커서 위치에 붙여넣습니다.
-    mode_type: 키 입력
-    mode_type_help: 키보드로 치듯이 한 글자씩 입력합니다.
-    mode_clipboard: 클립보드만
-    mode_clipboard_help: 클립보드에 복사만 하고 입력하지는 않습니다.
-    restore_clipboard: 클립보드 되돌리기
-    restore_clipboard_help: 붙여넣은 뒤 원래 클립보드 내용을 되돌립니다.
-    restore_delay: 되돌리기 지연
-    restore_delay_help: "클립보드를 되돌리기 전에 기다리는 시간입니다. 붙여넣기가 가끔 이전 내용으로 되면 늘리세요. (%{min} ~ %{max} ms)"
+    feedback_sounds_help: 녹음을 시작할 때와 받아쓴 글을 클립보드에 넣었을 때 소리로 알려 줍니다.
   postprocess:
     title: 후처리
     llm: 글 다듬기
     llm_help: 인식 결과의 문장 부호와 오탈자를 언어 모델로 다듬습니다. 다듬는 데 쓸 모델은 모델 관리의 '글 다듬기'에서 고릅니다.
+    prompt: 프롬프트
+    prompt_help: 글을 다듬을 때 언어 모델에 보낼 지시문입니다. 프롬프트 화면에서 만들고 고릅니다.
+    prompt_current: "글을 다듬을 때 언어 모델에 보낼 지시문입니다. 지금 고른 프롬프트: %{name}"
+    open_prompts: 프롬프트 화면으로
   # 엔진·후처리기 설정 항목(스키마로 자동 생성되는 입력란)에 함께 쓰는 문구
   field:
     browse: 찾아보기

@@ -6,6 +6,7 @@ pub mod confirm;
 pub mod controls;
 pub mod device_combo;
 pub mod expander;
+pub mod hotkey_field;
 pub mod language;
 pub mod level_meter;
 pub mod row;

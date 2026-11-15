@@ -2,7 +2,7 @@
 
 use egui::{Align, Layout, Sense, Stroke, TextStyle, Ui, vec2};
 
-use super::{controls, text};
+use super::text;
 use crate::theme::Palette;
 
 /// 오른쪽 조작 영역의 기본 너비
@@ -11,7 +11,6 @@ pub const CONTROL_WIDTH: f32 = 260.0;
 pub struct Row<'a> {
     label: &'a str,
     help: Option<&'a str>,
-    badge: Option<&'a str>,
     warning: Option<&'a str>,
 }
 
@@ -20,7 +19,6 @@ impl<'a> Row<'a> {
         Self {
             label,
             help: None,
-            badge: None,
             warning: None,
         }
     }
@@ -35,12 +33,6 @@ impl<'a> Row<'a> {
         self
     }
 
-    /// 이름 옆에 작은 배지를 붙입니다 (예: "준비 중").
-    pub fn badge_opt(mut self, badge: Option<&'a str>) -> Self {
-        self.badge = badge;
-        self
-    }
-
     /// 도움말 아래에 경고 문구를 보여 줍니다.
     pub fn warning_opt(mut self, warning: Option<&'a str>) -> Self {
         self.warning = warning;
@@ -49,22 +41,7 @@ impl<'a> Row<'a> {
 
     fn label_ui(&self, ui: &mut Ui) {
         ui.spacing_mut().item_spacing.y = 3.0;
-        match self.badge {
-            Some(badge) => {
-                ui.scope(|ui| {
-                    // 줄 높이를 글자 높이에 맞춰 배지가 붙어도 줄이 커지지 않게 합니다.
-                    ui.spacing_mut().interact_size.y = ui.text_style_height(&TextStyle::Body);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(self.label);
-                        controls::badge(ui, badge);
-                    });
-                });
-            }
-            None => {
-                ui.label(self.label);
-            }
-        }
+        ui.label(self.label);
         if let Some(help) = self.help {
             ui.label(text::caption(ui, help));
         }
