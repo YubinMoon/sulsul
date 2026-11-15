@@ -19,6 +19,26 @@ pub const CONFIG_VERSION: u32 = 1;
 /// 새 설정 파일의 내용 (주석 포함)
 pub const DEFAULT_CONFIG_TOML: &str = include_str!("default.toml");
 
+/// 예전 버전에 있다가 없앤 설정 키 (점으로 구분한 경로).
+///
+/// 예전 파일에 이 키가 남아 있으면 읽을 때 [`ConfigProblem::UnknownKey`]로 알리지 않고
+/// [`LoadedConfig::removed_keys`]에 담으며, 다음 저장 때 붙은 주석과 함께 파일에서 지웁니다.
+/// 표 이름을 적으면 그 표 전체가 해당합니다. 설정 키를 없앨 때는 여기에 더합니다.
+pub const REMOVED_KEYS: &[&str] = &[
+    // 로그인 자동 실행으로 켜질 때만 트레이로 시작하도록 바뀌어 없앴습니다.
+    "general.start_minimized",
+    // 출력은 "클립보드에 복사하고 붙여넣은 뒤 되돌리기"로 고정되었습니다.
+    "output",
+];
+
+/// `path`(점으로 구분한 키 경로)가 [`REMOVED_KEYS`]의 키이거나 그 아래 키인지
+pub fn is_removed_key(path: &str) -> bool {
+    REMOVED_KEYS.iter().any(|removed| {
+        path.strip_prefix(removed)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -27,7 +47,6 @@ pub struct Config {
     pub hotkey: HotkeyConfig,
     pub audio: AudioConfig,
     pub stt: SttConfig,
-    pub output: OutputConfig,
     pub postprocess: PostProcessConfig,
 }
 
@@ -39,7 +58,6 @@ impl Default for Config {
             hotkey: HotkeyConfig::default(),
             audio: AudioConfig::default(),
             stt: SttConfig::default(),
-            output: OutputConfig::default(),
             postprocess: PostProcessConfig::default(),
         }
     }
@@ -52,7 +70,6 @@ pub struct GeneralConfig {
     pub ui_language: String,
     pub theme: Theme,
     pub launch_at_startup: bool,
-    pub start_minimized: bool,
 }
 
 impl Default for GeneralConfig {
@@ -61,7 +78,6 @@ impl Default for GeneralConfig {
             ui_language: "ko".into(),
             theme: Theme::Dark,
             launch_at_startup: false,
-            start_minimized: false,
         }
     }
 }
@@ -188,40 +204,36 @@ impl SttConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// 글 다듬기 프롬프트 (`[[postprocess.prompts]]`)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct OutputConfig {
-    pub mode: OutputMode,
-    /// 붙여넣기 후 원래 클립보드 내용을 되돌릴지
-    pub restore_clipboard: bool,
-    /// 붙여넣기 후 클립보드를 되돌리기까지 기다리는 시간
-    pub restore_delay_ms: u32,
+pub struct Prompt {
+    /// 프롬프트 고유 ID
+    pub id: String,
+    /// 화면에 보일 이름
+    pub name: String,
+    /// 언어 모델에 보낼 지시문. 받아쓴 글은 따로 붙여 보냅니다.
+    pub text: String,
 }
 
-impl Default for OutputConfig {
-    fn default() -> Self {
-        Self {
-            mode: OutputMode::Paste,
-            restore_clipboard: true,
-            restore_delay_ms: 150,
-        }
-    }
-}
+/// 처음부터 넣어 두는 프롬프트의 ID
+pub const DEFAULT_PROMPT_ID: &str = "default";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputMode {
-    /// 클립보드를 거쳐 커서 위치에 붙여넣기
-    #[default]
-    Paste,
-    /// 키 입력으로 한 글자씩 입력
-    Type,
-    /// 클립보드에 복사만
-    Clipboard,
+/// 처음부터 넣어 두는 프롬프트 목록 (`Config::default()`와 `default.toml`에 같은 내용)
+pub fn default_prompts() -> Vec<Prompt> {
+    vec![Prompt {
+        id: DEFAULT_PROMPT_ID.into(),
+        name: "기본 다듬기".into(),
+        text: "음성 인식으로 받아쓴 글을 다듬어 주세요.\n\
+               - 맞춤법, 띄어쓰기, 문장 부호만 바로잡습니다.\n\
+               - 뜻과 말투는 바꾸지 않고, 내용을 더하거나 빼지 않습니다.\n\
+               - 설명 없이 다듬은 글만 돌려줍니다."
+            .into(),
+    }]
 }
 
 /// 글 다듬기(LLM 후처리) 설정 (`[postprocess]`)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PostProcessConfig {
     pub enabled: bool,
@@ -230,6 +242,8 @@ pub struct PostProcessConfig {
     /// `llm_cloud`일 때 고른 프로필 ID. 비어 있으면 첫 프로필을 씁니다
     /// ([`SttConfig::active_api_profile`]과 같은 규칙).
     pub api_profile: String,
+    /// 지금 쓰는 프롬프트 ID. 비어 있으면 첫 프롬프트를 씁니다.
+    pub prompt: String,
     /// 저장된 외부 제공자 프로필 목록 (`[[postprocess.api_profiles]]`)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_profiles: Vec<ApiProfile>,
@@ -237,6 +251,25 @@ pub struct PostProcessConfig {
     /// `[postprocess.processors.llm_local] model = "<변형 ID>"`에 둡니다.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub processors: BTreeMap<String, toml::Table>,
+    /// 저장된 프롬프트 목록 (`[[postprocess.prompts]]`)
+    ///
+    /// 파일에 이 항목이 아예 없으면 [`default_prompts`]로 읽습니다. 사용자가 모두 지운 상태를
+    /// 지키려고 비어 있어도 저장합니다(`prompts = []`).
+    pub prompts: Vec<Prompt>,
+}
+
+impl Default for PostProcessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            processor: String::new(),
+            api_profile: String::new(),
+            prompt: DEFAULT_PROMPT_ID.into(),
+            api_profiles: Vec::new(),
+            processors: BTreeMap::new(),
+            prompts: default_prompts(),
+        }
+    }
 }
 
 impl PostProcessConfig {
@@ -249,6 +282,28 @@ impl PostProcessConfig {
             return self.api_profiles.first();
         }
         self.api_profiles.iter().find(|p| p.id == selected)
+    }
+
+    /// 지금 쓰는 프롬프트. `prompt` ID와 맞는 것, ID가 비어 있으면 첫 프롬프트, 없는 ID면 `None`
+    /// ([`Self::active_api_profile`]과 같은 규칙)
+    pub fn active_prompt(&self) -> Option<&Prompt> {
+        let selected = self.prompt.trim();
+        if selected.is_empty() {
+            return self.prompts.first();
+        }
+        self.prompts.iter().find(|p| p.id == selected)
+    }
+
+    /// 새 프롬프트에 쓸, 목록에 아직 없는 ID (`prompt-1`, `prompt-2`, …)
+    pub fn new_prompt_id(&self) -> String {
+        let mut n = 1_usize;
+        loop {
+            let id = format!("prompt-{n}");
+            if !self.prompts.iter().any(|p| p.id == id) {
+                return id;
+            }
+            n += 1;
+        }
     }
 }
 
@@ -284,7 +339,6 @@ impl fmt::Display for ConfigIssue {
 }
 
 pub const MAX_RECORD_SECONDS: (i64, i64) = (1, 3600);
-pub const RESTORE_DELAY_MS: (i64, i64) = (0, 5000);
 
 impl Config {
     /// 값 범위 등을 검사합니다. 엔진별 설정은 [`crate::stt::SttRegistry::validate`]가 담당합니다.
@@ -302,11 +356,6 @@ impl Config {
             "audio.max_record_seconds",
             i64::from(self.audio.max_record_seconds),
             MAX_RECORD_SECONDS,
-        );
-        range(
-            "output.restore_delay_ms",
-            i64::from(self.output.restore_delay_ms),
-            RESTORE_DELAY_MS,
         );
         for (path, value) in [
             ("general.ui_language", &self.general.ui_language),
@@ -379,6 +428,101 @@ mod tests {
             None,
             "없는 ID를 고르면 None이어야 합니다"
         );
+    }
+
+    #[test]
+    fn removed_key_matches_key_and_children_only() {
+        assert!(is_removed_key("general.start_minimized"));
+        assert!(is_removed_key("output"));
+        assert!(is_removed_key("output.restore_delay_ms"));
+        assert!(
+            !is_removed_key("outputs"),
+            "이름이 비슷한 다른 키는 아닙니다"
+        );
+        assert!(!is_removed_key("general"));
+        assert!(!is_removed_key("general.start_minimized_x"));
+    }
+
+    #[test]
+    fn default_prompt_is_selected() {
+        let post = PostProcessConfig::default();
+        assert_eq!(post.prompts, default_prompts());
+        assert_eq!(post.prompt, DEFAULT_PROMPT_ID);
+        assert_eq!(
+            post.active_prompt().map(|p| p.id.as_str()),
+            Some(DEFAULT_PROMPT_ID)
+        );
+        assert!(
+            post.active_prompt().unwrap().text.contains('\n'),
+            "기본 프롬프트는 여러 줄이어야 합니다"
+        );
+    }
+
+    #[test]
+    fn active_prompt_follows_api_profile_rule() {
+        let prompt = |id: &str| Prompt {
+            id: id.into(),
+            ..Prompt::default()
+        };
+        let mut post = PostProcessConfig {
+            prompt: String::new(),
+            prompts: Vec::new(),
+            ..PostProcessConfig::default()
+        };
+        assert_eq!(
+            post.active_prompt(),
+            None,
+            "프롬프트가 없으면 None이어야 합니다"
+        );
+
+        post.prompts = vec![prompt("a"), prompt("b")];
+        assert_eq!(
+            post.active_prompt().map(|p| p.id.as_str()),
+            Some("a"),
+            "ID가 비어 있으면 첫 프롬프트여야 합니다"
+        );
+        post.prompt = " b ".into();
+        assert_eq!(post.active_prompt().map(|p| p.id.as_str()), Some("b"));
+        post.prompt = "missing".into();
+        assert_eq!(
+            post.active_prompt(),
+            None,
+            "없는 ID를 고르면 None이어야 합니다"
+        );
+    }
+
+    #[test]
+    fn new_prompt_id_skips_used_ids() {
+        let mut post = PostProcessConfig::default();
+        assert_eq!(post.new_prompt_id(), "prompt-1");
+        for id in ["prompt-1", "prompt-3"] {
+            post.prompts.push(Prompt {
+                id: id.into(),
+                ..Prompt::default()
+            });
+        }
+        assert_eq!(post.new_prompt_id(), "prompt-2");
+        post.prompts.push(Prompt {
+            id: "prompt-2".into(),
+            ..Prompt::default()
+        });
+        assert_eq!(post.new_prompt_id(), "prompt-4");
+    }
+
+    /// 프롬프트 항목이 없는 예전 파일은 기본 프롬프트로 읽고, 비워 둔 목록은 비운 채로 읽어야 합니다.
+    #[test]
+    fn missing_prompts_use_defaults_but_empty_list_stays_empty() {
+        let parsed: Config = toml::from_str("[postprocess]\nenabled = true\n").unwrap();
+        assert_eq!(parsed.postprocess.prompts, default_prompts());
+        assert_eq!(parsed.postprocess.prompt, DEFAULT_PROMPT_ID);
+
+        let parsed: Config =
+            toml::from_str("[postprocess]\nprompt = \"\"\nprompts = []\n").unwrap();
+        assert!(
+            parsed.postprocess.prompts.is_empty(),
+            "모두 지운 목록에 기본 프롬프트가 되살아나면 안 됩니다"
+        );
+        assert_eq!(parsed.postprocess.active_prompt(), None);
     }
 
     #[test]

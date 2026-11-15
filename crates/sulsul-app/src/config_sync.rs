@@ -51,16 +51,22 @@ pub struct ConfigSync {
 
 impl ConfigSync {
     /// 설정 파일을 읽습니다(없으면 기본 파일을 만듭니다).
+    ///
+    /// 파일에 없앤 설정 키가 남아 있으면 곧바로 한 번 저장해 파일에서 지우도록 예약합니다.
     pub fn open(store: ConfigStore) -> Self {
-        let (config, issues, problem) = match store.load_or_create() {
-            Ok(LoadedConfig { config, issues }) => (config, issues, None),
+        let (config, issues, removed_keys, problem) = match store.load_or_create() {
+            Ok(LoadedConfig {
+                config,
+                issues,
+                removed_keys,
+            }) => (config, issues, removed_keys, None),
             Err(error) => {
                 tracing::warn!("could not load config: {error}");
                 let problem = classify(&store, error);
-                (Config::default(), Vec::new(), Some(problem))
+                (Config::default(), Vec::new(), Vec::new(), Some(problem))
             }
         };
-        Self {
+        let mut sync = Self {
             store,
             on_disk: config.clone(),
             config,
@@ -71,7 +77,9 @@ impl ConfigSync {
             dirty_since: None,
             events: None,
             _watcher: None,
-        }
+        };
+        sync.clean_up_removed_keys(&removed_keys);
+        sync
     }
 
     /// 파일 변경 감시를 시작합니다. 변경이 생기면 화면을 다시 그리게 합니다.
@@ -160,27 +168,50 @@ impl ConfigSync {
     }
 
     /// 파일을 다시 읽습니다. `config`가 바뀌었으면 `true`를 돌려줍니다.
+    ///
+    /// 파일에 없앤 설정 키가 들어 있으면 지우도록 저장을 예약합니다.
     pub fn reload(&mut self) -> bool {
         match self.read() {
             Ok(loaded) => {
                 self.problem = None;
                 self.issues = loaded.issues;
-                if loaded.config == self.on_disk {
-                    // 우리가 저장한 내용 그대로입니다. 화면에서 고치던 값을 건드리지 않습니다.
-                    return false;
-                }
-                tracing::info!("config file changed outside the app; reloading");
-                self.on_disk = loaded.config.clone();
-                self.config = loaded.config;
-                self.dirty_since = None;
-                self.save_error = None;
-                true
+                let replaced = self.apply_reloaded(loaded.config);
+                self.clean_up_removed_keys(&loaded.removed_keys);
+                replaced
             }
             Err(problem) => {
                 tracing::warn!("could not reload config: {}", problem.error);
                 self.problem = Some(problem);
                 false
             }
+        }
+    }
+
+    /// 다시 읽은 설정을 화면에 반영합니다. `config`가 바뀌었으면 `true`를 돌려줍니다.
+    fn apply_reloaded(&mut self, config: Config) -> bool {
+        if config == self.on_disk {
+            // 우리가 저장한 내용 그대로입니다. 화면에서 고치던 값을 건드리지 않습니다.
+            return false;
+        }
+        tracing::info!("config file changed outside the app; reloading");
+        self.on_disk = config.clone();
+        self.config = config;
+        self.dirty_since = None;
+        self.save_error = None;
+        true
+    }
+
+    /// 파일에 남은 없앤 설정 키를 지우도록 저장을 예약합니다. 저장은 기존 흐름([`Self::poll`])을 탑니다.
+    fn clean_up_removed_keys(&mut self, removed_keys: &[String]) {
+        if removed_keys.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "config file has removed keys ({}); saving to clean up",
+            removed_keys.join(", ")
+        );
+        if self.dirty_since.is_none() {
+            self.mark_dirty();
         }
     }
 
@@ -360,6 +391,63 @@ mod tests {
             !sync.path().with_extension("toml.bak").exists(),
             "문법이 맞는 파일은 백업 없이 값만 고칩니다"
         );
+    }
+
+    #[test]
+    fn fresh_file_needs_no_save() {
+        let home = Home::new();
+        let sync = ConfigSync::open(home.store());
+        assert!(!sync.has_pending_save());
+        assert!(sync.issues().is_empty(), "{:?}", sync.issues());
+    }
+
+    /// 없앤 키가 남은 예전 파일을 열면 경고 없이 바로 한 번 저장해 파일을 정리합니다.
+    #[test]
+    fn open_cleans_up_removed_keys() {
+        let home = Home::new();
+        let store = home.store();
+        fs::write(
+            store.path(),
+            "[general]\nstart_minimized = true\n# 내가 넣은 키\nmy_key = 1\n\n\
+             [output]\nmode = \"paste\"\nrestore_delay_ms = 150\n\n[hotkey]\nkey = \"F9\"\n",
+        )
+        .unwrap();
+
+        let mut sync = ConfigSync::open(store);
+        let paths: Vec<_> = sync.issues().iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(paths, ["general.my_key"], "직접 넣은 키만 알려야 합니다");
+        assert!(sync.has_pending_save(), "정리 저장이 예약되어야 합니다");
+        assert!(!flush(&mut sync));
+
+        let text = fs::read_to_string(sync.path()).unwrap();
+        assert!(!text.contains("start_minimized"), "{text}");
+        assert!(!text.contains("[output]"), "{text}");
+        assert!(text.contains("# 내가 넣은 키\nmy_key = 1"), "{text}");
+        assert_eq!(sync.config.hotkey.key, "F9");
+
+        let reopened = ConfigSync::open(home.store());
+        assert!(
+            !reopened.has_pending_save(),
+            "정리한 뒤에는 다시 저장하지 않습니다"
+        );
+    }
+
+    /// 실행 중에 없앤 키가 든 파일로 바뀌어도 저장을 예약해 정리합니다.
+    #[test]
+    fn reload_cleans_up_removed_keys() {
+        let home = Home::new();
+        let mut sync = ConfigSync::open(home.store());
+        let text = fs::read_to_string(sync.path()).unwrap();
+        fs::write(sync.path(), format!("{text}\n[output]\nmode = \"type\"\n")).unwrap();
+
+        assert!(!sync.reload(), "설정 값은 그대로입니다");
+        assert!(sync.issues().is_empty(), "{:?}", sync.issues());
+        assert!(sync.has_pending_save());
+        flush(&mut sync);
+        let cleaned = fs::read_to_string(sync.path()).unwrap();
+        assert!(!cleaned.contains("[output]"), "{cleaned}");
+        assert!(!sync.reload());
+        assert!(!sync.has_pending_save());
     }
 
     #[test]

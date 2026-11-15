@@ -7,8 +7,10 @@ use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 use toml_edit::DocumentMut;
 
-use super::merge::merge_document;
-use super::{Config, ConfigIssue, ConfigProblem, DEFAULT_CONFIG_TOML};
+use super::merge::{merge_document, remove_path};
+use super::{
+    Config, ConfigIssue, ConfigProblem, DEFAULT_CONFIG_TOML, REMOVED_KEYS, is_removed_key,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -44,6 +46,9 @@ fn location(line: Option<usize>, column: Option<usize>) -> String {
 pub struct LoadedConfig {
     pub config: Config,
     pub issues: Vec<ConfigIssue>,
+    /// 파일에 남아 있던, 지금은 없앤 설정 키의 경로 ([`super::REMOVED_KEYS`]).
+    /// 경고하지 않고 다음 저장 때 파일에서 지우므로, 비어 있지 않으면 한 번 저장해 정리하면 됩니다.
+    pub removed_keys: Vec<String>,
 }
 
 /// 설정 파일 읽기·쓰기·감시
@@ -78,22 +83,34 @@ impl ConfigStore {
     }
 
     /// 설정 텍스트를 해석합니다. 모르는 키는 오류 대신 [`ConfigProblem::UnknownKey`]로 알려 줍니다.
+    /// 없앤 키([`super::REMOVED_KEYS`])는 알리지 않고 [`LoadedConfig::removed_keys`]에 담습니다.
     pub fn parse(&self, text: &str) -> Result<LoadedConfig, ConfigError> {
         let mut issues = Vec::new();
+        let mut removed_keys = Vec::new();
         let deserializer =
             toml::Deserializer::parse(text).map_err(|e| self.parse_error(text, &e))?;
         let config: Config = serde_ignored::deserialize(deserializer, |path| {
-            issues.push(ConfigIssue {
-                path: path.to_string(),
-                problem: ConfigProblem::UnknownKey,
-            });
+            let path = path.to_string();
+            if is_removed_key(&path) {
+                removed_keys.push(path);
+            } else {
+                issues.push(ConfigIssue {
+                    path,
+                    problem: ConfigProblem::UnknownKey,
+                });
+            }
         })
         .map_err(|e| self.parse_error(text, &e))?;
         issues.extend(config.validate());
-        Ok(LoadedConfig { config, issues })
+        Ok(LoadedConfig {
+            config,
+            issues,
+            removed_keys,
+        })
     }
 
-    /// 설정을 저장합니다. 기존 파일의 주석·순서·직접 추가한 키는 유지합니다.
+    /// 설정을 저장합니다. 기존 파일의 주석·순서·직접 추가한 키는 유지하고,
+    /// 없앤 키([`super::REMOVED_KEYS`])는 붙은 주석과 함께 지웁니다.
     ///
     /// 기존 파일이 문법 오류로 읽히지 않으면 `config.toml.bak`으로 옮겨 두고 새로 씁니다.
     pub fn save(&self, config: &Config) -> Result<(), ConfigError> {
@@ -132,6 +149,9 @@ impl ConfigStore {
             {
                 table.remove("api_profiles");
             }
+        }
+        for path in REMOVED_KEYS {
+            remove_path(&mut doc, path);
         }
         self.write_text(&doc.to_string())
     }
@@ -436,12 +456,12 @@ mod tests {
 
         let text = fs::read_to_string(store.path()).unwrap();
         assert!(
-            text.contains("# 글 다듬기(LLM) 설정"),
+            text.contains("# 술술(sulsul) 설정 파일"),
             "템플릿 주석이 사라졌습니다"
         );
         let postprocess = position(&text, "\n[postprocess]\n");
         assert!(
-            position(&text, "[[stt.api_profiles]]") < position(&text, "\n[output]\n"),
+            position(&text, "[[stt.api_profiles]]") < postprocess,
             "STT 프로필은 [stt] 아래에 있어야 합니다:\n{text}"
         );
         assert!(
@@ -496,8 +516,8 @@ model = \"m2\"
 model = \"qwen-4b\"
 memo = \"직접 넣은 키\"
 
-[output]
-mode = \"clipboard\"
+[audio]
+max_record_seconds = 60
 ";
         fs::write(store.path(), original).unwrap();
         let mut config = store.load().unwrap().config;
@@ -536,13 +556,13 @@ mode = \"clipboard\"
             "지운 프로필의 주석이 남았습니다"
         );
 
-        // 순서: [postprocess] → p1 → p3 → [postprocess.processors.llm_local] → [output]
+        // 순서: [postprocess] → p1 → p3 → [postprocess.processors.llm_local] → [audio]
         let order = [
             position(&text, "\n[postprocess]\n"),
             position(&text, "id = \"p1\""),
             position(&text, "id = \"p3\""),
             position(&text, "[postprocess.processors.llm_local]"),
-            position(&text, "\n[output]\n"),
+            position(&text, "\n[audio]\n"),
         ];
         assert!(
             order.windows(2).all(|w| w[0] < w[1]),
@@ -575,5 +595,277 @@ mode = \"clipboard\"
                 .api_profiles
                 .is_empty()
         );
+    }
+
+    /// 없앤 항목(`general.start_minimized`, `[output]`)이 들어 있는 예전 설정 파일
+    const OLD_FILE: &str = r#"# 술술(sulsul) 설정 파일
+
+[general]
+# 화면 언어
+ui_language = "ko"
+# 로그인할 때 자동 실행
+launch_at_startup = true
+# 시작할 때 창을 띄우지 않고 트레이에서만 실행
+start_minimized = true
+# 내가 넣은 키
+my_key = 1
+
+[hotkey]
+key = "F9"
+
+[output]
+# paste: 커서 위치에 붙여넣기
+mode = "paste"
+# 붙여넣은 뒤 원래 클립보드 내용을 되돌리기
+restore_clipboard = true
+restore_delay_ms = 150
+
+[postprocess]
+# 글 다듬기를 쓸지
+enabled = false
+"#;
+
+    #[test]
+    fn removed_keys_are_not_warned_and_are_dropped_on_save() {
+        let (_dir, store) = store();
+        fs::write(store.path(), OLD_FILE).unwrap();
+        let loaded = store.load().unwrap();
+        let paths: Vec<_> = loaded.issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["general.my_key"],
+            "없앤 키는 경고하지 않고, 직접 넣은 키는 경고해야 합니다"
+        );
+        assert_eq!(loaded.removed_keys, ["general.start_minimized", "output"]);
+        assert_eq!(loaded.config.hotkey.key, "F9");
+        assert!(loaded.config.general.launch_at_startup);
+
+        store.save(&loaded.config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        for gone in [
+            "start_minimized",
+            "# 시작할 때 창을 띄우지 않고",
+            "[output]",
+            "# paste: 커서 위치에 붙여넣기",
+            "restore_clipboard",
+            "# 붙여넣은 뒤 원래 클립보드",
+            "restore_delay_ms",
+        ] {
+            assert!(
+                !text.contains(gone),
+                "`{gone}`이(가) 지워져야 합니다:\n{text}"
+            );
+        }
+        for kept in [
+            "# 술술(sulsul) 설정 파일",
+            "# 로그인할 때 자동 실행\nlaunch_at_startup = true\n",
+            "# 내가 넣은 키\nmy_key = 1\n",
+            "[hotkey]\nkey = \"F9\"\n",
+            "\n[postprocess]\n# 글 다듬기를 쓸지\nenabled = false\n",
+        ] {
+            assert!(text.contains(kept), "`{kept}`이(가) 남아야 합니다:\n{text}");
+        }
+        // 프롬프트 항목이 없던 파일에는 기본 프롬프트가 들어갑니다.
+        assert!(
+            position(&text, "\n[postprocess]\n") < position(&text, "[[postprocess.prompts]]"),
+            "{text}"
+        );
+
+        let reloaded = store.load().unwrap();
+        assert!(reloaded.removed_keys.is_empty(), "{text}");
+        assert_eq!(reloaded.issues, loaded.issues);
+        assert_eq!(reloaded.config, loaded.config);
+    }
+
+    /// 인라인 표나 점 키로 적은 없앤 키도 지워야 합니다. 남으면 앱이 저장을 되풀이합니다.
+    #[test]
+    fn removed_keys_in_inline_or_dotted_form_are_dropped() {
+        let (_dir, store) = store();
+        fs::write(
+            store.path(),
+            "general = { ui_language = \"ko\", start_minimized = true }\n\
+             output.mode = \"type\"\noutput.restore_delay_ms = 10\n",
+        )
+        .unwrap();
+        let loaded = store.load().unwrap();
+        assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
+        assert_eq!(loaded.removed_keys, ["general.start_minimized", "output"]);
+
+        store.save(&loaded.config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        let reloaded = store.load().unwrap();
+        assert!(reloaded.removed_keys.is_empty(), "{text}");
+        assert!(reloaded.issues.is_empty(), "{:?}", reloaded.issues);
+        assert!(
+            !text.contains("start_minimized") && !text.contains("output"),
+            "{text}"
+        );
+    }
+
+    fn prompt(id: &str, text: &str) -> crate::config::Prompt {
+        crate::config::Prompt {
+            id: id.into(),
+            name: format!("이름 {id}"),
+            text: text.into(),
+        }
+    }
+
+    fn prompt_ids(config: &Config) -> Vec<&str> {
+        config
+            .postprocess
+            .prompts
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect()
+    }
+
+    /// 기본 파일의 프롬프트는 여러 줄 문자열로 쓰여 있고, 고쳐서 저장해도 여러 줄 문자열이어야 합니다.
+    #[test]
+    fn prompt_text_is_saved_as_multiline_string() {
+        let (_dir, store) = store();
+        let mut config = store.load_or_create().unwrap().config;
+        assert_eq!(config.postprocess.prompts, crate::config::default_prompts());
+
+        config.postprocess.prompts[0].text = "첫 줄\n둘째 줄 \"따옴표\"\n셋째 줄".into();
+        config
+            .postprocess
+            .prompts
+            .push(prompt("prompt-1", "가\n나"));
+        store.save(&config).unwrap();
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(
+            text.contains("text = \"\"\"\n첫 줄\n둘째 줄 \"따옴표\"\n셋째 줄\"\"\""),
+            "고친 프롬프트가 여러 줄 문자열로 저장되어야 합니다:\n{text}"
+        );
+        assert!(
+            text.contains("text = \"\"\"\n가\n나\"\"\""),
+            "새 프롬프트도 여러 줄 문자열이어야 합니다:\n{text}"
+        );
+        assert!(
+            !text.contains("\\n"),
+            "줄바꿈을 `\\n`으로 쓰면 안 됩니다:\n{text}"
+        );
+        assert_eq!(store.load().unwrap().config, config);
+    }
+
+    /// 사용자가 쓴 프롬프트의 주석·따옴표 서식이 지켜지고, 순서 바꾸기·삭제·추가가 파일에 맞게 반영되어야 합니다.
+    #[test]
+    fn prompts_merge_by_id_and_keep_user_comments() {
+        let (_dir, store) = store();
+        let original = r#"[postprocess]
+enabled = true
+prompt = "b"
+
+# 회의록용
+[[postprocess.prompts]]
+id = "a"
+name = "회의록"
+text = '''
+회의록처럼 정리해 주세요.
+- 짧게'''
+memo = "직접 넣은 키"
+
+# 메일용
+[[postprocess.prompts]]
+id = "b"
+name = "메일"
+text = """
+메일 말투로 바꿔 주세요."""
+
+# 지울 프롬프트
+[[postprocess.prompts]]
+id = "c"
+name = "번역"
+text = "영어로 옮겨 주세요."
+
+[audio]
+max_record_seconds = 60
+"#;
+        fs::write(store.path(), original).unwrap();
+        let loaded = store.load().unwrap();
+        let paths: Vec<_> = loaded.issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["postprocess.prompts.0.memo"],
+            "직접 넣은 키는 지금처럼 알려야 합니다"
+        );
+        let mut config = loaded.config;
+        assert_eq!(prompt_ids(&config), ["a", "b", "c"]);
+        assert_eq!(config.postprocess.active_prompt().unwrap().name, "메일");
+
+        // b를 고쳐 맨 앞으로 옮기고, c를 지우고, 새 프롬프트를 a 앞에 넣습니다.
+        let mut b = config.postprocess.prompts.remove(1);
+        b.text = "메일 말투로 바꿔 주세요.\n- 인사말을 붙입니다.".into();
+        config.postprocess.prompts.retain(|p| p.id != "c");
+        let new_id = config.postprocess.new_prompt_id();
+        config.postprocess.prompts.insert(0, b);
+        config
+            .postprocess
+            .prompts
+            .insert(1, prompt(&new_id, "새 지시문\n둘째 줄"));
+        store.save(&config).unwrap();
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        for kept in [
+            "# 회의록용\n[[postprocess.prompts]]\nid = \"a\"\nname = \"회의록\"\n\
+             text = '''\n회의록처럼 정리해 주세요.\n- 짧게'''\nmemo = \"직접 넣은 키\"",
+            "# 메일용\n[[postprocess.prompts]]\nid = \"b\"\nname = \"메일\"\n\
+             text = \"\"\"\n메일 말투로 바꿔 주세요.\n- 인사말을 붙입니다.\"\"\"",
+        ] {
+            assert!(text.contains(kept), "`{kept}`이(가) 남아야 합니다:\n{text}");
+        }
+        assert!(
+            !text.contains("id = \"c\"") && !text.contains("# 지울 프롬프트"),
+            "지운 프롬프트와 그 주석이 남았습니다:\n{text}"
+        );
+        let order = [
+            position(&text, "\n[postprocess]\n"),
+            position(&text, "id = \"b\""),
+            position(&text, "id = \"prompt-1\""),
+            position(&text, "id = \"a\""),
+            position(&text, "\n[audio]\n"),
+        ];
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "프롬프트 순서가 파일에 반영되지 않았습니다:\n{text}"
+        );
+
+        let reloaded = store.load().unwrap().config;
+        assert_eq!(prompt_ids(&reloaded), ["b", "prompt-1", "a"]);
+        assert_eq!(reloaded, config);
+    }
+
+    /// 프롬프트를 모두 지우면 다시 읽어도 빈 목록이어야 합니다(기본 프롬프트가 되살아나면 안 됨).
+    #[test]
+    fn deleting_all_prompts_survives_reload() {
+        let (_dir, store) = store();
+        let mut config = store.load_or_create().unwrap().config;
+        config.postprocess.prompts.clear();
+        config.postprocess.prompt.clear();
+        store.save(&config).unwrap();
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("\nprompts = []\n"), "{text}");
+        assert!(!text.contains("[[postprocess.prompts]]"), "{text}");
+        assert!(!text.contains("기본 다듬기"), "{text}");
+        let reloaded = store.load().unwrap();
+        assert!(reloaded.issues.is_empty(), "{:?}", reloaded.issues);
+        assert!(reloaded.config.postprocess.prompts.is_empty());
+        assert_eq!(reloaded.config, config);
+
+        // 다시 하나를 넣으면 빈 목록 대신 표로 쓰입니다.
+        config
+            .postprocess
+            .prompts
+            .push(prompt("prompt-1", "가\n나"));
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(!text.contains("prompts = []"), "{text}");
+        assert!(
+            position(&text, "\n[postprocess]\n") < position(&text, "[[postprocess.prompts]]"),
+            "{text}"
+        );
+        assert_eq!(store.load().unwrap().config, config);
     }
 }

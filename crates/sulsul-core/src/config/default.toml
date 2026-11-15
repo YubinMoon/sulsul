@@ -7,14 +7,9 @@
 config_version = 1
 
 [general]
-# 화면 언어
 ui_language = "ko"
-# 화면 테마: dark, light, system
 theme = "dark"
-# 로그인할 때 자동 실행
 launch_at_startup = false
-# 시작할 때 창을 띄우지 않고 트레이에서만 실행
-start_minimized = false
 
 [hotkey]
 # 녹음 단축키. 단일 키("RightCtrl") 또는 조합("Ctrl+Shift+Space")
@@ -24,37 +19,26 @@ key = "RightCtrl"
 mode = "toggle"
 
 [audio]
-# 입력 장치 ID 또는 이름 (sulsul-cli devices로 확인). 비워 두면 시스템 기본 장치를 씁니다.
 input_device = ""
-# 최대 녹음 길이(초). 넘으면 녹음을 자동으로 끝냅니다. (1 ~ 3600)
 max_record_seconds = 120
-# 녹음 시작·종료 효과음
 feedback_sounds = true
 
 [stt]
-# 음성 인식 엔진 ID. 엔진별 설정(인식 언어 등)은 [stt.engines.<엔진 ID>]에 있습니다.
 engine = "whisper_local"
-# 자주 쓰는 용어나 고유명사를 적어 두면 인식 정확도가 올라갑니다.
 initial_prompt = ""
-# 클라우드 API 엔진(`cloud_api`)을 쓸 때 선택된 프로필 ID
 api_profile = ""
-
-[output]
-# paste: 커서 위치에 붙여넣기
-# type: 키 입력으로 한 글자씩 입력
-# clipboard: 클립보드에 복사만
-mode = "paste"
-# 붙여넣은 뒤 원래 클립보드 내용을 되돌리기
-restore_clipboard = true
-# 클립보드를 되돌리기 전에 기다리는 시간(ms). 붙여넣기가 가끔 이전 내용으로 되면 늘리세요. (0 ~ 5000)
-restore_delay_ms = 150
 
 [postprocess]
-# 글 다듬기(LLM) 설정: 받아쓰기 결과의 문장 부호·띄어쓰기·오탈자를 다듬습니다.
-# 글 다듬기를 쓸지
 enabled = false
-# 다듬기에 쓸 모델 종류: ""(고르지 않음), llm_local(이 PC에 내려받은 모델), llm_cloud(외부 제공자)
-# 이 PC의 모델은 [postprocess.processors.llm_local]의 model에 적힙니다.
 processor = ""
-# 외부 제공자(llm_cloud)를 쓸 때 고른 프로필 ID. 비워 두면 첫 프로필을 씁니다.
 api_profile = ""
+prompt = "default"
+
+[[postprocess.prompts]]
+id = "default"
+name = "기본 다듬기"
+text = """
+음성 인식으로 받아쓴 글을 다듬어 주세요.
+- 맞춤법, 띄어쓰기, 문장 부호만 바로잡습니다.
+- 뜻과 말투는 바꾸지 않고, 내용을 더하거나 빼지 않습니다.
+- 설명 없이 다듬은 글만 돌려줍니다."""
