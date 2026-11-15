@@ -125,6 +125,48 @@ mod tests {
         assert!(missing.is_empty(), "번역이 없는 키: {missing:#?}");
     }
 
+    /// 모델 카탈로그가 가리키는 번역 키(모델 이름·설명, 단계별 선택지, 단계 이름)가 모두 있어야 합니다.
+    /// 빠지면 모델 관리 화면에 키 이름이나 모델 ID가 그대로 보입니다.
+    #[test]
+    fn model_catalogs_have_translations() {
+        use sulsul_core::AppPaths;
+        use sulsul_core::stt::EngineContext;
+
+        rust_i18n::set_locale("ko");
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = EngineContext {
+            paths: AppPaths::under(dir.path()),
+        };
+        let registry = crate::engines::registry();
+
+        let mut keys = Vec::new();
+        for descriptor in registry.descriptors() {
+            let catalog = registry
+                .model_variants(&ctx, &descriptor.id)
+                .unwrap_or_default();
+            for variant in catalog {
+                keys.push(variant.name_key);
+                // 설명은 없어도 되지만, 키를 적었다면 번역이 있어야 합니다.
+                if !variant.description_key.is_empty() {
+                    keys.push(variant.description_key);
+                }
+                for choice in variant.choices {
+                    keys.push(crate::pages::models::axis_name_key(choice.axis));
+                    keys.push(choice.label_key);
+                }
+            }
+        }
+        assert!(!keys.is_empty(), "검사할 모델 카탈로그가 없습니다");
+        keys.sort_unstable();
+        keys.dedup();
+
+        let missing: Vec<_> = keys
+            .into_iter()
+            .filter(|key| tr_opt(key).is_none())
+            .collect();
+        assert!(missing.is_empty(), "번역이 없는 키: {missing:#?}");
+    }
+
     #[test]
     fn default_locale_is_available() {
         assert!(available_locales().iter().any(|locale| locale == "ko"));

@@ -10,8 +10,7 @@ use crate::theme::{self, Palette, radius, size};
 
 /// 켜고 끄는 스위치. `label`은 화면 낭독기용 이름입니다.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
-    let size = vec2(38.0, 22.0);
-    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, mut response) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
@@ -19,39 +18,64 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let enabled = ui.is_enabled();
     let selected = *on;
     response.widget_info(|| WidgetInfo::selected(Role::Switch, enabled, selected, label));
-
-    if ui.is_rect_visible(rect) {
-        let palette = Palette::of(ui);
-        let t = ui.ctx().animate_bool_responsive(response.id, *on);
-        let off_color = if response.hovered() {
-            palette.border_strong
-        } else {
-            palette.border
-        };
-        let on_color = if response.hovered() {
-            palette.accent_hover
-        } else {
-            palette.accent
-        };
-        let track = theme::mix(off_color, on_color, t);
-        let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(radius::PILL), track);
-        let knob_radius = rect.height() / 2.0 - 3.0;
-        let x = egui::lerp(
-            (rect.left() + 3.0 + knob_radius)..=(rect.right() - 3.0 - knob_radius),
-            t,
-        );
-        painter.circle_filled(egui::pos2(x, rect.center().y), knob_radius, Color32::WHITE);
-        if response.has_focus() {
-            painter.rect_stroke(
-                rect.expand(2.0),
-                CornerRadius::same(radius::PILL),
-                Stroke::new(1.5, palette.accent_text),
-                StrokeKind::Outside,
-            );
-        }
-    }
+    paint_switch(ui, rect, &response, selected);
     response
+}
+
+/// 여럿 중 하나만 켜 두는 스위치. 꺼진 것을 눌러 켰으면 `true`를 돌려줍니다.
+///
+/// 켜진 스위치는 눌러도 꺼지지 않습니다(항상 하나는 켜져 있어야 하는 목록용). 다른 스위치를
+/// 끄는 일은 부르는 쪽에서 `selected` 값을 바꿔서 합니다. `label`은 화면 낭독기용 이름입니다.
+pub fn choice_toggle(ui: &mut Ui, selected: bool, label: &str) -> bool {
+    let (rect, mut response) = ui.allocate_exact_size(SWITCH_SIZE, Sense::click());
+    let turned_on = response.clicked() && !selected;
+    if turned_on {
+        response.mark_changed();
+    }
+    let enabled = ui.is_enabled();
+    let shown = selected || turned_on;
+    response.widget_info(|| WidgetInfo::selected(Role::RadioButton, enabled, shown, label));
+    paint_switch(ui, rect, &response, shown);
+    turned_on
+}
+
+/// 스위치 크기
+const SWITCH_SIZE: egui::Vec2 = vec2(38.0, 22.0);
+
+/// 스위치를 그립니다. `on`은 지금 보여 줄 상태입니다.
+fn paint_switch(ui: &Ui, rect: egui::Rect, response: &Response, on: bool) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let palette = Palette::of(ui);
+    let t = ui.ctx().animate_bool_responsive(response.id, on);
+    let off_color = if response.hovered() {
+        palette.border_strong
+    } else {
+        palette.border
+    };
+    let on_color = if response.hovered() {
+        palette.accent_hover
+    } else {
+        palette.accent
+    };
+    let track = theme::mix(off_color, on_color, t);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(radius::PILL), track);
+    let knob_radius = rect.height() / 2.0 - 3.0;
+    let x = egui::lerp(
+        (rect.left() + 3.0 + knob_radius)..=(rect.right() - 3.0 - knob_radius),
+        t,
+    );
+    painter.circle_filled(egui::pos2(x, rect.center().y), knob_radius, Color32::WHITE);
+    if response.has_focus() {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(radius::PILL),
+            Stroke::new(1.5, palette.accent_text),
+            StrokeKind::Outside,
+        );
+    }
 }
 
 /// 몇 개 중 하나를 고르는 구간 선택. 값이 바뀌면 `true`를 돌려줍니다.

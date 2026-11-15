@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use rust_i18n::t;
 use sulsul_core::config::SttConfig;
-use sulsul_core::stt::{ComputeDevice, SttRegistry};
+use sulsul_core::stt::{ComputeDevice, EngineKind, SttRegistry};
 use sulsul_stt_sensevoice::{DetectedDevices, DevicePreference};
 
 use crate::i18n::tr;
@@ -299,12 +299,26 @@ fn whisper_lock_reason(registry: &SttRegistry) -> Option<String> {
 }
 
 /// 엔진이 계산에 쓴(또는 쓸) 장치를 화면에 보일 글로 바꿉니다.
+///
+/// 엔진이 장치를 알려 주지 않았으면(`Unknown`) "알 수 없음"입니다. 엔진이 보고한 실제 장치를
+/// 보여 줄 때는 엔진 종류까지 보는 [`reported_device_label`]을 씁니다.
 pub fn device_label(device: &ComputeDevice) -> String {
     match device {
         ComputeDevice::Cpu => t!("models.device.cpu").into_owned(),
         ComputeDevice::Gpu(name) => t!("models.device.gpu", name = name).into_owned(),
         ComputeDevice::Npu(name) => t!("models.device.npu", name = name).into_owned(),
-        ComputeDevice::Unknown => t!("models.device.remote").into_owned(),
+        ComputeDevice::Unknown => t!("models.device.unknown").into_owned(),
+    }
+}
+
+/// `kind` 종류의 엔진이 보고한 실제 장치를 화면에 보일 글로 바꿉니다.
+///
+/// 클라우드 엔진은 계산을 외부 서비스가 하므로 장치를 알려 주지 않습니다(`Unknown`). 그때만
+/// "클라우드 API"로 보여 주고, 로컬 엔진이 장치를 알려 주지 않았으면 "알 수 없음"으로 보여 줍니다.
+pub fn reported_device_label(device: &ComputeDevice, kind: EngineKind) -> String {
+    match (device, kind) {
+        (ComputeDevice::Unknown, EngineKind::Cloud) => t!("models.device.remote").into_owned(),
+        _ => device_label(device),
     }
 }
 
@@ -702,6 +716,31 @@ mod tests {
         assert!(label.contains("Intel(R) AI Boost"), "{label}");
         let label = device_label(&gpu("Vulkan0 (RTX)"));
         assert!(label.starts_with("GPU"), "{label}");
+    }
+
+    #[test]
+    fn unknown_device_is_called_cloud_only_for_cloud_engines() {
+        rust_i18n::set_locale("ko");
+        let unknown = ComputeDevice::Unknown;
+        assert_eq!(device_label(&unknown), "알 수 없음");
+        assert_eq!(
+            reported_device_label(&unknown, EngineKind::Cloud),
+            "클라우드 API"
+        );
+        assert_eq!(
+            reported_device_label(&unknown, EngineKind::Local),
+            "알 수 없음",
+            "로컬 엔진이 장치를 알려 주지 않았다고 클라우드로 보이면 안 됩니다"
+        );
+        // 장치를 알려 준 경우에는 엔진 종류와 상관없이 그 장치를 보여 줍니다.
+        assert_eq!(
+            reported_device_label(&ComputeDevice::Cpu, EngineKind::Local),
+            "CPU"
+        );
+        assert_eq!(
+            reported_device_label(&ComputeDevice::Cpu, EngineKind::Cloud),
+            "CPU"
+        );
     }
 
     #[test]
