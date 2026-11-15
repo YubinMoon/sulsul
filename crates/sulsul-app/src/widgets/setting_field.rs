@@ -21,16 +21,17 @@ const SLIDER_VALUE_WIDTH: f32 = 48.0;
 
 /// 스키마의 모든 항목을 줄 단위로 그립니다. 값이 바뀌면 `table`에 쓰고 `true`를 돌려줍니다.
 ///
-/// `id_salt`는 위젯 ID가 겹치지 않게 하는 값입니다(예: 엔진 ID).
-pub fn setting_fields(
+/// `id_salt`는 위젯 ID가 겹치지 않게 하는 값입니다(예: 엔진 ID). `schema`에는 스키마 전체나,
+/// 다른 자리에서 따로 그리는 항목을 뺀 일부를 넘깁니다.
+pub fn setting_fields<'a>(
     ui: &mut Ui,
     id_salt: &str,
-    schema: &[SettingField],
+    schema: impl IntoIterator<Item = &'a SettingField>,
     table: &mut Table,
     parent: &eframe::Frame,
 ) -> bool {
     let mut changed = false;
-    for (index, field) in schema.iter().enumerate() {
+    for (index, field) in schema.into_iter().enumerate() {
         if index > 0 {
             row::separator(ui);
         }
@@ -50,20 +51,8 @@ pub fn setting_field(
     let label = tr(&field.label_key);
     let help = field.help_key.as_deref().map(tr);
     // 저장된 값이 스키마와 맞지 않으면 기본값을 보여 주고 그 사실을 알립니다.
-    let stored = table.get(&field.key);
-    let problem = stored.and_then(|value| field.check(value).err());
-    let warning = problem.map(|problem| {
-        let issue = sulsul_core::settings::SettingIssue {
-            key: field.key.clone(),
-            problem,
-        };
-        t!(
-            "settings.field.invalid_value",
-            issue = error_text::setting_issue(&issue)
-        )
-        .into_owned()
-    });
-    let current = match stored {
+    let warning = invalid_value_warning(field, table);
+    let current = match table.get(&field.key) {
         Some(value) if warning.is_none() => value.clone(),
         _ => field.default.clone(),
     };
@@ -222,6 +211,23 @@ pub fn setting_field(
     }
     table.insert(field.key.clone(), new_value);
     true
+}
+
+/// `table`에 저장된 값이 항목의 타입·범위·선택지와 맞지 않으면, 기본값을 쓴다고 알리는 문구를 돌려줍니다.
+/// 값이 없거나 올바르면 `None`입니다.
+pub fn invalid_value_warning(field: &SettingField, table: &Table) -> Option<String> {
+    let problem = field.check(table.get(&field.key)?).err()?;
+    let issue = sulsul_core::settings::SettingIssue {
+        key: field.key.clone(),
+        problem,
+    };
+    Some(
+        t!(
+            "settings.field.invalid_value",
+            issue = error_text::setting_issue(&issue)
+        )
+        .into_owned(),
+    )
 }
 
 /// 쓸 수 없는 항목이면 이 영역의 조작 위젯을 잠급니다.

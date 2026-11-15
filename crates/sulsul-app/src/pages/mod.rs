@@ -9,9 +9,7 @@ pub mod transcribe;
 use egui::Ui;
 use rust_i18n::t;
 
-use crate::i18n::{tr, tr_opt};
 use crate::icons::Icon;
-use crate::widgets::controls::ComboItem;
 use crate::widgets::text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,22 +64,3 @@ pub fn header(ui: &mut Ui, title: &str, subtitle: &str) {
 
 /// 카드 사이 간격
 pub const SECTION_GAP: f32 = 14.0;
-
-/// 인식 언어로 고를 수 있는 값
-const LANGUAGES: [&str; 3] = ["ko", "en", "auto"];
-
-/// 인식 언어 선택 항목. `current`가 목록에 없는 값이면 그 값도 넣습니다.
-pub fn language_items(current: &str) -> Vec<ComboItem<String>> {
-    let mut items: Vec<_> = LANGUAGES
-        .iter()
-        .map(|code| {
-            ComboItem::new((*code).to_owned(), tr(&format!("stt.language.{code}"))).detail(*code)
-        })
-        .collect();
-    if !LANGUAGES.contains(&current) {
-        let label =
-            tr_opt(&format!("stt.language.{current}")).unwrap_or_else(|| current.to_owned());
-        items.push(ComboItem::new(current.to_owned(), label));
-    }
-    items
-}

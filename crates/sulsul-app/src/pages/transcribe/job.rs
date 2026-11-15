@@ -21,8 +21,8 @@ pub struct JobInput {
     /// 설정 파일의 `[stt]` (엔진별 설정 포함)
     pub stt: SttConfig,
     pub engine_id: String,
-    /// `ko`, `en`, `auto` 등
-    pub language: String,
+    /// 이 작업에만 쓸 언어(`ko`, `en`, `auto` 등). `None`이면 엔진 설정의 언어를 씁니다.
+    pub language: Option<String>,
     pub audio: JobAudio,
     /// 작업을 중간에 멈추는 신호
     pub cancel: CancelToken,
@@ -51,6 +51,8 @@ pub struct JobOutput {
 #[derive(Debug)]
 pub struct Success {
     pub text: String,
+    /// 실제로 인식에 쓴 언어 (`auto` 또는 언어 코드). 영어 전용 모델이면 고른 언어와 다를 수 있습니다.
+    pub language: String,
     /// 엔진이 판단한 언어 (알 수 있을 때)
     pub detected_language: Option<String>,
     /// 엔진이 계산에 쓴 장치 (결과 카드에 표시)
@@ -111,7 +113,7 @@ fn run(input: JobInput) -> JobOutput {
     let job = TranscribeJob {
         stt: &stt,
         engine_id: &engine_id,
-        language: &language,
+        language: language.as_deref(),
         cancel,
     };
     let result = match transcriber.transcribe(audio.clip(), &job) {
@@ -126,6 +128,7 @@ fn run(input: JobInput) -> JobOutput {
             );
             Ok(Success {
                 text: done.transcript.text,
+                language: done.language.as_config().to_owned(),
                 detected_language: done.transcript.language,
                 device: done.device,
                 prepare: done.prepare,
@@ -170,7 +173,7 @@ mod tests {
             transcriber,
             stt,
             engine_id: engine_id.to_owned(),
-            language: "ko".to_owned(),
+            language: None,
             // 엔진이 16kHz를 받으므로 48kHz 오디오는 변환되어야 합니다.
             audio: JobAudio::File(Arc::new(AudioClip::new(vec![0.1; 48_000], 48_000))),
             cancel: CancelToken::new(),
@@ -188,6 +191,8 @@ mod tests {
         let first = run_on_thread(input(MOCK_ENGINE_ID, "스레드", transcriber()));
         let success = first.result.unwrap();
         assert_eq!(success.text, "스레드");
+        // 엔진 설정에 언어가 없으면 기본값(한국어)으로 인식합니다.
+        assert_eq!(success.language, "ko");
         assert_eq!(success.detected_language.as_deref(), Some("ko"));
         assert_eq!(success.device, ComputeDevice::Unknown);
         assert!(!success.reused);

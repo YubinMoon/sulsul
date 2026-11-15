@@ -252,6 +252,75 @@ mod tests {
         assert_eq!(extra.invalid_settings(), None);
     }
 
+    /// 예전 설정 파일(전역 `[stt] language`, 엔진 표의 `threads = 0`, 엔진 표에 언어 없음)을
+    /// 오류·경고 없이 읽고, 예전 언어를 엔진마다 이어받습니다.
+    #[test]
+    fn old_config_file_keeps_working() {
+        /// 테스트가 끝나면 지우는 임시 폴더 (실제 설정 폴더를 건드리지 않으려고 씀)
+        struct TempRoot(std::path::PathBuf);
+        impl Drop for TempRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = TempRoot(
+            std::env::temp_dir().join(format!("sulsul-cli-test-old-config-{}", std::process::id())),
+        );
+        let paths = AppPaths::under(&dir.0);
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            "\
+[stt]
+engine = \"whisper_local\"
+# 인식 언어: ko, en, auto(자동 감지)
+language = \"en\"
+initial_prompt = \"\"
+api_profile = \"\"
+
+[stt.engines.whisper_local]
+beam_size = 5
+model = \"tiny\"
+model_path = \"\"
+threads = 0
+use_gpu = true
+
+[stt.engines.sense_voice_local]
+device = \"auto\"
+model = \"int8\"
+model_path = \"\"
+threads = 0
+use_itn = true
+",
+        )
+        .unwrap();
+
+        let stt = load_config(&paths).stt;
+        let registry = registry();
+        for id in [
+            sulsul_stt_whisper::ENGINE_ID,
+            sulsul_stt_sensevoice::ENGINE_ID,
+        ] {
+            assert!(registry.validate(&stt, id).unwrap().is_empty(), "{id}");
+            assert!(registry.unknown_keys(&stt, id).is_empty(), "{id}");
+            assert_eq!(
+                registry
+                    .resolve_settings(&stt, id)
+                    .unwrap()
+                    .str(sulsul_core::stt::LANGUAGE_KEY),
+                "en",
+                "{id}: 예전 전역 언어를 이어받지 못했습니다"
+            );
+        }
+        let selected = Selected {
+            registry,
+            context: EngineContext { paths },
+            stt,
+            engine_id: sulsul_stt_whisper::ENGINE_ID.to_owned(),
+        };
+        assert_eq!(selected.invalid_settings(), None);
+    }
+
     #[test]
     fn invalid_settings_explain_default_and_override() {
         let text = selected(&[("delay_ms", Value::Integer(-1))])

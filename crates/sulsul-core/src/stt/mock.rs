@@ -3,9 +3,9 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, SttEngine,
-    SttEngineFactory, SttError, TranscribeRequest, Transcript, WHISPER_SAMPLE_RATE,
-    keep_loaded_field,
+    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind,
+    LanguageSupport, SttEngine, SttEngineFactory, SttError, TranscribeRequest, Transcript,
+    WHISPER_SAMPLE_RATE, keep_loaded_field, language_field,
 };
 use crate::audio::AudioClip;
 use crate::settings::{ResolvedSettings, SettingField};
@@ -18,19 +18,15 @@ pub struct MockEngineFactory {
 
 impl MockEngineFactory {
     pub fn new() -> Self {
+        let languages = LanguageSupport::Any;
         Self {
             descriptor: EngineDescriptor {
                 id: MOCK_ENGINE_ID.into(),
                 name_key: "engine.mock.name".into(),
                 description_key: "engine.mock.description".into(),
                 kind: EngineKind::Local,
-                capabilities: EngineCapabilities {
-                    input_sample_rate: WHISPER_SAMPLE_RATE,
-                    languages: LanguageSupport::Any,
-                    supports_prompt: false,
-                    streaming: false,
-                },
                 settings: vec![
+                    language_field(&languages, DEFAULT_LANGUAGE),
                     SettingField::integer(
                         "delay_ms",
                         "engine.mock.settings.delay_ms",
@@ -44,6 +40,12 @@ impl MockEngineFactory {
                     keep_loaded_field(),
                 ],
                 retired_keys: Vec::new(),
+                capabilities: EngineCapabilities {
+                    input_sample_rate: WHISPER_SAMPLE_RATE,
+                    languages,
+                    supports_prompt: false,
+                    streaming: false,
+                },
             },
         }
     }

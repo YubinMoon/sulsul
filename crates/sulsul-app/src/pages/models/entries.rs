@@ -5,7 +5,7 @@
 
 use rust_i18n::t;
 use sulsul_core::config::{ApiProfile, SttConfig};
-use sulsul_core::stt::{EngineContext, EngineKind, ModelVariant, SttRegistry};
+use sulsul_core::stt::{EngineContext, EngineKind, LanguageSupport, ModelVariant, SttRegistry};
 use sulsul_core::toml::{Table, Value};
 use sulsul_stt_cloud::{
     ENGINE_ID as CLOUD_ENGINE_ID, find_preset, normalize_transcriptions_url, profile_from_preset,
@@ -202,6 +202,15 @@ pub fn chosen_variant_id(
     let key = registry.model_setting_key(engine_id).ok().flatten()?;
     let resolved = registry.resolve_settings(stt, engine_id).ok()?;
     Some(resolved.str(key).to_owned())
+}
+
+/// 항목이 인식할 수 있는 언어(지금 엔진 설정 기준). 모르는 엔진이면 `None`입니다.
+pub fn entry_languages(
+    registry: &SttRegistry,
+    stt: &SttConfig,
+    key: &EntryKey,
+) -> Option<LanguageSupport> {
+    registry.languages(stt, key.engine_id()).ok()
 }
 
 /// 항목을 켭니다 (받아쓰기에 쓸 엔진·모델·제공자로 고릅니다).

@@ -8,13 +8,15 @@ use std::path::Path;
 use egui::{Align, Ui};
 use rust_i18n::t;
 use sulsul_core::settings::SettingField;
-use sulsul_core::stt::{EngineContext, ModelVariant, delete_variant, format_bytes};
+use sulsul_core::stt::{
+    EngineContext, LANGUAGE_KEY, LanguageSupport, ModelVariant, delete_variant, format_bytes,
+};
 use sulsul_stt_cloud::ENGINE_ID as CLOUD_ENGINE_ID;
 
 use super::entries::{
     Entry, EntryKey, EntryKind, MODEL_PATH_KEY, activate, activate_first_ready, available_entries,
-    clear_custom_path, entry_test_config, profile_display_name, provider_label, remove_profile,
-    selection_issue, variant_label,
+    clear_custom_path, entry_languages, entry_test_config, profile_display_name, provider_label,
+    remove_profile, selection_issue, variant_label,
 };
 use super::jobs::TestTarget;
 use super::parts::{self, TestClick};
@@ -30,8 +32,9 @@ use crate::widgets::card;
 use crate::widgets::confirm::{Answer, Confirm};
 use crate::widgets::controls;
 use crate::widgets::expander::Expander;
+use crate::widgets::language::language_setting_row;
 use crate::widgets::row::{self, Row};
-use crate::widgets::setting_field::setting_fields;
+use crate::widgets::setting_field::setting_field;
 use crate::widgets::text;
 
 /// 카드 사이 간격
@@ -290,6 +293,8 @@ impl ModelsPage {
         );
         let engine_description = descriptor.and_then(|d| tr_opt(&d.description_key));
         let head = EntryHead::of(&engine_name, engine_description, entry);
+        let languages = entry_languages(&cx.shared.registry, &cx.config.stt, &entry.key);
+        let languages = languages.as_ref();
 
         let open = self.expanded.as_ref() == Some(&entry.key);
         let shown_on = entry.shown_on();
@@ -307,7 +312,7 @@ impl ModelsPage {
                     turned_on = controls::choice_toggle(ui, shown_on, &toggle_label);
                 });
             },
-            |ui| self.entry_body(ui, cx, entry, &engine_name),
+            |ui| self.entry_body(ui, cx, entry, &engine_name, languages),
         );
 
         if shown.toggled {
@@ -322,18 +327,19 @@ impl ModelsPage {
         turned_on
     }
 
-    /// 펼친 카드의 내용
+    /// 펼친 카드의 내용. `languages`는 이 항목이 인식할 수 있는 언어입니다.
     fn entry_body(
         &mut self,
         ui: &mut Ui,
         cx: &mut PageContext<'_>,
         entry: &Entry,
         engine_name: &str,
+        languages: Option<&LanguageSupport>,
     ) {
         match &entry.kind {
-            EntryKind::Provider(_) => self.provider_body(ui, cx, entry),
+            EntryKind::Provider(_) => self.provider_body(ui, cx, entry, languages),
             EntryKind::Variant(_) | EntryKind::Custom { .. } | EntryKind::Engine => {
-                self.local_body(ui, cx, entry, engine_name);
+                self.local_body(ui, cx, entry, engine_name, languages);
             }
         }
         self.entry_actions(ui, cx, entry, engine_name);
@@ -346,6 +352,7 @@ impl ModelsPage {
         cx: &mut PageContext<'_>,
         entry: &Entry,
         engine_name: &str,
+        languages: Option<&LanguageSupport>,
     ) {
         let palette = Palette::of(ui);
         let engine_id = entry.key.engine_id();
@@ -393,7 +400,7 @@ impl ModelsPage {
             .unwrap_or_default();
         if !fields.is_empty() {
             parts::sub_title(ui, &t!("models.available.settings.title"));
-            engine_settings(ui, cx, engine_id, &fields);
+            engine_settings(ui, cx, engine_id, &fields, languages);
             ui.add_space(4.0);
             ui.label(text::caption(
                 ui,
@@ -419,7 +426,13 @@ impl ModelsPage {
     }
 
     /// 외부 제공자: 이름·주소·API 키·모델 편집과 클라우드 공통 설정
-    fn provider_body(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, entry: &Entry) {
+    fn provider_body(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut PageContext<'_>,
+        entry: &Entry,
+        languages: Option<&LanguageSupport>,
+    ) {
         let EntryKey::Provider { profile_id } = &entry.key else {
             return;
         };
@@ -452,7 +465,7 @@ impl ModelsPage {
             .unwrap_or_default();
         if !shared_fields.is_empty() {
             parts::sub_title(ui, &t!("models.providers.shared.title"));
-            engine_settings(ui, cx, CLOUD_ENGINE_ID, &shared_fields);
+            engine_settings(ui, cx, CLOUD_ENGINE_ID, &shared_fields, languages);
             ui.add_space(4.0);
             ui.label(text::caption(ui, t!("models.providers.shared.note")));
             ui.add_space(BODY_GAP);
@@ -650,13 +663,24 @@ impl ModelsPage {
 
 /// 엔진 설정 항목을 그리고, 값이 바뀌면 `[stt.engines.<엔진 ID>]`에 씁니다.
 ///
+/// 인식 언어는 `languages`(이 카드의 모델이 인식할 수 있는 언어) 안에서 고릅니다. 한 언어만
+/// 인식하는 모델의 카드에서는 고정으로 보여 주고, 엔진이 함께 쓰는 언어 값은 바꾸지 않습니다.
+///
 /// 보기만 해서는 설정에 빈 표가 생기지 않도록, 바뀐 값이 있을 때만 표를 넣습니다.
 fn engine_settings(
     ui: &mut Ui,
     cx: &mut PageContext<'_>,
     engine_id: &str,
     fields: &[SettingField],
+    languages: Option<&LanguageSupport>,
 ) {
+    // 표에 값이 없으면 실제로 쓰이는 언어(기본값이나 예전 전역 설정에서 이어받은 값)를 보여 줍니다.
+    let language = cx
+        .shared
+        .registry
+        .resolve_settings(&cx.config.stt, engine_id)
+        .map(|settings| settings.str(LANGUAGE_KEY).to_owned())
+        .unwrap_or_default();
     ui.add_enabled_ui(!cx.locked, |ui| {
         let mut table = cx
             .config
@@ -665,7 +689,28 @@ fn engine_settings(
             .get(engine_id)
             .cloned()
             .unwrap_or_default();
-        if setting_fields(ui, engine_id, fields, &mut table, cx.frame) {
+        let mut changed = false;
+        for (index, field) in fields.iter().enumerate() {
+            if index > 0 {
+                row::separator(ui);
+            }
+            changed |= match languages {
+                Some(support) if field.key == LANGUAGE_KEY => {
+                    let help = field.help_key.as_deref().map(tr).unwrap_or_default();
+                    language_setting_row(
+                        ui,
+                        (engine_id, LANGUAGE_KEY),
+                        field,
+                        &help,
+                        support,
+                        &mut table,
+                        &language,
+                    )
+                }
+                _ => setting_field(ui, engine_id, field, &mut table, cx.frame),
+            };
+        }
+        if changed {
             cx.config.stt.engines.insert(engine_id.to_owned(), table);
         }
     });

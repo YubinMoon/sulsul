@@ -144,7 +144,11 @@ pub struct ApiProfile {
 pub struct SttConfig {
     /// 사용할 엔진 ID ([`crate::stt::SttRegistry`]에 등록된 것)
     pub engine: String,
-    /// 인식 언어 (`ko`, `en`, `auto`)
+    /// 예전 전역 인식 언어. 엔진 설정(`[stt.engines.<ID>] language`)에 언어가 없을 때만 씁니다.
+    ///
+    /// 지금은 인식 언어를 엔진마다 저장하므로 새 설정 파일에는 없습니다. 예전 파일의 값을
+    /// 이어받으려고 남겨 두었고, 비어 있으면 저장하지 않습니다.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub language: String,
     /// 용어 힌트
     pub initial_prompt: String,
@@ -162,7 +166,7 @@ impl Default for SttConfig {
     fn default() -> Self {
         Self {
             engine: "whisper_local".into(),
-            language: "ko".into(),
+            language: String::new(),
             initial_prompt: String::new(),
             api_profile: String::new(),
             api_profiles: Vec::new(),

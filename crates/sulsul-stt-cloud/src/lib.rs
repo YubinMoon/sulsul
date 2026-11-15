@@ -12,8 +12,8 @@ use std::time::Duration;
 use sulsul_core::config::SttConfig;
 use sulsul_core::settings::{self, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, SttEngine,
-    SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
+    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind,
+    LanguageSupport, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE, language_field,
 };
 
 pub use client::normalize_transcriptions_url;
@@ -42,6 +42,7 @@ pub struct CloudFactory {
 
 impl CloudFactory {
     pub fn new() -> Self {
+        let languages = LanguageSupport::Any;
         Self {
             descriptor: EngineDescriptor {
                 id: ENGINE_ID.into(),
@@ -49,13 +50,8 @@ impl CloudFactory {
                 description_key: "engine.cloud_api.description".into(),
                 kind: EngineKind::Cloud,
                 // 모델을 메모리에 올리지 않으므로 메모리 유지 시간 항목은 없습니다.
-                capabilities: EngineCapabilities {
-                    input_sample_rate: WHISPER_SAMPLE_RATE,
-                    languages: LanguageSupport::Any,
-                    supports_prompt: true,
-                    streaming: false,
-                },
                 settings: vec![
+                    language_field(&languages, DEFAULT_LANGUAGE),
                     SettingField::integer(
                         keys::TIMEOUT_SECONDS,
                         "engine.cloud_api.settings.timeout_seconds",
@@ -66,6 +62,12 @@ impl CloudFactory {
                     .with_help("engine.cloud_api.settings.timeout_seconds_help"),
                 ],
                 retired_keys: Vec::new(),
+                capabilities: EngineCapabilities {
+                    input_sample_rate: WHISPER_SAMPLE_RATE,
+                    languages,
+                    supports_prompt: true,
+                    streaming: false,
+                },
             },
         }
     }
@@ -184,6 +186,28 @@ mod tests {
         let overridden = factory.resolve_settings(&stt);
         assert_eq!(overridden.str(keys::MODEL), "custom-override");
         assert_ne!(resolved, overridden);
+    }
+
+    #[test]
+    fn language_setting_lists_auto_and_offered_languages() {
+        let factory = CloudFactory::new();
+        let schema: Vec<_> = factory
+            .descriptor()
+            .settings
+            .iter()
+            .map(|f| f.key.as_str())
+            .collect();
+        assert_eq!(
+            schema,
+            [sulsul_core::stt::LANGUAGE_KEY, keys::TIMEOUT_SECONDS],
+            "클라우드 엔진에는 메모리 유지 시간 항목이 없어야 합니다"
+        );
+        let resolved = factory.resolve_settings(&SttConfig::default());
+        assert_eq!(resolved.str(sulsul_core::stt::LANGUAGE_KEY), "ko");
+        assert_eq!(
+            factory.descriptor().capabilities.languages.choices(),
+            ["auto", "ko", "en", "zh", "ja"]
+        );
     }
 
     #[test]

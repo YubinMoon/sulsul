@@ -32,7 +32,9 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 
 1. `SttEngineFactory`, `SttEngine` 구현 (`sulsul-core/src/stt/mod.rs` 참고)
 2. 설명자에 설정 스키마(`SettingField`) 선언: 설정 화면이 자동으로 그려지고 값은 `[stt.engines.<ID>]`에 저장.
-   모델을 메모리에 올리는 로컬 엔진이면 모델 메모리 유지 시간(`keep_loaded_field`)도 넣습니다.
+   인식 언어(`language_field`)와, 모델을 메모리에 올리는 로컬 엔진이면 모델 메모리 유지 시간(`keep_loaded_field`)도 넣습니다.
+   인식 언어는 엔진마다 따로 저장됩니다(예전 `[stt] language`는 엔진 설정에 언어가 없을 때만 이어받음).
+   고를 수 있는 언어는 한국어·영어·중국어·일본어 가운데 모델이 지원하는 것입니다(자동 감지는 모델이 지원하면 맨 앞).
 3. 앱 시작 시 `SttRegistry`에 등록
 4. `locales/*.yml`의 `engine.<ID>.*`에 문구 추가
 

@@ -8,10 +8,10 @@
 
 use std::time::{Duration, Instant};
 
-use super::fields::keep_loaded;
+use super::fields::{configured_language, effective_language, keep_loaded};
 use super::{
-    ComputeDevice, EngineContext, KEEP_LOADED_KEY, Language, LanguageSupport, SttEngine, SttError,
-    SttRegistry, TranscribeRequest, Transcript, WHISPER_SAMPLE_RATE,
+    ComputeDevice, EngineContext, KEEP_LOADED_KEY, LANGUAGE_KEY, Language, LanguageSupport,
+    SttEngine, SttError, SttRegistry, TranscribeRequest, Transcript, WHISPER_SAMPLE_RATE,
 };
 use crate::audio::{AudioClip, AudioError, test_audio_clip};
 use crate::cancel::CancelToken;
@@ -31,7 +31,7 @@ pub struct Transcriber {
 /// 준비해 둔 엔진
 struct Loaded {
     id: String,
-    /// 엔진을 만들 때 쓴 설정에서 메모리 유지 시간을 뺀 것([`reuse_key`]).
+    /// 엔진을 만들 때 쓴 설정에서 언어와 메모리 유지 시간을 뺀 것([`reuse_key`]).
     /// 다음 작업의 설정과 같아야 다시 씁니다.
     settings: ResolvedSettings,
     engine: Box<dyn SttEngine>,
@@ -68,8 +68,8 @@ pub struct TranscribeJob<'a> {
     /// 설정 파일의 `[stt]` (엔진별 설정 포함)
     pub stt: &'a SttConfig,
     pub engine_id: &'a str,
-    /// `ko`, `en`, `auto` 등
-    pub language: &'a str,
+    /// 이 작업에만 쓸 언어(`ko`, `en`, `auto` 등). `None`이면 엔진 설정의 `language`를 씁니다.
+    pub language: Option<&'a str>,
     pub cancel: CancelToken,
 }
 
@@ -77,6 +77,9 @@ pub struct TranscribeJob<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transcription {
     pub transcript: Transcript,
+    /// 실제로 인식에 쓴 언어. 자동 감지면 [`Language::Auto`]이고, 감지한 언어는
+    /// [`Transcript::language`]에 있습니다. 모델이 언어 하나만 지원하면 고른 언어와 다를 수 있습니다.
+    pub language: Language,
     /// 엔진이 계산에 쓴 장치
     pub device: ComputeDevice,
     /// 엔진을 만드는 데 걸린 시간 (다시 쓴 경우 0)
@@ -106,6 +109,9 @@ pub struct EngineTestResult {
 }
 
 /// 지정한 엔진을 새로 생성하고 짧은 테스트 오디오를 실제로 넣어 동작과 지연 시간을 확인합니다.
+///
+/// 언어는 엔진 설정의 `language`를 쓰되, 지금 모델이 지원하지 않으면 자동 감지나 첫 언어로 바꿔
+/// 점검이 언어 때문에 실패하지 않게 합니다.
 pub fn test_engine(
     registry: &SttRegistry,
     ctx: &EngineContext,
@@ -116,10 +122,12 @@ pub fn test_engine(
     if cancel.is_cancelled() {
         return Err(SttError::Cancelled.into());
     }
-    let descriptor = registry
-        .descriptor(engine_id)
+    let factory = registry
+        .get(engine_id)
         .ok_or_else(|| SttError::UnknownEngine(engine_id.to_owned()))?;
-    let capabilities = descriptor.capabilities.clone();
+    let capabilities = factory.descriptor().capabilities.clone();
+    let settings = registry.resolve_settings(stt, engine_id)?;
+    let support = factory.languages(&settings);
 
     let prepare_started = Instant::now();
     let mut engine = registry.create(ctx, stt, engine_id)?;
@@ -128,8 +136,7 @@ pub fn test_engine(
         return Err(SttError::Cancelled.into());
     }
 
-    let preferred = Language::from_config(&stt.language);
-    let language = pick_test_language(&capabilities.languages, preferred);
+    let language = pick_test_language(&support, configured_language(&settings, stt));
     let sample_rate = capabilities.input_sample_rate.max(1);
     let clip = if sample_rate == WHISPER_SAMPLE_RATE {
         test_audio_clip(WHISPER_SAMPLE_RATE)
@@ -152,25 +159,23 @@ pub fn test_engine(
     })
 }
 
+/// 고를 수 있는 언어([`LanguageSupport::choices`]) 가운데 점검에 쓸 언어:
+/// 원하는 언어가 있으면 그것, 아니면 자동 감지, 그것도 안 되면 첫 선택지입니다.
 fn pick_test_language(support: &LanguageSupport, preferred: Language) -> Language {
-    if support.supports(&preferred) {
+    if support.offers(&preferred) {
         return preferred;
     }
-    if support.supports(&Language::Auto) {
-        return Language::Auto;
-    }
-    match support {
-        LanguageSupport::Any => Language::Auto,
-        LanguageSupport::Only(codes) | LanguageSupport::AutoAnd(codes) => codes
-            .first()
-            .map(|c| Language::Code(c.clone()))
-            .unwrap_or(Language::Auto),
-    }
+    // 자동 감지를 지원하면 선택지 맨 앞이 `auto`입니다.
+    support
+        .choices()
+        .first()
+        .map_or(Language::Auto, |choice| Language::from_config(choice))
 }
 
-/// 엔진을 다시 쓸지 비교할 설정. 메모리 유지 시간은 모델과 상관없어서 뺍니다.
+/// 엔진을 다시 쓸지 비교할 설정. 언어와 메모리 유지 시간은 모델과 상관없어서 뺍니다.
 fn reuse_key(settings: &ResolvedSettings) -> ResolvedSettings {
     let mut key = settings.clone();
+    key.remove(LANGUAGE_KEY);
     key.remove(KEEP_LOADED_KEY);
     key
 }
@@ -223,6 +228,8 @@ impl Transcriber {
     /// 엔진을 준비하고(가능하면 다시 쓰고) `clip`을 인식합니다.
     ///
     /// 엔진을 만들지 못하면 보관한 엔진을 비우고, 인식 단계의 오류에서는 그대로 보관합니다.
+    /// 고른 언어를 지금 모델이 지원하지 않으면 모델을 읽기 전에 [`SttError::UnsupportedLanguage`]를
+    /// 돌려줍니다. 단, 모델이 언어 하나만 지원하면(예: 영어 전용) 그 언어로 인식합니다.
     pub fn transcribe(
         &mut self,
         clip: &AudioClip,
@@ -234,6 +241,13 @@ impl Transcriber {
         }
 
         let settings = self.resolve_settings(job.stt, job.engine_id)?;
+        let factory = self
+            .registry
+            .get(job.engine_id)
+            .ok_or_else(|| SttError::UnknownEngine(job.engine_id.to_owned()))?;
+        let capabilities = factory.descriptor().capabilities.clone();
+        let language = effective_language(factory.as_ref(), &settings, job.stt, job.language)?;
+
         let (loaded, prepare, reused) = ensure(
             &self.registry,
             &self.context,
@@ -242,26 +256,13 @@ impl Transcriber {
             job.engine_id,
             &settings,
         )?;
-        let capabilities = &self
-            .registry
-            .descriptor(job.engine_id)
-            .ok_or_else(|| SttError::UnknownEngine(job.engine_id.to_owned()))?
-            .capabilities;
-
-        let language = Language::from_config(job.language);
-        if !capabilities.languages.supports(&language) {
-            return Err(SttError::UnsupportedLanguage(
-                language.code().unwrap_or("auto").to_owned(),
-            )
-            .into());
-        }
 
         // 엔진이 받는 샘플레이트로 맞춥니다 (같으면 그대로 복사).
         let audio = clip.resampled(capabilities.input_sample_rate)?;
 
         let prompt = job.stt.initial_prompt.trim();
         let request = TranscribeRequest {
-            language,
+            language: language.clone(),
             prompt: (capabilities.supports_prompt && !prompt.is_empty()).then(|| prompt.to_owned()),
             cancel: job.cancel.clone(),
         };
@@ -273,6 +274,7 @@ impl Transcriber {
         loaded.touch();
         Ok(Transcription {
             transcript: transcript?,
+            language,
             device: loaded.engine.device(),
             prepare,
             reused,
@@ -400,7 +402,9 @@ mod tests {
     use super::*;
     use crate::paths::AppPaths;
     use crate::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
-    use crate::stt::{EngineCapabilities, EngineDescriptor, EngineKind, SttEngineFactory};
+    use crate::stt::{
+        EngineCapabilities, EngineDescriptor, EngineKind, SttEngineFactory, language_field,
+    };
 
     fn transcriber() -> Transcriber {
         let mut registry = SttRegistry::new();
@@ -437,7 +441,7 @@ mod tests {
         TranscribeJob {
             stt,
             engine_id,
-            language: "ko",
+            language: None,
             cancel: CancelToken::new(),
         }
     }
@@ -455,9 +459,45 @@ mod tests {
             .transcribe(&clip(), &job(&stt, MOCK_ENGINE_ID))
             .unwrap();
         assert_eq!(result.transcript.text, "안녕하세요");
+        // 엔진 설정에 언어가 없으면 기본값(한국어)을 씁니다.
+        assert_eq!(result.language, Language::Code("ko".into()));
         assert_eq!(result.transcript.language.as_deref(), Some("ko"));
         assert_eq!(result.device, ComputeDevice::Unknown);
         assert!(!result.reused);
+    }
+
+    #[test]
+    fn engine_language_is_used_unless_the_job_overrides_it() {
+        let mut transcriber = transcriber();
+        let mut stt = mock_config(0, "");
+        set(&mut stt, LANGUAGE_KEY, "ja".into());
+
+        let from_settings = transcriber
+            .transcribe(&clip(), &job(&stt, MOCK_ENGINE_ID))
+            .unwrap();
+        assert_eq!(from_settings.language, Language::Code("ja".into()));
+
+        let overridden = transcriber
+            .transcribe(
+                &clip(),
+                &TranscribeJob {
+                    language: Some("auto"),
+                    ..job(&stt, MOCK_ENGINE_ID)
+                },
+            )
+            .unwrap();
+        assert_eq!(overridden.language, Language::Auto);
+        assert_eq!(overridden.transcript.language, None);
+    }
+
+    #[test]
+    fn legacy_global_language_is_used_when_engine_has_none() {
+        let mut stt = mock_config(0, "");
+        stt.language = "en".into();
+        let result = transcriber()
+            .transcribe(&clip(), &job(&stt, MOCK_ENGINE_ID))
+            .unwrap();
+        assert_eq!(result.language, Language::Code("en".into()));
     }
 
     #[test]
@@ -483,16 +523,21 @@ mod tests {
     }
 
     #[test]
-    fn keep_loaded_changes_do_not_reload_the_model() {
+    fn language_or_keep_loaded_changes_do_not_reload_the_model() {
         let mut transcriber = transcriber();
         let mut stt = mock_config(0, "");
         transcriber.prepare(&stt, MOCK_ENGINE_ID).unwrap();
 
+        set(&mut stt, LANGUAGE_KEY, "en".into());
         set(&mut stt, KEEP_LOADED_KEY, toml::Value::Integer(30));
         let result = transcriber
             .transcribe(&clip(), &job(&stt, MOCK_ENGINE_ID))
             .unwrap();
-        assert!(result.reused, "유지 시간만 바꿨는데 모델을 다시 읽었습니다");
+        assert!(
+            result.reused,
+            "언어·유지 시간만 바꿨는데 모델을 다시 읽었습니다"
+        );
+        assert_eq!(result.language, Language::Code("en".into()));
         // 바뀐 유지 시간은 바로 적용됩니다.
         let left = transcriber
             .idle_deadline(&stt)
@@ -658,7 +703,7 @@ mod tests {
         }
         let mut descriptor = MockEngineFactory::new().descriptor().clone();
         descriptor.id = "plain".into();
-        descriptor.settings = Vec::new();
+        descriptor.settings = vec![language_field(&LanguageSupport::Any, "ko")];
         descriptor.capabilities = EngineCapabilities {
             input_sample_rate: WHISPER_SAMPLE_RATE,
             languages: LanguageSupport::Any,
@@ -679,6 +724,59 @@ mod tests {
         transcriber.prepare(&stt, "plain").unwrap();
         assert_eq!(transcriber.idle_deadline(&stt), None);
         assert!(!transcriber.unload_if_idle(&stt, Instant::now() + Duration::from_secs(86_400)));
+    }
+
+    /// 언어 하나만 지원하는 모델은 다른 언어를 골라 두어도 그 언어로 인식하고,
+    /// 여러 언어를 지원하는 모델에서 지원하지 않는 언어를 고르면 오류입니다.
+    #[test]
+    fn unsupported_language_falls_back_only_for_single_language_models() {
+        struct Limited(EngineDescriptor, LanguageSupport);
+        impl SttEngineFactory for Limited {
+            fn descriptor(&self) -> &EngineDescriptor {
+                &self.0
+            }
+            fn create(
+                &self,
+                ctx: &EngineContext,
+                settings: &ResolvedSettings,
+            ) -> Result<Box<dyn SttEngine>, SttError> {
+                MockEngineFactory::new().create(ctx, settings)
+            }
+            fn languages(&self, _settings: &ResolvedSettings) -> LanguageSupport {
+                self.1.clone()
+            }
+        }
+        let transcriber_with = |support: LanguageSupport| {
+            let mut registry = SttRegistry::new();
+            let mut descriptor = MockEngineFactory::new().descriptor().clone();
+            descriptor.id = "limited".into();
+            registry.register(Arc::new(Limited(descriptor, support)));
+            Transcriber::new(
+                registry,
+                EngineContext {
+                    paths: AppPaths::under("unused"),
+                },
+            )
+        };
+        let mut stt = SttConfig::default();
+        stt.engines.entry("limited".into()).or_default().extend([
+            ("delay_ms".to_owned(), toml::Value::Integer(0)),
+            (LANGUAGE_KEY.to_owned(), "ko".into()),
+        ]);
+
+        let mut english = transcriber_with(LanguageSupport::Only(vec!["en".into()]));
+        let result = english.transcribe(&clip(), &job(&stt, "limited")).unwrap();
+        assert_eq!(result.language, Language::Code("en".into()));
+        assert_eq!(result.transcript.language.as_deref(), Some("en"));
+
+        let mut two = transcriber_with(LanguageSupport::Only(vec!["en".into(), "ja".into()]));
+        let error = two.transcribe(&clip(), &job(&stt, "limited")).unwrap_err();
+        assert!(matches!(
+            error,
+            TranscribeError::Stt(SttError::UnsupportedLanguage(code)) if code == "ko"
+        ));
+        // 언어를 확인하는 단계에서 멈췄으므로 모델을 읽지 않았습니다.
+        assert_eq!(two.idle_deadline(&stt), None);
     }
 
     #[test]
@@ -779,10 +877,41 @@ mod tests {
         let ctx = EngineContext {
             paths: AppPaths::under("unused"),
         };
-        let stt = mock_config(0, "연결 확인");
+        let mut stt = mock_config(0, "");
+        set(&mut stt, LANGUAGE_KEY, "ja".into());
         let report =
             test_engine(&registry, &ctx, &stt, MOCK_ENGINE_ID, CancelToken::new()).unwrap();
-        assert_eq!(report.transcript.text, "연결 확인");
+        // 가짜 엔진은 인식 언어를 결과에 적으므로, 엔진 설정의 언어를 썼는지 볼 수 있습니다.
+        assert_eq!(report.transcript.language.as_deref(), Some("ja"));
         assert_eq!(report.device, ComputeDevice::Unknown);
+    }
+
+    #[test]
+    fn test_language_falls_back_when_unsupported() {
+        let english = LanguageSupport::Only(vec!["en".into()]);
+        assert_eq!(
+            pick_test_language(&english, Language::Code("ko".into())),
+            Language::Code("en".into())
+        );
+        let auto_and = LanguageSupport::AutoAnd(vec!["ko".into()]);
+        assert_eq!(
+            pick_test_language(&auto_and, Language::Code("fr".into())),
+            Language::Auto
+        );
+        // 모델이 알아도 고를 수 있는 언어가 아니면 자동 감지로 점검합니다.
+        let with_cantonese = LanguageSupport::AutoAnd(vec!["ko".into(), "yue".into()]);
+        assert_eq!(
+            pick_test_language(&with_cantonese, Language::Code("yue".into())),
+            Language::Auto
+        );
+        assert_eq!(
+            pick_test_language(&LanguageSupport::Any, Language::Code("ja".into())),
+            Language::Code("ja".into())
+        );
+        let no_auto = LanguageSupport::Only(vec!["ja".into(), "en".into()]);
+        assert_eq!(
+            pick_test_language(&no_auto, Language::Code("fr".into())),
+            Language::Code("en".into())
+        );
     }
 }

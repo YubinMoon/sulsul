@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use sulsul_core::CancelToken;
 use sulsul_core::audio;
-use sulsul_core::stt::{ComputeDevice, TranscribeJob, Transcriber, Transcription};
+use sulsul_core::stt::{ComputeDevice, SttError, TranscribeJob, Transcriber, Transcription};
 
 use crate::engines::{EngineArgs, Selected};
 
@@ -16,7 +16,7 @@ pub struct Args {
     wav: PathBuf,
     #[command(flatten)]
     engine: EngineArgs,
-    /// 언어 (ko, en, auto 등). 생략하면 설정 파일 값
+    /// 이번 실행에만 쓸 언어 (auto, ko, en, zh, ja 가운데 모델이 지원하는 것). 생략하면 엔진 설정의 언어
     #[arg(short, long)]
     language: Option<String>,
     /// 같은 엔진으로 반복할 횟수 (엔진 재사용 효과 확인용)
@@ -26,14 +26,30 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let selected = args.engine.select()?;
-    let language = args
-        .language
-        .unwrap_or_else(|| selected.stt.language.clone());
 
     // 잘못된 값이 있으면 엔진을 만들 수 없으므로 모델을 읽기 전에 알려 줍니다.
     if let Some(problem) = selected.invalid_settings() {
         bail!("{problem}");
     }
+    // 받아쓰기와 같은 규칙으로 실제로 쓸 언어를 정합니다 (영어 전용 모델이면 영어).
+    let language = match selected.registry.resolve_language(
+        &selected.stt,
+        &selected.engine_id,
+        args.language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(SttError::UnsupportedLanguage(code)) => {
+            let choices = selected
+                .registry
+                .languages(&selected.stt, &selected.engine_id)
+                .map(|support| support.choices().join(", "))
+                .unwrap_or_default();
+            bail!(
+                "'{code}' 언어는 지금 엔진·모델에서 인식할 수 없습니다.\n고를 수 있는 언어: {choices}"
+            );
+        }
+        Err(error) => return Err(anyhow!("인식 언어를 정하지 못했습니다: {error}")),
+    };
     if let Some(model) = selected.model()?
         && !model.is_installed()
     {
@@ -58,7 +74,7 @@ pub fn run(args: Args) -> Result<()> {
         stt,
         engine_id,
     } = selected;
-    eprintln!("엔진: {engine_id} (언어 {language})");
+    eprintln!("엔진: {engine_id} (언어 {})", language.as_config());
     eprintln!(
         "오디오: {:.2}초, {} Hz",
         audio_length.as_secs_f64(),
@@ -70,7 +86,7 @@ pub fn run(args: Args) -> Result<()> {
         let job = TranscribeJob {
             stt: &stt,
             engine_id: &engine_id,
-            language: &language,
+            language: args.language.as_deref(),
             cancel: CancelToken::new(),
         };
         let done = transcriber

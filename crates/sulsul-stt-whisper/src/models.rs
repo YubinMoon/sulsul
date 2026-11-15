@@ -8,7 +8,7 @@
 //! 작은 양자화 파일을 먼저 둡니다. 새 단계 값을 넣었다면 `locales/*.yml`의
 //! `engine.whisper_local.choices.<축 ID>.<값 ID>` 문구도 추가합니다.
 
-use sulsul_core::stt::{ModelAsset, ModelAxis, VariantChoice};
+use sulsul_core::stt::{LanguageSupport, ModelAsset, ModelAxis, VariantChoice, WHISPER_LANGUAGES};
 
 use crate::ENGINE_ID;
 
@@ -151,6 +151,11 @@ impl WhisperModel {
 
 pub fn find_model(id: &str) -> Option<&'static WhisperModel> {
     MODELS.iter().find(|m| m.id == id)
+}
+
+/// 다국어 모델(과 직접 지정한 모델 파일)이 인식할 수 있는 언어
+pub fn multilingual() -> LanguageSupport {
+    LanguageSupport::AutoAnd(WHISPER_LANGUAGES.iter().map(|&c| c.to_owned()).collect())
 }
 
 /// 바이트 수를 사람이 읽기 쉬운 단위로 바꿉니다 (1024 단위, Windows 탐색기와 같은 기준).

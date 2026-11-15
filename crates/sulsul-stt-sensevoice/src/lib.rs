@@ -17,9 +17,9 @@ use std::sync::Arc;
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport,
-    ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
-    keep_loaded_field,
+    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind,
+    LanguageSupport, ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError,
+    WHISPER_SAMPLE_RATE, keep_loaded_field, language_field,
 };
 
 pub use accel::{DetectedDevices, DevicePreference, detected_devices};
@@ -75,24 +75,18 @@ impl SenseVoiceFactory {
             .iter()
             .map(|v| ChoiceOption::new(v.id).with_detail(v.size_label()))
             .collect();
+        let languages = LanguageSupport::AutoAnd(
+            ["ko", "en", "zh", "ja", "yue"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        );
         Self {
             descriptor: EngineDescriptor {
                 id: ENGINE_ID.into(),
                 name_key: "engine.sense_voice_local.name".into(),
                 description_key: "engine.sense_voice_local.description".into(),
                 kind: EngineKind::Local,
-                capabilities: EngineCapabilities {
-                    input_sample_rate: WHISPER_SAMPLE_RATE,
-                    languages: LanguageSupport::AutoAnd(vec![
-                        "ko".into(),
-                        "en".into(),
-                        "zh".into(),
-                        "ja".into(),
-                        "yue".into(),
-                    ]),
-                    supports_prompt: false,
-                    streaming: false,
-                },
                 settings: vec![
                     SettingField::choice(
                         keys::MODEL,
@@ -107,6 +101,7 @@ impl SenseVoiceFactory {
                         PathKind::Directory,
                     )
                     .with_help("engine.sense_voice_local.settings.model_path_help"),
+                    language_field(&languages, DEFAULT_LANGUAGE),
                     SettingField::bool(
                         keys::USE_ITN,
                         "engine.sense_voice_local.settings.use_itn",
@@ -123,6 +118,12 @@ impl SenseVoiceFactory {
                     keep_loaded_field(),
                 ],
                 retired_keys: vec![keys::RETIRED_THREADS.into()],
+                capabilities: EngineCapabilities {
+                    input_sample_rate: WHISPER_SAMPLE_RATE,
+                    languages,
+                    supports_prompt: false,
+                    streaming: false,
+                },
             },
         }
     }
@@ -208,6 +209,49 @@ impl SttEngineFactory for SenseVoiceFactory {
 mod tests {
     use super::*;
     use sulsul_core::settings;
+
+    #[test]
+    fn schema_has_language_and_keep_loaded_in_order() {
+        let factory = SenseVoiceFactory::new();
+        let schema: Vec<_> = factory
+            .descriptor()
+            .settings
+            .iter()
+            .map(|f| f.key.as_str())
+            .collect();
+        assert_eq!(
+            schema,
+            [
+                keys::MODEL,
+                keys::MODEL_PATH,
+                sulsul_core::stt::LANGUAGE_KEY,
+                keys::USE_ITN,
+                keys::DEVICE,
+                sulsul_core::stt::KEEP_LOADED_KEY,
+            ]
+        );
+        let language = factory
+            .descriptor()
+            .settings
+            .iter()
+            .find(|f| f.key == sulsul_core::stt::LANGUAGE_KEY)
+            .unwrap();
+        let sulsul_core::settings::SettingKind::Choice { options } = &language.kind else {
+            panic!("언어 항목이 선택 항목이 아닙니다");
+        };
+        let values: Vec<_> = options.iter().map(|o| o.value.as_str()).collect();
+        // 모델은 광둥어(yue)도 알지만 고를 수 있는 언어는 한국어·영어·중국어·일본어입니다.
+        assert_eq!(values, ["auto", "ko", "en", "zh", "ja"]);
+        assert!(
+            factory
+                .descriptor()
+                .capabilities
+                .languages
+                .supports(&sulsul_core::stt::Language::Code("yue".into()))
+        );
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
+        assert_eq!(defaults.str(sulsul_core::stt::LANGUAGE_KEY), "ko");
+    }
 
     /// 예전 설정 파일에 남은 `threads = 0`은 오류도 "모르는 키" 경고도 아닙니다.
     #[test]

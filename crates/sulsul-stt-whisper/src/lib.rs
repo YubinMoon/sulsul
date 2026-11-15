@@ -17,9 +17,9 @@ use std::sync::{Arc, OnceLock};
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, ModelFile,
+    DEFAULT_LANGUAGE, EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, ModelFile,
     ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
-    keep_loaded_field,
+    keep_loaded_field, language_field,
 };
 
 use engine::{EngineOptions, WhisperEngine};
@@ -114,18 +114,14 @@ impl WhisperFactory {
         if let Some(reason) = gpu_unavailable_reason() {
             use_gpu = use_gpu.unavailable(reason);
         }
+        // 엔진 설정은 이 엔진의 모든 모델이 함께 쓰므로 선택지는 다국어 모델 기준입니다.
+        let languages = models::multilingual();
         Self {
             descriptor: EngineDescriptor {
                 id: ENGINE_ID.into(),
                 name_key: "engine.whisper_local.name".into(),
                 description_key: "engine.whisper_local.description".into(),
                 kind: EngineKind::Local,
-                capabilities: EngineCapabilities {
-                    input_sample_rate: WHISPER_SAMPLE_RATE,
-                    languages: LanguageSupport::Any,
-                    supports_prompt: true,
-                    streaming: false,
-                },
                 settings: vec![
                     SettingField::choice(
                         keys::MODEL,
@@ -140,6 +136,7 @@ impl WhisperFactory {
                         PathKind::File,
                     )
                     .with_help("engine.whisper_local.settings.model_path_help"),
+                    language_field(&languages, DEFAULT_LANGUAGE),
                     use_gpu,
                     SettingField::integer(
                         keys::BEAM_SIZE,
@@ -152,6 +149,12 @@ impl WhisperFactory {
                     keep_loaded_field(),
                 ],
                 retired_keys: vec![keys::RETIRED_THREADS.into()],
+                capabilities: EngineCapabilities {
+                    input_sample_rate: WHISPER_SAMPLE_RATE,
+                    languages,
+                    supports_prompt: true,
+                    streaming: false,
+                },
             },
         }
     }
@@ -427,6 +430,45 @@ mod tests {
             assert_eq!(value(ModelAxis::Language), "multi", "{id}: 언어 값");
             assert_eq!(value(ModelAxis::Precision), precision, "{id}: 정밀도 값");
         }
+    }
+
+    /// whisper.cpp가 아는 언어 목록과 코어의 언어 목록(다국어 모델이 아는 언어)이 순서까지 같아야 합니다.
+    #[test]
+    fn whisper_languages_match_whisper_cpp() {
+        let from_whisper: Vec<_> = (0..=whisper_rs::get_lang_max_id())
+            .map(|id| whisper_rs::get_lang_str(id).expect("언어 ID에 코드가 없습니다"))
+            .collect();
+        assert_eq!(from_whisper, sulsul_core::stt::WHISPER_LANGUAGES);
+    }
+
+    #[test]
+    fn schema_has_language_and_keep_loaded_in_order() {
+        let factory = WhisperFactory::new();
+        let schema: Vec<_> = factory
+            .descriptor()
+            .settings
+            .iter()
+            .map(|f| f.key.as_str())
+            .collect();
+        assert_eq!(
+            schema,
+            [
+                keys::MODEL,
+                keys::MODEL_PATH,
+                sulsul_core::stt::LANGUAGE_KEY,
+                keys::USE_GPU,
+                keys::BEAM_SIZE,
+                sulsul_core::stt::KEEP_LOADED_KEY,
+            ]
+        );
+        let defaults = settings::resolve(&factory.descriptor().settings, None);
+        assert_eq!(defaults.str(sulsul_core::stt::LANGUAGE_KEY), "ko");
+        assert_eq!(defaults.int(sulsul_core::stt::KEEP_LOADED_KEY), 5);
+        // 다국어 모델은 100개 언어를 알지만, 고를 수 있는 언어는 한국어·영어·중국어·일본어입니다.
+        assert_eq!(
+            factory.descriptor().capabilities.languages.choices(),
+            ["auto", "ko", "en", "zh", "ja"]
+        );
     }
 
     /// 예전 설정 파일에 남은 `threads = 0`은 오류도 "모르는 키" 경고도 아닙니다.

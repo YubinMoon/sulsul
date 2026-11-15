@@ -12,10 +12,13 @@ use rust_i18n::t;
 use sulsul_core::CancelToken;
 use sulsul_core::audio::{self, AudioClip};
 use sulsul_core::config::Config;
-use sulsul_core::stt::{ComputeDevice, EngineContext, EngineKind, Transcriber};
+use sulsul_core::stt::{
+    ComputeDevice, EngineContext, EngineKind, LANGUAGE_KEY, LanguageSupport, SttRegistry,
+    Transcriber,
+};
 
 use self::job::{Failure, JobAudio, JobInput, JobOutput, Success};
-use super::{Page, SECTION_GAP, header, language_items};
+use super::{Page, SECTION_GAP, header};
 use crate::accel::{self, AccelEnv, EngineAccel};
 use crate::error_text::{self, engine_name};
 use crate::format::{elapsed_text, hertz_text, seconds_text};
@@ -27,6 +30,10 @@ use crate::theme::{Palette, radius};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
 use crate::widgets::controls::{self, ComboItem};
+use crate::widgets::language::{
+    fixed_language, language_combo, language_items, language_name, single_language_note,
+    unsupported_warning,
+};
 use crate::widgets::row::{self, Row};
 use crate::widgets::stat::{Stat, stats};
 use crate::widgets::text;
@@ -43,7 +50,7 @@ pub struct TranscribePage {
     file_error: Option<String>,
     /// 이 화면에서만 임시로 바꾼 엔진. `None`이면 설정 값을 따릅니다.
     engine_override: Option<String>,
-    /// 이 화면에서만 임시로 바꾼 언어. `None`이면 설정 값을 따릅니다.
+    /// 이 화면에서만 임시로 바꾼 언어. `None`이면 엔진 설정의 언어를 따릅니다.
     language_override: Option<String>,
     running: Option<Running>,
     /// 엔진을 보관해 모델 로딩을 반복하지 않게 합니다. 작업 중에는 작업 스레드에 가 있고,
@@ -74,6 +81,7 @@ struct Running {
     cancel: CancelToken,
     started: Instant,
     engine_id: String,
+    /// 이 작업에 쓸 것으로 예상한 언어. 실패해서 실제로 쓴 언어를 모를 때 기록에 보여 줍니다.
     language: String,
     source: String,
     audio: Duration,
@@ -83,6 +91,7 @@ struct Running {
 struct Attempt {
     number: usize,
     engine_name: String,
+    /// 실제로 인식에 쓴 언어 (실패했으면 쓰려던 언어)
     language: String,
     source: String,
     audio: Duration,
@@ -173,10 +182,14 @@ impl TranscribePage {
                 t!("transcribe.error.crashed").into_owned()
             }
         });
+        // 성공했으면 실제로 쓴 언어(예: 영어 전용 모델이면 영어)를 보여 줍니다.
+        let language = outcome
+            .as_ref()
+            .map_or(running.language, |success| success.language.clone());
         self.attempts.push(Attempt {
             number: self.attempts.len() + 1,
             engine_name: engine_name(&shared.registry, &running.engine_id),
-            language: running.language,
+            language,
             source: running.source,
             audio: running.audio,
             total: running.started.elapsed(),
@@ -192,10 +205,22 @@ impl TranscribePage {
             .unwrap_or_else(|| config.stt.engine.clone())
     }
 
-    fn language(&self, config: &Config) -> String {
-        self.language_override
-            .clone()
-            .unwrap_or_else(|| config.stt.language.clone())
+    /// 이 작업에 쓸 것으로 예상하는 언어 (`ko`, `auto` 등). 받아쓰기와 같은 규칙으로 정하고,
+    /// 정하지 못하면(지원하지 않는 언어 등) 고른 값을 그대로 돌려줍니다.
+    fn expected_language(
+        &self,
+        registry: &SttRegistry,
+        config: &Config,
+        engine_id: &str,
+    ) -> String {
+        registry
+            .resolve_language(&config.stt, engine_id, self.language_override.as_deref())
+            .map(|language| language.as_config().to_owned())
+            .unwrap_or_else(|_| {
+                self.language_override
+                    .clone()
+                    .unwrap_or_else(|| settings_language(registry, config, engine_id))
+            })
     }
 
     /// 선택된 소스의 오디오와 화면에 보일 이름
@@ -221,7 +246,7 @@ impl TranscribePage {
             return;
         };
         let engine_id = self.engine_id(cx.config);
-        let language = self.language(cx.config);
+        let language = self.expected_language(&cx.shared.registry, cx.config, &engine_id);
         let duration = audio.clip().duration();
         let transcriber = self.transcriber.take().unwrap_or_else(|| {
             Transcriber::new(
@@ -236,7 +261,7 @@ impl TranscribePage {
             transcriber,
             stt: cx.config.stt.clone(),
             engine_id: engine_id.clone(),
-            language: language.clone(),
+            language: self.language_override.clone(),
             audio,
             cancel: cancel.clone(),
         };
@@ -411,33 +436,14 @@ impl TranscribePage {
                             "",
                         );
                     });
-                row::separator(ui);
 
-                // 언어
-                let mut items = vec![ComboItem::new(
-                    None,
-                    t!(
-                        "transcribe.follow_settings",
-                        value = language_label(&cx.config.stt.language)
-                    ),
-                )];
-                items.extend(
-                    language_items(&cx.config.stt.language)
-                        .into_iter()
-                        .map(|item| ComboItem::new(Some(item.value), item.label)),
-                );
-                Row::new(&t!("stt.language.label"))
-                    .help(&t!("transcribe.temporary_help"))
-                    .show(ui, |ui| {
-                        controls::combo(
-                            ui,
-                            "transcribe_language",
-                            row::CONTROL_WIDTH,
-                            &mut self.language_override,
-                            &items,
-                            "",
-                        );
-                    });
+                // 언어: 고를 수 있는 값은 이 화면에서 쓸 엔진과 그 모델을 따릅니다.
+                // 모르는 엔진이면 줄을 그리지 않습니다.
+                if let Ok(support) = registry.languages(&cx.config.stt, &engine_id) {
+                    row::separator(ui);
+                    let configured = settings_language(registry, cx.config, &engine_id);
+                    language_row(ui, &support, &configured, &mut self.language_override);
+                }
             });
 
             if engine_id == sulsul_stt_cloud::ENGINE_ID
@@ -518,7 +524,7 @@ impl TranscribePage {
                         ui.add(Label::new(&attempt.engine_name).truncate());
                     }
                     2 => {
-                        ui.add(Label::new(language_label(&attempt.language)).truncate());
+                        ui.add(Label::new(language_name(&attempt.language)).truncate());
                     }
                     3 => {
                         ui.label(elapsed_text(attempt.total));
@@ -600,7 +606,7 @@ fn result_card(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
                         shared.toasts.info(t!("transcribe.result.copied"));
                     }
                     let mut details = vec![attempt.source.clone(), attempt.engine_name.clone()];
-                    details.push(language_label(&attempt.language));
+                    details.push(language_name(&attempt.language));
                     if let Some(detected) = &success.detected_language {
                         details.push(
                             t!("transcribe.result.detected", language = detected).into_owned(),
@@ -657,7 +663,7 @@ fn result_card(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
                     .line(format!(
                         "{} · {}",
                         attempt.engine_name,
-                        language_label(&attempt.language)
+                        language_name(&attempt.language)
                     ))
                     .show(ui);
             }
@@ -797,11 +803,71 @@ fn file_name(path: &std::path::Path) -> String {
     )
 }
 
-fn language_label(code: &str) -> String {
-    language_items(code)
-        .into_iter()
-        .find(|item| item.value == code)
-        .map_or_else(|| code.to_owned(), |item| item.label)
+/// 엔진 설정에 저장된 인식 언어 (`ko`, `auto` 등). 모르는 엔진이면 빈 문자열입니다.
+fn settings_language(registry: &SttRegistry, config: &Config, engine_id: &str) -> String {
+    registry
+        .resolve_settings(&config.stt, engine_id)
+        .map(|settings| settings.str(LANGUAGE_KEY).to_owned())
+        .unwrap_or_default()
+}
+
+/// 이 화면에서만 쓸 언어를 고르는 줄.
+///
+/// - `support`: 이 화면에서 쓸 엔진과 모델이 인식할 수 있는 언어
+/// - `configured`: 그 엔진의 설정에 저장된 언어 ("설정 값 사용"을 골랐을 때 쓰이는 값)
+/// - `chosen`: 이 화면에서만 임시로 바꾼 언어
+fn language_row(
+    ui: &mut Ui,
+    support: &LanguageSupport,
+    configured: &str,
+    chosen: &mut Option<String>,
+) {
+    let label = t!("stt.language.label");
+    // 한 언어만 인식하는 모델(영어 전용 등)은 무엇을 골라도 그 언어로 인식하므로 고르지 않습니다.
+    if let Some(only) = support.single() {
+        Row::new(&label)
+            .help(&single_language_note(only))
+            .show(ui, |ui| fixed_language(ui, only));
+        return;
+    }
+
+    let choices = support.choices();
+    let warning =
+        unsupported_language(&choices, configured, chosen.as_deref()).map(unsupported_warning);
+    let mut items = vec![ComboItem::new(
+        None,
+        t!(
+            "transcribe.follow_settings",
+            value = language_name(configured)
+        ),
+    )];
+    items.extend(
+        language_items(&choices, chosen.as_deref().unwrap_or_default())
+            .into_iter()
+            .map(|item| item.map_value(Some)),
+    );
+    Row::new(&label)
+        .help(&t!("transcribe.temporary_help"))
+        .warning_opt(warning.as_deref())
+        .show(ui, |ui| {
+            // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+            let width = row::CONTROL_WIDTH.min(ui.available_width());
+            language_combo(ui, "transcribe_language", width, chosen, &items);
+        });
+}
+
+/// 이번 받아쓰기에 쓰일 언어(`chosen`, 없으면 `configured`)가 고를 수 있는 언어(`choices`)에
+/// 없으면 그 언어를 돌려줍니다.
+///
+/// 엔진을 바꿔도 임시로 고른 언어는 그대로 두므로, 새 모델이 그 언어를 인식하지 못할 수 있습니다.
+/// 그때 값을 몰래 바꾸지 않고 경고로 알리는 데 씁니다.
+fn unsupported_language<'a>(
+    choices: &[String],
+    configured: &'a str,
+    chosen: Option<&'a str>,
+) -> Option<&'a str> {
+    let language = chosen.unwrap_or(configured);
+    (!choices.iter().any(|code| code == language)).then_some(language)
 }
 
 fn rtf_text(rtf: f64) -> String {
@@ -822,6 +888,20 @@ fn preview(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_that_the_model_cannot_recognize_is_reported() {
+        let choices = ["auto", "ko", "en"].map(str::to_owned);
+        // 설정 값을 따를 때는 설정의 언어를, 임시로 골랐을 때는 그 언어를 봅니다.
+        assert_eq!(unsupported_language(&choices, "ko", None), None);
+        assert_eq!(unsupported_language(&choices, "fr", None), Some("fr"));
+        assert_eq!(unsupported_language(&choices, "fr", Some("en")), None);
+        assert_eq!(
+            unsupported_language(&choices, "ko", Some("fr")),
+            Some("fr"),
+            "엔진을 바꿔서 임시로 고른 언어를 못 쓰게 됐으면 알려야 합니다"
+        );
+    }
 
     #[test]
     fn preview_flattens_and_truncates() {

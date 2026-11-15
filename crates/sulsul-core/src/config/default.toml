@@ -32,10 +32,8 @@ max_record_seconds = 120
 feedback_sounds = true
 
 [stt]
-# 음성 인식 엔진 ID. 엔진별 설정은 [stt.engines.<엔진 ID>]에 있습니다.
+# 음성 인식 엔진 ID. 엔진별 설정(인식 언어 등)은 [stt.engines.<엔진 ID>]에 있습니다.
 engine = "whisper_local"
-# 인식 언어: ko, en, auto(자동 감지)
-language = "ko"
 # 자주 쓰는 용어나 고유명사를 적어 두면 인식 정확도가 올라갑니다.
 initial_prompt = ""
 # 클라우드 API 엔진(`cloud_api`)을 쓸 때 선택된 프로필 ID
