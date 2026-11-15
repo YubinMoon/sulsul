@@ -13,7 +13,7 @@ pub use clip::AudioClip;
 pub use device::{InputDevice, input_devices};
 pub use recorder::{Recording, RecordingOptions};
 pub use resample::resample;
-pub use wav::{read_wav, write_wav};
+pub use wav::{encode_wav_bytes, read_wav, test_audio_clip, write_wav};
 
 use std::path::PathBuf;
 

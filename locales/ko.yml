@@ -399,6 +399,16 @@ engine:
       fp32:
         name: SenseVoice Small FP32 (고정밀)
         description: 약 938 MB. 양자화 없는 원본 정밀도 모델입니다.
+  cloud_api:
+    name: 클라우드 API (OpenAI 호환)
+    description: OpenAI, Groq 또는 호환 `/audio/transcriptions` 엔드포인트로 음성을 전송해 인식합니다.
+    settings:
+      timeout_seconds: 요청 제한 시간(초)
+      timeout_seconds_help: HTTP 요청 전체 응답을 기다리는 최대 시간입니다.
+    providers:
+      openai: OpenAI
+      groq: Groq
+      custom: 커스텀 (OpenAI 호환)
   mock:
     name: 테스트용 가짜 엔진
     description: 실제 인식 없이 받은 오디오 정보를 돌려줍니다. 개발 중 화면 흐름을 확인할 때 씁니다.

@@ -13,6 +13,7 @@ repository = "https://github.com/YubinMoon/sulsul"
 sulsul-core = { path = "crates/sulsul-core" }
 sulsul-stt-whisper = { path = "crates/sulsul-stt-whisper" }
 sulsul-stt-sensevoice = { path = "crates/sulsul-stt-sensevoice" }
+sulsul-stt-cloud = { path = "crates/sulsul-stt-cloud" }
 
 # 공통
 anyhow = "1"
@@ -22,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # 설정
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1"
 toml_edit = "0.25"
 serde_ignored = "0.1"

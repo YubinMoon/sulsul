@@ -28,6 +28,7 @@ pub use transcriber::{Prepared, TranscribeError, TranscribeJob, Transcriber, Tra
 
 use crate::audio::AudioClip;
 use crate::cancel::CancelToken;
+use crate::config::SttConfig;
 use crate::paths::AppPaths;
 use crate::settings::{ResolvedSettings, SettingField, SettingIssue};
 
@@ -185,6 +186,14 @@ pub trait SttEngineFactory: Send + Sync {
         ctx: &EngineContext,
         settings: &ResolvedSettings,
     ) -> Result<Box<dyn SttEngine>, SttError>;
+
+    /// 전역 `[stt]` 설정을 엔진 실행 설정으로 해석합니다.
+    ///
+    /// 기본 구현은 `[stt.engines.<ID>]`만 읽으며, 프로필 기반 엔진은 오버라이드할 수 있습니다.
+    fn resolve_settings(&self, stt: &SttConfig) -> ResolvedSettings {
+        let descriptor = self.descriptor();
+        crate::settings::resolve(&descriptor.settings, stt.engines.get(&descriptor.id))
+    }
 
     /// 이 설정으로 엔진을 만들 때 필요한 모델 파일.
     /// 모델 파일이 필요 없는 엔진(클라우드 등)은 `None`을 돌려줍니다.

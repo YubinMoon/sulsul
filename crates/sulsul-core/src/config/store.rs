@@ -123,6 +123,12 @@ impl ConfigStore {
             None => template_document(),
         };
         merge_document(&mut doc, &fresh);
+        // `Vec::is_empty`로 직렬화가 생략되는 배열 테이블은 모두 삭제됐을 때 명시적으로 비워 줍니다.
+        if config.stt.api_profiles.is_empty()
+            && let Some(stt_table) = doc.get_mut("stt").and_then(|item| item.as_table_mut())
+        {
+            stt_table.remove("api_profiles");
+        }
         self.write_text(&doc.to_string())
     }
 
@@ -336,5 +342,54 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(hits.load(Ordering::SeqCst) > 0);
+    }
+
+    #[test]
+    fn saving_empty_api_profiles_removes_stale_entries_and_preserves_comments() {
+        use crate::config::ApiProfile;
+
+        let (_dir, store) = store();
+        store.load_or_create().unwrap();
+
+        let mut config = store.load().unwrap().config;
+        config.stt.api_profile = "p1".into();
+        config.stt.api_profiles = vec![
+            ApiProfile {
+                id: "p1".into(),
+                name: "OpenAI".into(),
+                provider: "openai".into(),
+                endpoint: "https://api.openai.com/v1".into(),
+                api_key: "sk-1".into(),
+                model: "whisper-1".into(),
+            },
+            ApiProfile {
+                id: "p2".into(),
+                name: "Groq".into(),
+                provider: "groq".into(),
+                endpoint: "https://api.groq.com/openai/v1".into(),
+                api_key: "gsk-2".into(),
+                model: "whisper-large-v3-turbo".into(),
+            },
+        ];
+        store.save(&config).unwrap();
+
+        let loaded = store.load().unwrap().config;
+        assert_eq!(loaded.stt.api_profiles.len(), 2);
+
+        config.stt.api_profiles.remove(0);
+        config.stt.api_profile = "p2".into();
+        store.save(&config).unwrap();
+        let loaded = store.load().unwrap().config;
+        assert_eq!(loaded.stt.api_profiles.len(), 1);
+        assert_eq!(loaded.stt.api_profiles[0].id, "p2");
+
+        config.stt.api_profiles.clear();
+        config.stt.api_profile.clear();
+        store.save(&config).unwrap();
+        let loaded = store.load().unwrap().config;
+        assert!(loaded.stt.api_profiles.is_empty());
+
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("# 술술(sulsul) 설정 파일"));
     }
 }

@@ -4399,6 +4399,7 @@ dependencies = [
  "rfd",
  "rust-i18n",
  "sulsul-core",
+ "sulsul-stt-cloud",
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
  "tempfile",
@@ -4413,6 +4414,7 @@ dependencies = [
  "anyhow",
  "clap",
  "sulsul-core",
+ "sulsul-stt-cloud",
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
  "tracing",
@@ -4435,6 +4437,17 @@ dependencies = [
  "thiserror 2.0.21",
  "toml 1.2.1+spec-1.1.0",
  "toml_edit 0.25.19+spec-1.1.0",
+ "tracing",
+ "ureq",
+]
+
+[[package]]
+name = "sulsul-stt-cloud"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sulsul-core",
  "tracing",
  "ureq",
 ]

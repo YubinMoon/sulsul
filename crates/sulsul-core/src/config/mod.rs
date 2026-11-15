@@ -121,6 +121,24 @@ impl Default for AudioConfig {
     }
 }
 
+/// 저장된 원격 STT API 프로필 (`[[stt.api_profiles]]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ApiProfile {
+    /// 프로필 고유 ID
+    pub id: String,
+    /// 화면에 표시할 이름
+    pub name: String,
+    /// API 공급자 프리셋 (`openai`, `groq`, `custom`)
+    pub provider: String,
+    /// 기본 URL 또는 전체 `/audio/transcriptions` 엔드포인트
+    pub endpoint: String,
+    /// 인증 키
+    pub api_key: String,
+    /// 사용할 모델 이름 (예: `whisper-1`, `whisper-large-v3-turbo`)
+    pub model: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttConfig {
@@ -130,6 +148,11 @@ pub struct SttConfig {
     pub language: String,
     /// 용어 힌트
     pub initial_prompt: String,
+    /// 선택된 클라우드 API 프로필 ID (`cloud_api` 엔진용)
+    pub api_profile: String,
+    /// 저장된 클라우드 API 프로필 목록
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_profiles: Vec<ApiProfile>,
     /// 엔진별 설정 (`[stt.engines.<ID>]`). 값 검증은 각 엔진의 스키마가 담당합니다.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub engines: BTreeMap<String, toml::Table>,
@@ -141,8 +164,23 @@ impl Default for SttConfig {
             engine: "whisper_local".into(),
             language: "ko".into(),
             initial_prompt: String::new(),
+            api_profile: String::new(),
+            api_profiles: Vec::new(),
             engines: BTreeMap::new(),
         }
+    }
+}
+
+impl SttConfig {
+    /// 현재 활성화된 클라우드 API 프로필을 돌려줍니다.
+    ///
+    /// `api_profile` ID가 일치하는 항목을 우선 찾고, ID가 비어 있으면 첫 번째 프로필을 씁니다.
+    pub fn active_api_profile(&self) -> Option<&ApiProfile> {
+        let selected = self.api_profile.trim();
+        if selected.is_empty() {
+            return self.api_profiles.first();
+        }
+        self.api_profiles.iter().find(|p| p.id == selected)
     }
 }
 

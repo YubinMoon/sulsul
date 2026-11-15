@@ -319,6 +319,18 @@ pub fn resolve(schema: &[SettingField], table: Option<&Table>) -> ResolvedSettin
 pub struct ResolvedSettings(Table);
 
 impl ResolvedSettings {
+    pub fn from_table(table: Table) -> Self {
+        Self(table)
+    }
+
+    pub fn set(&mut self, key: impl Into<String>, value: Value) {
+        self.0.insert(key.into(), value);
+    }
+
+    pub fn into_table(self) -> Table {
+        self.0
+    }
+
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key)
     }

@@ -119,6 +119,7 @@ fn registry() -> SttRegistry {
     let mut registry = SttRegistry::new();
     registry.register(sulsul_stt_whisper::factory());
     registry.register(sulsul_stt_sensevoice::factory());
+    registry.register(sulsul_stt_cloud::factory());
     registry.register(Arc::new(MockEngineFactory::new()));
     registry
 }

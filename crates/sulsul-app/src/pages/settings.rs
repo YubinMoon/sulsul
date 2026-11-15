@@ -530,6 +530,8 @@ fn reset_to_defaults(config: &mut Config, registry: &SttRegistry) {
         };
         fresh.stt.engines.insert(id.clone(), table);
     }
+    fresh.stt.api_profile = config.stt.api_profile.clone();
+    fresh.stt.api_profiles = config.stt.api_profiles.clone();
     fresh.postprocess.processors = config.postprocess.processors.clone();
     let engine = fresh.stt.engine.clone();
     registry.ensure_engine_defaults(&mut fresh.stt, &engine);

@@ -38,6 +38,8 @@ engine = "whisper_local"
 language = "ko"
 # 자주 쓰는 용어나 고유명사를 적어 두면 인식 정확도가 올라갑니다.
 initial_prompt = ""
+# 클라우드 API 엔진(`cloud_api`)을 쓸 때 선택된 프로필 ID
+api_profile = ""
 
 [output]
 # paste: 커서 위치에 붙여넣기

@@ -58,13 +58,10 @@ impl SttRegistry {
         config: &SttConfig,
         id: &str,
     ) -> Result<ResolvedSettings, SttError> {
-        let descriptor = self
-            .descriptor(id)
+        let factory = self
+            .get(id)
             .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
-        Ok(settings::resolve(
-            &descriptor.settings,
-            config.engines.get(id),
-        ))
+        Ok(factory.resolve_settings(config))
     }
 
     /// 지금 설정으로 이 엔진이 쓸 모델 파일 (모델 파일을 쓰지 않는 엔진이면 `None`)
@@ -77,7 +74,7 @@ impl SttRegistry {
         let factory = self
             .get(id)
             .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
-        let resolved = settings::resolve(&factory.descriptor().settings, config.engines.get(id));
+        let resolved = factory.resolve_settings(config);
         Ok(factory.model(ctx, &resolved))
     }
 
@@ -149,7 +146,7 @@ impl SttRegistry {
                 issues,
             });
         }
-        let resolved = settings::resolve(&descriptor.settings, config.engines.get(id));
+        let resolved = factory.resolve_settings(config);
         factory.create(ctx, &resolved)
     }
 }
