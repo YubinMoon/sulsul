@@ -167,6 +167,49 @@ mod tests {
         assert!(missing.is_empty(), "번역이 없는 키: {missing:#?}");
     }
 
+    /// 글 다듬기 로컬 모델 카탈로그와 제공자 프리셋이 가리키는 번역 키도 모두 있어야 합니다.
+    /// 개발 빌드에만 나오는 가짜 제공자도 함께 봅니다.
+    #[test]
+    fn text_polishing_catalog_and_providers_have_translations() {
+        use sulsul_core::AppPaths;
+
+        rust_i18n::set_locale("ko");
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(dir.path());
+
+        let mut keys = Vec::new();
+        for family in sulsul_llm::catalog::families(&paths) {
+            keys.push(family.name_key);
+            keys.push(family.description_key);
+            for variant in family.variants {
+                keys.push(variant.name_key);
+                keys.push(variant.description_key);
+                for choice in variant.choices {
+                    keys.push(crate::pages::models::axis_name_key(choice.axis));
+                    keys.push(choice.label_key);
+                }
+            }
+        }
+        assert!(!keys.is_empty(), "검사할 모델 카탈로그가 없습니다");
+
+        let presets = sulsul_llm::presets::presets(true);
+        assert!(
+            presets
+                .iter()
+                .any(|preset| preset.id == sulsul_llm::presets::MOCK_PROVIDER_ID),
+            "가짜 제공자가 검사 대상에 없습니다"
+        );
+        keys.extend(presets.iter().map(|preset| preset.name_key.to_owned()));
+        keys.sort_unstable();
+        keys.dedup();
+
+        let missing: Vec<_> = keys
+            .into_iter()
+            .filter(|key| tr_opt(key).is_none())
+            .collect();
+        assert!(missing.is_empty(), "번역이 없는 키: {missing:#?}");
+    }
+
     #[test]
     fn default_locale_is_available() {
         assert!(available_locales().iter().any(|locale| locale == "ko"));

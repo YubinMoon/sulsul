@@ -369,6 +369,8 @@ pub struct ComboItem<T> {
     pub detail: Option<String>,
     /// 지금은 고를 수 없는 항목이면 그 이유. 항목을 꺼진 상태로 보여 주고 아래에 이유를 적습니다.
     pub unavailable: Option<String>,
+    /// 이 항목이 속한 묶음의 제목. 앞 항목과 묶음이 달라지는 자리에 제목을 한 번 보여 줍니다.
+    pub group: Option<String>,
 }
 
 impl<T> ComboItem<T> {
@@ -378,7 +380,14 @@ impl<T> ComboItem<T> {
             label: label.into(),
             detail: None,
             unavailable: None,
+            group: None,
         }
+    }
+
+    /// 목록에서 이 항목을 `title` 묶음 아래에 놓습니다. 같은 묶음의 항목은 이어서 넣어야 합니다.
+    pub fn group(mut self, title: impl Into<String>) -> Self {
+        self.group = Some(title.into());
+        self
     }
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
@@ -399,6 +408,7 @@ impl<T> ComboItem<T> {
             label: self.label,
             detail: self.detail,
             unavailable: self.unavailable,
+            group: self.group,
         }
     }
 }
@@ -444,7 +454,15 @@ pub fn combo<T: PartialEq + Clone>(
         .show_ui(ui, |ui| {
             // 목록의 처음 너비(= 버튼 너비). 이유 문구는 이 너비 안에서 줄을 바꿉니다.
             let reason_width = ui.available_width();
-            for item in items {
+            let mut previous_group = None;
+            for (index, item) in items.iter().enumerate() {
+                let group = item.group.as_deref();
+                if group != previous_group {
+                    previous_group = group;
+                    if let Some(title) = group {
+                        combo_group_title(ui, title, index == 0);
+                    }
+                }
                 let is_selected = item.value == *current;
                 let enabled = item.unavailable.is_none();
                 let label_color = match (enabled, is_selected) {
@@ -476,6 +494,23 @@ pub fn combo<T: PartialEq + Clone>(
             }
         });
     changed
+}
+
+/// 콤보 목록 안의 묶음 제목 (예: "클라우드 서비스"). 항목 글자와 왼쪽을 맞춘 작은 글이고 누를 수 없습니다.
+fn combo_group_title(ui: &mut Ui, title: &str, first: bool) {
+    let palette = Palette::of(ui);
+    let padding = ui.spacing().button_padding.x;
+    if !first {
+        ui.add_space(4.0);
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(padding);
+        ui.label(
+            RichText::new(title)
+                .font(theme::semibold(size::CAPTION))
+                .color(palette.text_faint),
+        );
+    });
 }
 
 /// 고를 수 없는 콤보 항목 아래에 적는 이유. 항목 글자와 왼쪽을 맞추고, 길면 줄을 바꿉니다.

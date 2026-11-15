@@ -1,19 +1,27 @@
-//! 모델 관리 화면: 받아쓰기에 쓸 로컬 모델과 외부 제공자를 고르고, 내려받고, 등록합니다.
+//! 모델 관리 화면: 받아쓰기와 글 다듬기에 쓸 로컬 모델과 외부 제공자를 고르고, 내려받고, 등록합니다.
 //!
-//! 화면은 STT / LLM 두 갈래이고, STT 안은 탭 세 개로 나뉩니다.
+//! 화면은 "음성 인식 / 글 다듬기" 두 갈래이고, 갈래마다 같은 탭 세 개가 있습니다
+//! (사용 가능 모델 / 로컬 모델 내려받기 / 외부 제공자).
 //!
-//! - `entries`: "사용 가능 엔진" 목록의 항목과, 항목을 켜고 지우는 규칙 (화면을 그리지 않음)
+//! - `entries`: 음성 인식 "사용 가능 모델" 목록의 항목과, 항목을 켜고 지우는 규칙 (화면을 그리지 않음).
+//!   글 다듬기의 같은 규칙은 `sulsul_llm::entries`에 있습니다.
+//! - `profiles`: 외부 제공자를 다루는 갈래 공통 규칙 (화면을 그리지 않음)
 //! - `jobs`: 모델 내려받기와 엔진 테스트 작업 스레드
-//! - `parts`: 여러 탭이 함께 쓰는 화면 조각
-//! - `available` · `download` · `providers`: 탭별 화면
+//! - `parts`: 두 갈래의 탭이 함께 쓰는 화면 조각
+//! - `available` · `download` · `providers`: 음성 인식 갈래의 탭별 화면. 내려받기 카드와 제공자
+//!   등록 칸처럼 두 갈래가 함께 쓰는 탭 조각도 여기에 있습니다.
+//! - `llm`: 글 다듬기 갈래
 //!
-//! 내려받기와 테스트는 이 화면의 상태에 들어 있어, 탭이나 화면을 바꿔도 계속 진행됩니다.
+//! 내려받기와 테스트는 이 화면의 상태에 들어 있어, 탭이나 갈래, 화면을 바꿔도 계속 진행됩니다.
+//! 내려받기는 두 갈래를 통틀어 한 번에 하나만 합니다.
 
 mod available;
 mod download;
 mod entries;
 mod jobs;
+mod llm;
 mod parts;
+mod profiles;
 mod providers;
 
 use std::time::Duration;
@@ -30,14 +38,15 @@ pub(crate) use self::download::axis_name_key;
 use self::available::PendingConfirm;
 use self::download::Picker;
 use self::entries::{EntryKey, activate, available_entries, selection_ready};
-use self::jobs::{ActiveDownload, ActiveTest, DownloadEnd, TestOutcome, TestTarget};
+use self::jobs::{ActiveTest, DownloadEnd, DownloadTarget, Downloads, TestOutcome, TestTarget};
+use self::llm::LlmPane;
+use self::parts::{ListState, TestState};
 use self::providers::Draft;
 use super::{SECTION_GAP, header};
 use crate::session::{PageContext, Shared};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::controls;
 use crate::widgets::tabs::underline_tabs;
-use crate::widgets::text;
 
 /// 화면의 큰 갈래
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,13 +54,13 @@ enum Category {
     /// 음성 인식
     #[default]
     Stt,
-    /// 다듬기 (아직 준비 중)
+    /// 글 다듬기
     Llm,
 }
 
-/// STT 갈래 안의 탭
+/// 갈래 안의 탭. 두 갈래가 같은 탭 세 개를 씁니다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum SttTab {
+enum Tab {
     /// 지금 쓸 수 있는 모델·제공자 목록
     #[default]
     Available,
@@ -61,63 +70,62 @@ enum SttTab {
     Providers,
 }
 
-/// 내려받지 못한 모델과 그 이유
-struct DownloadFailure {
-    engine_id: String,
-    variant_id: String,
-    /// 화면에 보일 실패 이유
-    message: String,
+/// 갈래 안의 탭 줄
+fn tab_bar(ui: &mut Ui, tab: &mut Tab) {
+    let tabs = [
+        (Tab::Available, t!("models.tab.available").into_owned()),
+        (Tab::Download, t!("models.tab.download").into_owned()),
+        (Tab::Providers, t!("models.tab.providers").into_owned()),
+    ];
+    controls::segmented(ui, tab, &tabs);
+    ui.add_space(SECTION_GAP);
 }
 
 #[derive(Default)]
 pub struct ModelsPage {
     category: Category,
-    tab: SttTab,
 
-    /// "사용 가능 엔진" 탭에서 펼쳐 둔 카드. 한 번에 하나만 펼칩니다.
-    expanded: Option<EntryKey>,
-    /// 다음에 그릴 때 화면을 옮겨 보여 줄 카드
-    reveal: Option<EntryKey>,
-    /// 펼친 제공자 카드에서 API 키를 가리지 않고 보여 줄지
-    reveal_api_key: bool,
-
-    /// "로컬 모델 내려받기" 탭에서 고른 엔진과 단계 값
+    /// 음성 인식 갈래에서 보고 있는 탭
+    tab: Tab,
+    /// 음성 인식 "사용 가능 모델" 목록의 펼침 상태
+    list: ListState<EntryKey>,
+    /// 음성 인식 "로컬 모델 내려받기" 탭에서 고른 엔진과 단계 값
     picker: Picker,
-    /// "외부 제공자" 탭에서 입력 중인 새 제공자
+    /// 같은 탭의 "가지고 있는 모델 파일 쓰기"를 펼쳐 두었는지
+    own_file_open: bool,
+    /// 음성 인식 "외부 제공자" 탭에서 입력 중인 새 제공자
     draft: Draft,
-
-    download: Option<ActiveDownload>,
-    /// 방금 다 받은 모델. 다음에 화면을 그릴 때, 지금 설정으로 받아쓰기를 할 수 없으면 이 모델을 켭니다.
-    /// (`tick`에서는 설정을 바꿀 수 없어 화면을 그릴 때까지 미룹니다)
-    downloaded: Option<EntryKey>,
-    download_failure: Option<DownloadFailure>,
-
+    /// 음성 인식 엔진 테스트
     test: Option<ActiveTest>,
     last_test: Option<TestOutcome>,
-
+    /// 음성 인식 갈래에서 확인을 받고 있는 제거
     confirm: Option<PendingConfirm>,
+
+    /// 글 다듬기 갈래
+    llm: LlmPane,
+
+    /// 모델 내려받기. 두 갈래가 함께 씁니다.
+    downloads: Downloads,
+    /// 방금 다 받은 모델. 다음에 화면을 그릴 때, 그 갈래에서 지금 설정으로 쓸 수 있는 것이 없으면
+    /// 이 모델을 켭니다. (`tick`에서는 설정을 바꿀 수 없어 화면을 그릴 때까지 미룹니다)
+    downloaded: Option<DownloadTarget>,
 }
 
 impl ModelsPage {
     /// 내려받기나 테스트가 진행 중이면 `true`입니다.
     pub fn is_busy(&self) -> bool {
-        self.download.is_some() || self.test.is_some()
+        self.downloads.active().is_some() || self.test.is_some() || self.llm.is_busy()
     }
 
     /// 내려받기와 테스트 작업 스레드가 끝났는지 확인합니다. 다른 화면을 보고 있을 때도 불립니다.
     pub fn tick(&mut self, shared: &mut Shared, ctx: &egui::Context) {
-        let ended = self.download.as_ref().and_then(ActiveDownload::poll);
-        if let Some(end) = ended
-            && let Some(download) = self.download.take()
-        {
+        if let Some((download, end)) = self.downloads.take_finished() {
             match end {
                 DownloadEnd::Done => {
                     shared
                         .toasts
                         .info(t!("models.download.done", model = download.variant_label));
-                    self.download_failure = None;
-                    self.downloaded =
-                        Some(EntryKey::variant(&download.engine_id, &download.variant_id));
+                    self.downloaded = Some(download.target);
                 }
                 DownloadEnd::Cancelled => {
                     shared.toasts.info(t!("models.download.cancelled"));
@@ -126,11 +134,6 @@ impl ModelsPage {
                     shared
                         .toasts
                         .error(t!("models.download.failed", message = message));
-                    self.download_failure = Some(DownloadFailure {
-                        engine_id: download.engine_id,
-                        variant_id: download.variant_id,
-                        message,
-                    });
                 }
             }
         }
@@ -149,6 +152,8 @@ impl ModelsPage {
                 kind: test.kind,
             });
         }
+
+        self.llm.tick();
 
         if self.is_busy() {
             ctx.request_repaint_after(Duration::from_millis(80));
@@ -176,55 +181,59 @@ impl ModelsPage {
 
         match self.category {
             Category::Stt => self.stt_ui(ui, cx),
-            Category::Llm => {
-                ui.label(text::muted(ui, t!("models.llm.coming_soon")));
-            }
+            Category::Llm => self.llm.ui(ui, cx, &mut self.downloads),
         }
 
         self.confirm_modal(ui, cx);
+        self.llm.confirm_modal(ui, cx);
     }
 
     fn stt_ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        let tabs = [
-            (SttTab::Available, t!("models.tab.available").into_owned()),
-            (SttTab::Download, t!("models.tab.download").into_owned()),
-            (SttTab::Providers, t!("models.tab.providers").into_owned()),
-        ];
-        controls::segmented(ui, &mut self.tab, &tabs);
-        ui.add_space(SECTION_GAP);
-
+        tab_bar(ui, &mut self.tab);
         match self.tab {
-            SttTab::Available => self.available_tab(ui, cx),
-            SttTab::Download => self.download_tab(ui, cx),
-            SttTab::Providers => self.providers_tab(ui, cx),
+            Tab::Available => self.available_tab(ui, cx),
+            Tab::Download => self.download_tab(ui, cx),
+            Tab::Providers => self.providers_tab(ui, cx),
         }
     }
 
-    /// 방금 다 받은 모델이 있고 지금 설정으로는 받아쓰기를 할 수 없으면, 그 모델을 켭니다.
+    /// 방금 다 받은 모델이 있고 그 갈래에서 지금 설정으로 쓸 수 있는 것이 없으면, 그 모델을 켭니다.
     /// 이미 쓸 수 있는 모델이나 제공자를 골라 두었으면 건드리지 않습니다.
     fn use_downloaded(&mut self, cx: &mut PageContext<'_>) {
-        let Some(key) = self.downloaded.take() else {
+        let Some(target) = self.downloaded.take() else {
             return;
         };
         if cx.locked {
             return;
         }
-        let engine_ctx = EngineContext {
-            paths: cx.shared.paths.clone(),
-        };
-        let entries = available_entries(&cx.shared.registry, &engine_ctx, &cx.config.stt);
-        if selection_ready(&entries) {
-            return;
-        }
-        if entries.iter().any(|entry| entry.key == key && entry.ready) {
-            activate(&cx.shared.registry, &mut cx.config.stt, &key);
+        match target {
+            DownloadTarget::Stt {
+                engine_id,
+                variant_id,
+            } => {
+                let key = EntryKey::variant(&engine_id, &variant_id);
+                let engine_ctx = EngineContext {
+                    paths: cx.shared.paths.clone(),
+                };
+                let entries = available_entries(&cx.shared.registry, &engine_ctx, &cx.config.stt);
+                if selection_ready(&entries) {
+                    return;
+                }
+                if entries.iter().any(|entry| entry.key == key && entry.ready) {
+                    activate(&cx.shared.registry, &mut cx.config.stt, &key);
+                }
+            }
+            DownloadTarget::Llm { variant_id } => llm::use_downloaded(cx, &variant_id),
         }
     }
 
+    /// `target`의 테스트 버튼이 보일 모습
+    fn test_state(&self, target: &TestTarget) -> TestState {
+        TestState::of(self.test.as_ref().map(|test| &test.target), target)
+    }
+
     fn is_testing(&self, target: &TestTarget) -> bool {
-        self.test
-            .as_ref()
-            .is_some_and(|test| &test.target == target)
+        self.test_state(target) == TestState::Running
     }
 
     fn cancel_test(&self) {

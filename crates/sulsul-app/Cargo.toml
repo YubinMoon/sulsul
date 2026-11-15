@@ -24,6 +24,7 @@ sulsul-core.workspace = true
 sulsul-stt-whisper.workspace = true
 sulsul-stt-sensevoice.workspace = true
 sulsul-stt-cloud.workspace = true
+sulsul-llm.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

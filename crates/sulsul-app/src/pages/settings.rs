@@ -1,31 +1,29 @@
 //! 설정 화면. 여기서 바꾼 값은 TOML 설정 파일에 저장됩니다.
+//!
+//! 음성 인식 엔진·모델·제공자와 그 설정(인식 언어, 용어 힌트, 엔진별 설정)은 모델 관리 화면에서
+//! 고릅니다. 여기에는 두지 않습니다.
 
-use egui::{DragValue, TextEdit, Ui};
+use egui::{DragValue, Ui};
 use rust_i18n::t;
 use sulsul_core::config::{
-    Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, OutputMode, RESTORE_DELAY_MS, SttConfig,
-    Theme,
+    Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, OutputMode, RESTORE_DELAY_MS, Theme,
 };
-use sulsul_core::settings::{self, SettingField};
-use sulsul_core::stt::{EngineDescriptor, LANGUAGE_KEY, SttRegistry};
-use sulsul_core::toml::Table;
+use sulsul_core::settings;
+use sulsul_core::stt::SttRegistry;
 
 use super::record::{hotkey_key_name, hotkey_mode_name};
-use super::{Page, SECTION_GAP, header};
+use super::{SECTION_GAP, header};
 use crate::error_text;
-use crate::i18n::{self, tr};
+use crate::i18n;
 use crate::icons::Icon;
 use crate::session::PageContext;
 use crate::system;
-use crate::theme::Palette;
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
 use crate::widgets::confirm::{Answer, Confirm};
 use crate::widgets::controls::{self, ComboItem};
 use crate::widgets::device_combo::device_combo;
-use crate::widgets::language::language_setting_row;
 use crate::widgets::row::{self, CONTROL_WIDTH, Row};
-use crate::widgets::setting_field::setting_fields;
 use crate::widgets::text;
 
 /// 단축키로 고를 수 있는 키. 화면에서 좌우 Ctrl을 구분해 입력받을 수 없어 목록에서 고릅니다.
@@ -75,8 +73,6 @@ impl SettingsPage {
             hotkey_section(ui, cx.config, &soon);
             ui.add_space(SECTION_GAP);
             audio_section(ui, cx, &soon);
-            ui.add_space(SECTION_GAP);
-            stt_section(ui, cx);
             ui.add_space(SECTION_GAP);
             output_section(ui, cx.config, &soon);
             ui.add_space(SECTION_GAP);
@@ -319,184 +315,6 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
     });
 }
 
-fn stt_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
-    Section::new(Icon::AudioLines, &t!("settings.stt.title")).show(ui, |ui| {
-        let registry = &cx.shared.registry;
-        let stt = &mut cx.config.stt;
-        let palette = Palette::of(ui);
-
-        // 엔진
-        let mut items: Vec<_> = registry
-            .descriptors()
-            .map(|descriptor| ComboItem::new(descriptor.id.clone(), tr(&descriptor.name_key)))
-            .collect();
-        let descriptor = registry.descriptor(&stt.engine);
-        if descriptor.is_none() {
-            items.push(ComboItem::new(stt.engine.clone(), stt.engine.clone()));
-        }
-        let description = descriptor.map(|descriptor| tr(&descriptor.description_key));
-        let unknown = descriptor
-            .is_none()
-            .then(|| t!("stt.engine.unknown", id = stt.engine.as_str()).into_owned());
-        Row::new(&t!("stt.engine.label"))
-            .help_opt(description.as_deref())
-            .warning_opt(unknown.as_deref())
-            .show(ui, |ui| {
-                let fallback = stt.engine.clone();
-                controls::combo(
-                    ui,
-                    "stt_engine",
-                    CONTROL_WIDTH,
-                    &mut stt.engine,
-                    &items,
-                    &fallback,
-                );
-            });
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            if controls::icon_text_button(ui, Icon::Boxes, t!("settings.stt.open_models")).clicked()
-            {
-                cx.shared.navigate = Some(Page::Models);
-            }
-            if stt.engine == sulsul_stt_cloud::ENGINE_ID {
-                match stt.active_api_profile() {
-                    Some(profile) => {
-                        let name = if profile.name.trim().is_empty() {
-                            profile.id.as_str()
-                        } else {
-                            profile.name.as_str()
-                        };
-                        let provider_label = sulsul_stt_cloud::find_preset(&profile.provider)
-                            .map(|p| tr(p.name_key))
-                            .unwrap_or_else(|| profile.provider.clone());
-                        ui.label(text::caption(
-                            ui,
-                            t!(
-                                "settings.stt.active_api_profile",
-                                profile = name,
-                                provider = provider_label,
-                                model = profile.model.as_str()
-                            ),
-                        ));
-                    }
-                    None => {
-                        ui.label(
-                            text::caption(ui, t!("settings.stt.no_active_api_profile"))
-                                .color(palette.warning_text),
-                        );
-                    }
-                }
-            }
-        });
-        row::separator(ui);
-
-        // 위에서 엔진을 바꿨을 수 있으니 지금 고른 엔진을 다시 찾습니다.
-        let descriptor = registry.descriptor(&stt.engine);
-
-        // 언어: 지금 고른 엔진의 설정(`[stt.engines.<엔진 ID>] language`)을 고칩니다.
-        // 고를 수 있는 언어는 지금 쓰는 모델을 따릅니다. 모르는 엔진이면 줄을 그리지 않습니다.
-        if let Some(descriptor) = descriptor
-            && let Some(field) = language_field(descriptor)
-            && let Ok(support) = registry.languages(stt, &descriptor.id)
-        {
-            let resolved = registry
-                .resolve_settings(stt, &descriptor.id)
-                .map(|settings| settings.str(LANGUAGE_KEY).to_owned())
-                .unwrap_or_default();
-            edit_engine_table(stt, &descriptor.id, |table| {
-                language_setting_row(
-                    ui,
-                    "stt_language",
-                    field,
-                    &t!("settings.stt.language_help"),
-                    &support,
-                    table,
-                    &resolved,
-                )
-            });
-            row::separator(ui);
-        }
-
-        // 용어 힌트
-        let supports_prompt = descriptor.is_none_or(|d| d.capabilities.supports_prompt);
-        let unsupported = (!supports_prompt).then(|| t!("settings.stt.prompt_unsupported"));
-        Row::new(&t!("settings.stt.initial_prompt"))
-            .help(&t!("settings.stt.initial_prompt_help"))
-            .warning_opt(unsupported.as_deref())
-            .show_below(ui, |ui| {
-                ui.add(
-                    TextEdit::multiline(&mut stt.initial_prompt)
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(t!("settings.stt.initial_prompt_hint")),
-                );
-            });
-
-        // 엔진별 설정: 엔진이 선언한 스키마대로 자동으로 그립니다.
-        // 인식 언어는 위에서 따로 그렸으므로 뺍니다.
-        if let Some(descriptor) = descriptor {
-            row::separator(ui);
-            ui.add_space(2.0);
-            ui.label(text::strong(t!(
-                "settings.stt.engine_settings",
-                engine = tr(&descriptor.name_key)
-            )));
-            ui.label(text::caption(
-                ui,
-                t!("settings.stt.engine_settings_help", id = descriptor.id),
-            ));
-            ui.add_space(6.0);
-            let fields: Vec<&SettingField> = descriptor
-                .settings
-                .iter()
-                .filter(|field| field.key != LANGUAGE_KEY)
-                .collect();
-            if fields.is_empty() {
-                ui.label(text::muted(ui, t!("settings.stt.engine_no_settings")));
-            } else {
-                let engine_id = descriptor.id.as_str();
-                edit_engine_table(stt, engine_id, |table| {
-                    setting_fields(ui, engine_id, fields, table, cx.frame)
-                });
-
-                // 스키마에 없는 키 (오타일 가능성). 더 이상 쓰지 않는 키는 빠집니다.
-                let unknown_keys = registry.unknown_keys(stt, engine_id);
-                if !unknown_keys.is_empty() {
-                    ui.add_space(4.0);
-                    ui.label(
-                        text::caption(
-                            ui,
-                            t!(
-                                "settings.stt.unknown_engine_keys",
-                                keys = unknown_keys.join(", ")
-                            ),
-                        )
-                        .color(palette.warning_text),
-                    );
-                }
-            }
-        }
-
-        // 등록되지 않은 엔진의 설정 표 (다른 빌드에서 쓰던 엔진이거나 오타)
-        let orphaned: Vec<_> = stt
-            .engines
-            .keys()
-            .filter(|id| registry.descriptor(id).is_none())
-            .cloned()
-            .collect();
-        if !orphaned.is_empty() {
-            ui.add_space(8.0);
-            Banner::new(Tone::Warning)
-                .line(t!(
-                    "settings.stt.unregistered_engines",
-                    ids = orphaned.join(", ")
-                ))
-                .show(ui);
-        }
-    });
-}
-
 fn output_section(ui: &mut Ui, config: &mut Config, soon: &str) {
     Section::new(Icon::ClipboardPaste, &t!("settings.output.title"))
         .badge(soon)
@@ -569,24 +387,6 @@ fn postprocess_section(ui: &mut Ui, config: &Config, soon: &str) {
         });
 }
 
-/// 엔진 스키마의 인식 언어 항목 (언어를 고르지 않는 엔진이면 `None`)
-fn language_field(descriptor: &EngineDescriptor) -> Option<&SettingField> {
-    descriptor
-        .settings
-        .iter()
-        .find(|field| field.key == LANGUAGE_KEY)
-}
-
-/// 엔진 설정 표(`[stt.engines.<엔진 ID>]`)의 사본을 `edit`에 넘기고, 값이 바뀌었을 때만(`true`) 설정에 씁니다.
-///
-/// 화면을 보기만 해서는 설정에 빈 표가 생기거나 값이 바뀌지 않게 하려는 것입니다.
-fn edit_engine_table(stt: &mut SttConfig, engine_id: &str, edit: impl FnOnce(&mut Table) -> bool) {
-    let mut table = stt.engines.get(engine_id).cloned().unwrap_or_default();
-    if edit(&mut table) {
-        stt.engines.insert(engine_id.to_owned(), table);
-    }
-}
-
 /// 모든 값을 기본값으로 되돌립니다.
 ///
 /// 저장은 기존 파일에 값을 합치는 방식이라 `[stt.engines.*]` 표 자체는 파일에 남습니다.
@@ -601,8 +401,11 @@ fn reset_to_defaults(config: &mut Config, registry: &SttRegistry) {
         };
         fresh.stt.engines.insert(id.clone(), table);
     }
+    // 등록해 둔 외부 제공자(API 키 포함)는 기본값으로 되돌려도 지우지 않습니다.
     fresh.stt.api_profile = config.stt.api_profile.clone();
     fresh.stt.api_profiles = config.stt.api_profiles.clone();
+    fresh.postprocess.api_profile = config.postprocess.api_profile.clone();
+    fresh.postprocess.api_profiles = config.postprocess.api_profiles.clone();
     fresh.postprocess.processors = config.postprocess.processors.clone();
     let engine = fresh.stt.engine.clone();
     registry.ensure_engine_defaults(&mut fresh.stt, &engine);
@@ -631,8 +434,40 @@ mod tests {
         let mut other = sulsul_core::toml::Table::new();
         other.insert("custom".into(), Value::Boolean(true));
         config.stt.engines.insert("someone_else".into(), other);
+        // 두 갈래에 등록해 둔 외부 제공자
+        let stt_profile = sulsul_stt_cloud::profile_from_preset(
+            "openai",
+            "stt-openai".into(),
+            "받아쓰기용".into(),
+        );
+        config.stt.api_profile = stt_profile.id.clone();
+        config.stt.api_profiles.push(stt_profile.clone());
+        let llm_profile = sulsul_llm::presets::profile_from_preset(
+            "openai",
+            "llm-openai".into(),
+            "다듬기용".into(),
+        );
+        config.postprocess.enabled = true;
+        config.postprocess.processor = sulsul_llm::CLOUD_PROCESSOR_ID.into();
+        config.postprocess.api_profile = llm_profile.id.clone();
+        config.postprocess.api_profiles.push(llm_profile.clone());
 
         reset_to_defaults(&mut config, &registry);
+
+        // 등록해 둔 제공자와 고른 제공자는 두 갈래 모두 남습니다.
+        assert_eq!(config.stt.api_profile, stt_profile.id);
+        assert_eq!(config.stt.api_profiles, [stt_profile]);
+        assert_eq!(config.postprocess.api_profile, llm_profile.id);
+        assert_eq!(config.postprocess.api_profiles, [llm_profile]);
+        // 나머지 후처리 설정은 기본값으로 돌아갑니다.
+        assert_eq!(
+            config.postprocess.enabled,
+            Config::default().postprocess.enabled
+        );
+        assert_eq!(
+            config.postprocess.processor,
+            Config::default().postprocess.processor
+        );
 
         assert_eq!(config.general, Config::default().general);
         assert_eq!(config.audio, Config::default().audio);
@@ -654,48 +489,5 @@ mod tests {
     #[test]
     fn hotkey_presets_include_default_key() {
         assert!(HOTKEY_PRESETS.contains(&Config::default().hotkey.key.as_str()));
-    }
-
-    #[test]
-    fn engine_table_is_written_only_when_something_changed() {
-        let mut stt = SttConfig::default();
-        stt.engines.clear();
-
-        // 화면을 보기만 했을 때: 빈 표가 생기면 안 됩니다.
-        edit_engine_table(&mut stt, "whisper_local", |_| false);
-        assert!(
-            stt.engines.is_empty(),
-            "값을 바꾸지 않았으면 엔진 표를 만들지 않습니다"
-        );
-
-        // 언어를 골랐을 때: 그 엔진의 표에만 씁니다.
-        edit_engine_table(&mut stt, "whisper_local", |table| {
-            table.insert(LANGUAGE_KEY.into(), Value::String("en".into()));
-            true
-        });
-        assert_eq!(
-            stt.engines["whisper_local"][LANGUAGE_KEY],
-            Value::String("en".into())
-        );
-        assert_eq!(stt.engines.len(), 1);
-        assert_eq!(
-            stt.language,
-            SttConfig::default().language,
-            "예전 전역 언어 값은 건드리지 않습니다"
-        );
-    }
-
-    #[test]
-    fn language_row_uses_the_engine_schema_field() {
-        let registry = crate::engines::registry();
-        for descriptor in registry.descriptors() {
-            // 지금 등록된 엔진은 모두 언어를 고를 수 있습니다. 언어 줄은 그 항목으로 그립니다.
-            let field = language_field(descriptor);
-            assert!(
-                field.is_some_and(|field| field.label_key == "stt.language.label"),
-                "{}: 인식 언어 항목이 없습니다",
-                descriptor.id
-            );
-        }
     }
 }

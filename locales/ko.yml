@@ -92,6 +92,15 @@ error:
     io: "파일을 저장하지 못했습니다 (%{path}): %{message}"
     size_mismatch: "파일 크기가 맞지 않습니다 (예상 %{expected}바이트, 실제 %{actual}바이트)."
     hash_mismatch: "내려받은 파일의 무결성(SHA-256) 확인에 실패했습니다. 다시 시도해 주세요."
+  # 글 다듬기 제공자에 요청을 보내다 난 오류
+  llm:
+    invalid_endpoint: "주소가 올바르지 않습니다: %{message}"
+    missing_api_key: 이 공급자는 API 키가 필요합니다. API 키를 넣어 주세요.
+    http: "제공자가 HTTP %{status} 오류를 돌려주었습니다: %{message}"
+    http_no_message: "제공자가 HTTP %{status} 오류를 돌려주었습니다."
+    network: "네트워크 오류: %{message}"
+    bad_response: "제공자의 응답을 이해하지 못했습니다: %{message}"
+    cancelled: 요청을 취소했습니다.
   config:
     read: "설정 파일을 읽지 못했습니다 (%{path}): %{message}"
     write: "설정 파일에 쓰지 못했습니다 (%{path}): %{message}"
@@ -399,21 +408,6 @@ settings:
     max_record_seconds_help: "이 시간을 넘으면 녹음을 자동으로 끝냅니다. (%{min} ~ %{max}초)"
     feedback_sounds: 효과음
     feedback_sounds_help: 녹음을 시작하고 끝낼 때 소리로 알려 줍니다.
-  stt:
-    title: 음성 인식
-    language_help: 말하는 언어입니다. 엔진마다 따로 저장되고, 여기서는 지금 고른 엔진의 값을 바꿉니다.
-    initial_prompt: 용어 힌트
-    initial_prompt_help: 자주 쓰는 용어나 고유명사를 적어 두면 인식 정확도가 올라갑니다.
-    initial_prompt_hint: "예: 술술, 러스트, 깃허브"
-    prompt_unsupported: 지금 선택한 엔진은 용어 힌트를 쓰지 않습니다.
-    engine_settings: "%{engine} 설정"
-    engine_settings_help: "설정 파일의 [stt.engines.%{id}]에 저장됩니다."
-    engine_no_settings: 이 엔진에는 바꿀 수 있는 설정이 없습니다.
-    unknown_engine_keys: "이 엔진이 모르는 항목이 설정 파일에 있습니다: %{keys}"
-    unregistered_engines: "설정 파일에 이 앱에 등록되지 않은 엔진의 설정이 있습니다: %{ids}"
-    open_models: 모델 관리 열기
-    active_api_profile: "활성 API 프로필: %{profile} (%{provider} · %{model})"
-    no_active_api_profile: 선택된 API 프로필이 없습니다. 모델 관리에서 프로필을 추가·활성화하세요.
   output:
     title: 출력
     mode: 입력 방식
@@ -429,8 +423,8 @@ settings:
     restore_delay_help: "클립보드를 되돌리기 전에 기다리는 시간입니다. 붙여넣기가 가끔 이전 내용으로 되면 늘리세요. (%{min} ~ %{max} ms)"
   postprocess:
     title: 후처리
-    llm: LLM으로 다듬기
-    llm_help: 인식 결과의 문장 부호와 오탈자를 LLM으로 다듬습니다.
+    llm: 글 다듬기
+    llm_help: 인식 결과의 문장 부호와 오탈자를 언어 모델로 다듬습니다. 다듬는 데 쓸 모델은 모델 관리의 '글 다듬기'에서 고릅니다.
   # 엔진·후처리기 설정 항목(스키마로 자동 생성되는 입력란)에 함께 쓰는 문구
   field:
     browse: 찾아보기
@@ -460,15 +454,36 @@ about:
 
 models:
   title: 모델 관리
-  subtitle: 받아쓰기에 쓸 음성 인식 모델과 외부 제공자를 고르고, 내려받고, 등록합니다.
+  subtitle: 음성 인식과 글 다듬기에 쓸 모델과 외부 제공자를 고르고, 내려받고, 등록합니다.
   locked: 설정 파일에 오류가 있어 모델이나 제공자를 고르거나 고칠 수 없습니다. 먼저 설정 파일 문제를 해결하세요. 모델 내려받기와 테스트는 그대로 할 수 있습니다.
   category:
-    stt: STT
-    llm: LLM
+    stt: 음성 인식
+    llm: 글 다듬기
+  # 글 다듬기 갈래에만 있는 문구. 두 갈래가 함께 쓰는 문구는 아래 available·download·providers·test에 있습니다.
   llm:
-    coming_soon: LLM 다듬기는 아직 준비 중입니다.
+    preview_note: 글 다듬기는 아직 준비 중이라, 여기서 고른 모델이 받아쓰기 결과에 바로 쓰이지는 않습니다. 쓸 모델과 제공자를 미리 마련해 둘 수 있습니다.
+    issue:
+      not_installed: "지금 설정은 %{model} 모델로 다듬도록 되어 있지만, 그 모델이 아직 설치되지 않았습니다. 다른 항목을 켜거나 그 모델을 내려받으세요."
+      no_model: 지금 설정은 로컬 모델로 다듬도록 되어 있지만 고른 모델이 없습니다. 쓸 항목을 켜세요.
+      unknown_model: "지금 설정에 적힌 모델 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
+      unknown_processor: "지금 설정에 적힌 후처리기 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
+    info:
+      family: 모델
+      file_size: 파일 크기
+      license: 라이선스
+      model_card: 모델 카드 보기
+      location: 파일 위치
+    license_badge: "라이선스: %{license}"
+    remove_blocked:
+      downloading: 글 다듬기 모델을 내려받는 동안에는 제거할 수 없습니다.
+    test:
+      timing: "걸린 시간: %{elapsed}"
+      model: "응답한 모델: %{model}"
+      empty_reply: "(응답 텍스트가 비어 있습니다 — 연결은 정상입니다)"
+      local_hint: 이 PC에서 도는 서버는 모델을 처음 불러올 때 시간이 걸릴 수 있습니다.
+      not_started: 연결 테스트를 시작하지 못했습니다. 다시 시도하세요.
   tab:
-    available: 사용 가능 엔진
+    available: 사용 가능 모델
     download: 로컬 모델 내려받기
     providers: 외부 제공자
   badge:
@@ -485,10 +500,9 @@ models:
       go_providers: 외부 제공자 등록
     custom:
       name: 직접 지정한 모델
-      description: 설정에 직접 적어 둔 경로의 모델을 씁니다.
+      description: 직접 지정한 경로의 모델을 씁니다.
       missing_badge: 파일 없음
-      path_title: 모델 경로
-      missing: 이 경로에서 모델을 찾지 못했습니다. 경로는 설정 화면에서 고칠 수 있습니다.
+      missing: 이 경로에서 모델을 찾지 못했습니다. 위에서 경로를 고치세요.
       replaced_note: "%{engine}의 다른 모델을 켜면 직접 지정한 경로는 설정에서 지워집니다."
     engine:
       no_model_badge: 모델 파일 필요 없음
@@ -497,6 +511,8 @@ models:
     settings:
       title: 엔진 설정
       shared: "이 설정은 %{engine}의 모든 모델에 함께 적용됩니다."
+      unknown_keys: "이 엔진이 모르는 항목이 설정 파일에 있습니다: %{keys}"
+    unregistered_engines: "설정 파일에 이 앱에 등록되지 않은 엔진의 설정이 있습니다: %{ids}"
     remove: 제거
     remove_blocked:
       locked: 설정 파일 문제를 해결한 뒤에 제거할 수 있습니다.
@@ -504,16 +520,24 @@ models:
       downloading: 이 엔진의 모델을 내려받는 동안에는 제거할 수 없습니다.
     issue:
       not_installed: "지금 설정은 %{engine}의 %{model} 모델을 쓰도록 되어 있지만, 그 모델이 아직 설치되지 않았습니다. 다른 항목을 켜거나 그 모델을 내려받으세요."
-      custom_missing: "지금 설정은 %{engine}에 직접 지정한 모델을 쓰도록 되어 있지만, 그 경로에서 모델을 찾지 못했습니다. 다른 항목을 켜거나 설정 화면에서 경로를 고치세요."
+      custom_missing: "지금 설정은 %{engine}에 직접 지정한 모델을 쓰도록 되어 있지만, 그 경로에서 모델을 찾지 못했습니다. 다른 항목을 켜거나 '직접 지정한 모델' 카드를 펼쳐 경로를 고치세요."
       no_provider: 지금 설정은 외부 제공자를 쓰도록 되어 있지만 고른 제공자가 없습니다. 쓸 항목을 켜거나 제공자를 등록하세요.
       provider_incomplete: "지금 고른 제공자 '%{name}'에 주소·API 키·모델 중 빠진 값이 있습니다. 카드를 펼쳐 채우거나 다른 항목을 켜세요."
       unknown_engine: "지금 설정에 적힌 엔진 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
+  accuracy:
+    title: 인식 정확도 높이기
+    shared: 모든 모델 공통
+    prompt: 용어 힌트
+    prompt_help: 자주 쓰는 용어나 고유명사를 적어 두면 인식 정확도가 올라갑니다.
+    prompt_hint: "예: 술술, 러스트, 깃허브"
   remove:
     variant:
       title: 모델 제거
       body: "'%{model}' 모델 파일을 지울까요? 같은 엔진의 다른 모델이 함께 쓰는 파일은 남기며, 나중에 다시 내려받을 수 있습니다."
       done: "%{model} 모델을 제거했습니다."
       failed: "모델을 제거하지 못했습니다: %{message}"
+    llm_variant:
+      body: "'%{model}' 모델 파일을 지울까요? 나중에 다시 내려받을 수 있습니다."
     custom:
       title: 직접 지정한 모델 제거
       body: 직접 지정한 모델 경로를 설정에서 지울까요? 모델 파일은 그대로 남습니다.
@@ -523,8 +547,10 @@ models:
       body: "'%{name}' 제공자를 지울까요? 저장해 둔 API 키도 함께 지워집니다."
       done: "%{name} 제공자를 제거했습니다."
   download:
-    help: 모델과 크기·언어·정밀도를 차례로 골라 내려받습니다. 내려받은 모델은 '사용 가능 엔진' 탭에 나타납니다.
-    engine: 모델
+    help:
+      stt: 모델과 크기·언어·정밀도를 차례로 골라 내려받습니다. 내려받은 모델은 '사용 가능 모델' 탭에 나타납니다.
+      llm: 모델과 크기·정밀도를 차례로 골라 내려받습니다. 내려받은 모델은 '사용 가능 모델' 탭에 나타납니다.
+    group: 모델
     axis:
       size: 크기
       language: 언어
@@ -538,7 +564,7 @@ models:
     start: 내려받기
     resume: 이어받기
     busy: 다른 모델을 내려받는 중입니다. 끝난 뒤에 내려받을 수 있습니다.
-    view_available: 사용 가능 엔진에서 보기
+    view_available: 사용 가능 모델에서 보기
     open_dir: 모델 폴더 열기
     downloading: "내려받는 중 (%{file} %{index}/%{total_files}) · %{progress}"
     verifying: "받은 파일을 확인하는 중 (%{file} %{index}/%{total_files})…"
@@ -547,9 +573,23 @@ models:
     cancelled: 모델 내려받기를 취소했습니다.
     failed: "모델을 내려받지 못했습니다: %{message}"
     crashed: 내려받기가 도중에 멈췄습니다. 다시 시도하세요.
+    own_file:
+      title: 가지고 있는 모델 파일 쓰기
+      description: "내려받지 않고, 이미 가지고 있는 %{engine} 모델을 직접 지정합니다."
+      note: "경로를 지정하면 %{engine}은(는) 내려받은 모델 대신 이 모델을 쓰고, '사용 가능 모델' 탭에 '직접 지정한 모델'로 나타납니다."
+      missing: 이 경로에서 모델을 찾지 못했습니다.
   providers:
-    help: OpenAI 호환 `/audio/transcriptions` 주소로 음성을 보내 인식하는 외부 제공자를 등록합니다. 연결 테스트를 통과해야 등록할 수 있습니다.
-    note: 등록한 제공자는 '사용 가능 엔진' 탭에서 고르고, 고치고, 지울 수 있습니다.
+    help:
+      stt: OpenAI 호환 `/audio/transcriptions` 주소로 음성을 보내 인식하는 외부 제공자를 등록합니다. 연결 테스트를 통과해야 등록할 수 있습니다.
+      llm: OpenAI 호환 `/chat/completions` 주소로 글을 보내 다듬는 외부 제공자를 등록합니다. 연결 테스트를 통과해야 등록할 수 있습니다.
+    note: 등록한 제공자는 '사용 가능 모델' 탭에서 고르고, 고치고, 지울 수 있습니다.
+    # 공급자를 고르는 목록의 묶음 제목 (이 PC에서 도는 서버가 있는 갈래에서만 보입니다)
+    group:
+      cloud: 클라우드 서비스
+      local: 이 PC에서 실행
+      custom: 직접 입력
+    local_note: 이 PC에서 실행 중인 서버에 연결합니다. 먼저 그 프로그램을 켜 두세요.
+    mock_note: 개발 빌드에만 있는 가짜 제공자입니다. 실제 요청을 보내지 않습니다.
     choose: 공급자를 고르세요
     choose_hint: 공급자를 고르면 주소와 API 키를 넣는 칸이 나옵니다.
     field:
@@ -565,7 +605,9 @@ models:
       api_key_show: 키 보기
       api_key_hide: 키 숨기기
       model: 모델 이름
-      model_hint: "예: whisper-1"
+      model_hint:
+        stt: "예: whisper-1"
+        llm: 제공자 문서에 나온 모델 이름
       suggestions: 추천 모델
     shared:
       title: 클라우드 공통 설정
@@ -755,3 +797,99 @@ engine:
       delay_ms_help: 인식에 시간이 걸리는 상황을 흉내 냅니다.
       text: 고정 응답 문구
       text_help: 비워 두면 오디오 길이와 음량을 알려 줍니다.
+
+# 후처리기(글 다듬기) 문구
+processor:
+  # 이 컴퓨터에서 돌리는 로컬 모델
+  llm_local:
+    families:
+      qwen3_5:
+        name: Qwen3.5
+        description: Alibaba가 공개한 다국어 모델입니다. 작은 크기부터 고를 수 있어 처음 써 보기에 알맞습니다.
+      gemma4:
+        name: Gemma 4
+        description: Google이 공개한 다국어 모델입니다. E2B·E4B 두 크기를 받을 수 있습니다.
+      exaone3_5:
+        name: EXAONE 3.5
+        description: LG AI연구원이 공개한 한국어·영어 모델입니다. 비상업적 용도로만 쓸 수 있고, 상업적으로 쓰려면 LG AI연구원의 허락을 따로 받아야 합니다.
+        # 라이선스 때문에 쓰임새가 제한되는 계열에만 적습니다. 카드에 경고 배지로 보입니다.
+        license_note: 비상업적 용도 전용
+    models:
+      qwen3_5-2b-q4_k_m:
+        name: Qwen3.5 2B (Q4_K_M)
+        description: 약 1.3 GB. 가장 가볍고 빨라 메모리가 넉넉하지 않은 컴퓨터에 알맞습니다.
+      qwen3_5-2b-q8_0:
+        name: Qwen3.5 2B (Q8_0)
+        description: 약 2.0 GB. 2B를 덜 줄인 고정밀 모델로, 용량은 늘지만 원본 품질에 더 가깝습니다.
+      qwen3_5-4b-q4_k_m:
+        name: Qwen3.5 4B (Q4_K_M)
+        description: 약 2.7 GB. 속도와 품질의 균형이 좋아 대부분의 환경에 권장합니다.
+      qwen3_5-4b-q8_0:
+        name: Qwen3.5 4B (Q8_0)
+        description: 약 4.5 GB. 4B를 덜 줄인 고정밀 모델로, 용량은 늘지만 원본 품질에 더 가깝습니다.
+      qwen3_5-9b-q4_k_m:
+        name: Qwen3.5 9B (Q4_K_M)
+        description: 약 5.6 GB. 품질이 더 좋지만 메모리를 많이 쓰고 느립니다. 메모리가 넉넉한 컴퓨터에 알맞습니다.
+      qwen3_5-9b-q8_0:
+        name: Qwen3.5 9B (Q8_0)
+        description: 약 9.5 GB. 9B를 덜 줄인 고정밀 모델입니다. 용량과 메모리를 가장 많이 씁니다.
+      gemma4-e2b-q4_k_m:
+        name: Gemma 4 E2B (Q4_K_M)
+        description: 약 3.4 GB. Gemma 4에서 가장 가벼운 모델입니다.
+      gemma4-e2b-q8_0:
+        name: Gemma 4 E2B (Q8_0)
+        description: 약 5.0 GB. E2B를 덜 줄인 고정밀 모델로, 용량은 늘지만 원본 품질에 더 가깝습니다.
+      gemma4-e4b-q4_k_m:
+        name: Gemma 4 E4B (Q4_K_M)
+        description: 약 5.3 GB. E2B보다 품질이 좋지만 메모리를 더 씁니다.
+      gemma4-e4b-q8_0:
+        name: Gemma 4 E4B (Q8_0)
+        description: 약 8.0 GB. E4B를 덜 줄인 고정밀 모델입니다. 용량과 메모리를 많이 씁니다.
+      exaone3_5-2_4b-q4_k_m:
+        name: EXAONE 3.5 2.4B (Q4_K_M)
+        description: 약 1.6 GB. 가볍고 빠른 한국어·영어 모델입니다. 비상업적 용도로만 쓸 수 있습니다.
+      exaone3_5-2_4b-q8_0:
+        name: EXAONE 3.5 2.4B (Q8_0)
+        description: 약 2.8 GB. 2.4B를 덜 줄인 고정밀 모델입니다. 비상업적 용도로만 쓸 수 있습니다.
+      exaone3_5-7_8b-q4_k_m:
+        name: EXAONE 3.5 7.8B (Q4_K_M)
+        description: 약 4.8 GB. 2.4B보다 품질이 좋지만 메모리를 더 씁니다. 비상업적 용도로만 쓸 수 있습니다.
+      exaone3_5-7_8b-q8_0:
+        name: EXAONE 3.5 7.8B (Q8_0)
+        description: 약 8.3 GB. 7.8B를 덜 줄인 고정밀 모델입니다. 비상업적 용도로만 쓸 수 있습니다.
+    # 모델 내려받기 화면의 단계별 선택지 (크기 → 정밀도)
+    choices:
+      size:
+        2b: 2B
+        4b: 4B
+        9b: 9B
+        e2b: E2B
+        e4b: E4B
+        2_4b: 2.4B
+        7_8b: 7.8B
+      precision:
+        q4_k_m: Q4_K_M 양자화 (가벼움)
+        q8_0: Q8_0 양자화 (고정밀)
+  # 외부 제공자 (OpenAI 호환 `/chat/completions`)
+  llm_cloud:
+    providers:
+      openai: OpenAI
+      anthropic: Anthropic
+      gemini: Google Gemini
+      xai: xAI
+      mistral: Mistral AI
+      deepseek: DeepSeek
+      groq: Groq
+      openrouter: OpenRouter
+      together: Together AI
+      fireworks: Fireworks AI
+      cerebras: Cerebras
+      cohere: Cohere
+      upstage: Upstage
+      clova: 네이버 CLOVA Studio
+      alibaba: Alibaba Cloud Model Studio
+      moonshot: Moonshot AI (Kimi)
+      ollama: Ollama
+      lmstudio: LM Studio
+      custom: 커스텀 (OpenAI 호환)
+      mock: 테스트용 가짜 제공자

@@ -4399,6 +4399,7 @@ dependencies = [
  "rfd",
  "rust-i18n",
  "sulsul-core",
+ "sulsul-llm",
  "sulsul-stt-cloud",
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",

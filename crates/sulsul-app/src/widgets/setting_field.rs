@@ -19,28 +19,9 @@ const SLIDER_MAX_SPAN: i64 = 200;
 /// 슬라이더 옆 숫자 칸의 너비
 const SLIDER_VALUE_WIDTH: f32 = 48.0;
 
-/// 스키마의 모든 항목을 줄 단위로 그립니다. 값이 바뀌면 `table`에 쓰고 `true`를 돌려줍니다.
+/// 스키마의 항목 하나를 한 줄로 그립니다. 값이 바뀌면 `table`에 쓰고 `true`를 돌려줍니다.
 ///
-/// `id_salt`는 위젯 ID가 겹치지 않게 하는 값입니다(예: 엔진 ID). `schema`에는 스키마 전체나,
-/// 다른 자리에서 따로 그리는 항목을 뺀 일부를 넘깁니다.
-pub fn setting_fields<'a>(
-    ui: &mut Ui,
-    id_salt: &str,
-    schema: impl IntoIterator<Item = &'a SettingField>,
-    table: &mut Table,
-    parent: &eframe::Frame,
-) -> bool {
-    let mut changed = false;
-    for (index, field) in schema.into_iter().enumerate() {
-        if index > 0 {
-            row::separator(ui);
-        }
-        changed |= setting_field(ui, id_salt, field, table, parent);
-    }
-    changed
-}
-
-/// 항목 하나를 그립니다.
+/// `id_salt`는 위젯 ID가 겹치지 않게 하는 값입니다(예: 엔진 ID).
 pub fn setting_field(
     ui: &mut Ui,
     id_salt: &str,

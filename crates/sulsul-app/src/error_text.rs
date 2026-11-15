@@ -8,6 +8,7 @@ use sulsul_core::config::{ConfigError, ConfigIssue, ConfigProblem};
 use sulsul_core::download::DownloadError;
 use sulsul_core::settings::{SettingIssue, SettingProblem};
 use sulsul_core::stt::{SttError, SttRegistry};
+use sulsul_llm::client::LlmError;
 
 use crate::i18n::{microphone_settings_hint, tr};
 
@@ -163,5 +164,71 @@ pub fn download(error: &DownloadError) -> String {
         )
         .into_owned(),
         DownloadError::HashMismatch { .. } => t!("error.download.hash_mismatch").into_owned(),
+    }
+}
+
+/// 글 다듬기 제공자에 요청을 보내다 난 오류
+pub fn llm(error: &LlmError) -> String {
+    match error {
+        LlmError::InvalidEndpoint(message) => {
+            t!("error.llm.invalid_endpoint", message = message).into_owned()
+        }
+        LlmError::MissingApiKey => t!("error.llm.missing_api_key").into_owned(),
+        // 제공자가 이유를 알려 주지 않았으면 상태 코드만 보여 줍니다.
+        LlmError::Http { status, message } if message.trim().is_empty() => {
+            t!("error.llm.http_no_message", status = status).into_owned()
+        }
+        LlmError::Http { status, message } => {
+            t!("error.llm.http", status = status, message = message).into_owned()
+        }
+        LlmError::Network(message) => t!("error.llm.network", message = message).into_owned(),
+        LlmError::BadResponse(message) => {
+            t!("error.llm.bad_response", message = message).into_owned()
+        }
+        LlmError::Cancelled => t!("error.llm.cancelled").into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llm_errors_have_their_own_wording() {
+        rust_i18n::set_locale("ko");
+        let errors = [
+            LlmError::InvalidEndpoint("empty".into()),
+            LlmError::MissingApiKey,
+            LlmError::Http {
+                status: 401,
+                message: "invalid key".into(),
+            },
+            LlmError::Http {
+                status: 500,
+                message: String::new(),
+            },
+            LlmError::Network("timed out".into()),
+            LlmError::BadResponse("no choices".into()),
+            LlmError::Cancelled,
+        ];
+        let texts: Vec<String> = errors.iter().map(llm).collect();
+        for (error, text) in errors.iter().zip(&texts) {
+            assert!(
+                !text.starts_with("error."),
+                "{error:?}: 번역이 없어 키가 그대로 나왔습니다 ({text})"
+            );
+        }
+        // 오류마다 문구가 달라야 무엇이 문제인지 알 수 있습니다.
+        let mut unique = texts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "{texts:#?}");
+
+        assert!(texts[2].contains("401") && texts[2].contains("invalid key"));
+        assert!(
+            texts[3].contains("500") && !texts[3].contains("%{"),
+            "이유가 없으면 상태 코드만 보여 줍니다: {}",
+            texts[3]
+        );
     }
 }

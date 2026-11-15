@@ -1,10 +1,11 @@
 //! 모델 관리 화면의 여러 탭이 함께 쓰는 화면 조각.
 //!
-//! 테스트 버튼과 진행 상황·결과, 예상 장치 칸, 내려받기 진행 상황, 제공자 입력 칸이 있습니다.
+//! 음성 인식과 글 다듬기 갈래가 같은 조각으로 화면을 그립니다: 목록 카드와 펼침 상태, 빈 목록 안내,
+//! 테스트·제거 버튼, 테스트 진행 상황·결과, 예상 장치 칸, 내려받기 진행 상황, 제공자 입력 칸.
 
 use egui::{
-    Align, Color32, CornerRadius, Layout, Rect, RichText, Role, Sense, Spinner, Stroke, StrokeKind,
-    TextEdit, Ui, WidgetInfo, vec2,
+    Align, Color32, CornerRadius, Layout, Rect, Response, RichText, Role, Sense, Spinner, Stroke,
+    StrokeKind, TextEdit, Ui, WidgetInfo, vec2,
 };
 use rust_i18n::t;
 use sulsul_core::config::ApiProfile;
@@ -12,27 +13,296 @@ use sulsul_core::download::DownloadPhase;
 use sulsul_core::stt::{
     ComputeDevice, EngineKind, LanguageSupport, WHISPER_LANGUAGES, format_bytes,
 };
-use sulsul_stt_cloud::{find_preset, normalize_transcriptions_url};
 
 use super::jobs::{ActiveTest, DownloadSnapshot, TestFailure, TestOutcome, TestTarget};
+use super::{Category, profiles};
 use crate::accel::{self, AccelEnv, EngineAccel};
 use crate::format;
 use crate::icons::{self, Icon};
+use crate::pages::SECTION_GAP;
 use crate::theme::{self, Palette, radius, size};
 use crate::widgets::banner::{Banner, Tone};
+use crate::widgets::card;
+use crate::widgets::confirm::{Answer, Confirm};
 use crate::widgets::controls;
+use crate::widgets::expander::Expander;
 use crate::widgets::language::language_name;
 use crate::widgets::row::{self, Row};
 use crate::widgets::text;
 use crate::widgets::tile;
 
-/// 예상 장치 칸에서 항목 이름이 차지하는 너비
-const ACCEL_FACT_LABEL_WIDTH: f32 = 64.0;
+/// 목록의 카드 사이 간격
+pub const CARD_GAP: f32 = 4.0;
+/// 펼친 카드 안에서 묶음 사이 간격
+pub const BODY_GAP: f32 = 12.0;
+/// 정보 줄([`fact`])에서 항목 이름이 차지하는 너비
+const FACT_LABEL_WIDTH: f32 = 64.0;
 /// 내려받기 진행 막대의 높이
 const PROGRESS_BAR_HEIGHT: f32 = 8.0;
+/// 카드로 화면을 옮길 때 카드 위에 남기는 여백
+const REVEAL_MARGIN: f32 = 12.0;
+
+/// 카드 머리 줄의 배지
+pub struct Badge {
+    text: String,
+    tone: BadgeTone,
+}
+
+#[derive(Clone, Copy)]
+enum BadgeTone {
+    Plain,
+    /// 추천 모델
+    Accent,
+    /// 지금은 쓸 수 없거나 덜 끝난 상태
+    Warning,
+    /// 설치됨
+    Success,
+}
+
+impl Badge {
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self::new(text, BadgeTone::Plain)
+    }
+
+    pub fn accent(text: impl Into<String>) -> Self {
+        Self::new(text, BadgeTone::Accent)
+    }
+
+    pub fn warning(text: impl Into<String>) -> Self {
+        Self::new(text, BadgeTone::Warning)
+    }
+
+    pub fn success(text: impl Into<String>) -> Self {
+        Self::new(text, BadgeTone::Success)
+    }
+
+    fn new(text: impl Into<String>, tone: BadgeTone) -> Self {
+        Self {
+            text: text.into(),
+            tone,
+        }
+    }
+
+    pub fn show(&self, ui: &mut Ui) {
+        let palette = Palette::of(ui);
+        let (fill, color) = match self.tone {
+            BadgeTone::Plain => (palette.control, palette.text_muted),
+            BadgeTone::Accent => (palette.accent_soft, palette.accent_text),
+            BadgeTone::Warning => (palette.warning_soft, palette.warning_text),
+            BadgeTone::Success => (palette.success_soft, palette.success_text),
+        };
+        controls::tone_badge(ui, &self.text, fill, color);
+    }
+}
+
+/// 목록 카드의 머리 줄에 보일 내용: 이름, 배지, 짧은 설명
+pub struct CardHead {
+    pub name: String,
+    pub badges: Vec<Badge>,
+    pub description: Option<String>,
+}
+
+impl CardHead {
+    fn show(&self, ui: &mut Ui) {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        row::title_line(ui, |ui| {
+            ui.label(text::strong(&self.name));
+            for badge in &self.badges {
+                badge.show(ui);
+            }
+        });
+        if let Some(description) = &self.description {
+            ui.label(text::caption(ui, description));
+        }
+    }
+}
+
+/// 등록한 제공자 카드의 머리 줄: 이름, 공급자, 값이 덜 채워졌으면 그 표시, 모델 이름.
+pub fn provider_head(category: Category, profile: &ApiProfile, ready: bool) -> CardHead {
+    let mut badges = vec![Badge::plain(profiles::provider_label(
+        category,
+        &profile.provider,
+    ))];
+    if !ready {
+        badges.push(Badge::warning(t!(
+            "models.available.provider.incomplete_badge"
+        )));
+    }
+    let model = profile.model.trim();
+    CardHead {
+        name: profiles::profile_display_name(profile),
+        badges,
+        description: (!model.is_empty()).then(|| model.to_owned()),
+    }
+}
+
+/// 목록 카드 하나를 그린 결과
+pub struct CardOutcome {
+    /// 머리 줄을 눌러 펼치거나 접었는지
+    toggled: bool,
+    /// 스위치를 눌러 이 항목을 켰는지
+    pub turned_on: bool,
+    response: Response,
+}
+
+/// "사용 가능 모델" 목록의 카드 하나: 머리 줄, 쓸 항목을 고르는 스위치, 펼쳤을 때의 내용.
+///
+/// - `open`: 지금 펼쳐져 있는지 ([`ListState::is_open`])
+/// - `shown_on`: 스위치를 켜진 모습으로 보여 줄지
+/// - `can_turn_on`: 스위치를 누를 수 있는지
+///
+/// 그린 뒤에는 결과를 [`ListState::after_card`]에 넘겨 펼침 상태를 맞춥니다.
+pub fn entry_card(
+    ui: &mut Ui,
+    id_salt: impl egui::AsIdSalt,
+    head: &CardHead,
+    open: bool,
+    shown_on: bool,
+    can_turn_on: bool,
+    add_body: impl FnOnce(&mut Ui),
+) -> CardOutcome {
+    let toggle_label = t!("models.available.use", name = head.name);
+    let mut turned_on = false;
+    let shown = Expander::new(&head.name, open).selected(shown_on).show(
+        ui,
+        id_salt,
+        |ui| head.show(ui),
+        |ui| {
+            ui.add_enabled_ui(can_turn_on, |ui| {
+                turned_on = controls::choice_toggle(ui, shown_on, &toggle_label);
+            });
+        },
+        add_body,
+    );
+    CardOutcome {
+        toggled: shown.toggled,
+        turned_on,
+        response: shown.response,
+    }
+}
+
+/// "사용 가능 모델" 목록의 펼침 상태. 갈래마다 하나씩 둡니다.
+pub struct ListState<K> {
+    /// 펼쳐 둔 카드. 한 번에 하나만 펼칩니다.
+    expanded: Option<K>,
+    /// 다음에 그릴 때 화면을 옮겨 보여 줄 카드
+    reveal: Option<K>,
+    /// 펼친 제공자 카드에서 API 키를 가리지 않고 보여 줄지
+    pub reveal_api_key: bool,
+}
+
+impl<K> Default for ListState<K> {
+    fn default() -> Self {
+        Self {
+            expanded: None,
+            reveal: None,
+            reveal_api_key: false,
+        }
+    }
+}
+
+impl<K: PartialEq + Clone> ListState<K> {
+    pub fn is_open(&self, key: &K) -> bool {
+        self.expanded.as_ref() == Some(key)
+    }
+
+    /// 목록을 그리기 전에 부릅니다. 펼쳐 둔 항목이 목록에서 사라졌으면 펼침 상태를 지웁니다.
+    pub fn begin(&mut self, exists: impl Fn(&K) -> bool) {
+        if self.expanded.as_ref().is_some_and(|key| !exists(key)) {
+            self.expanded = None;
+        }
+    }
+
+    /// `key` 카드를 그린 뒤에 부릅니다. 머리 줄을 눌렀으면 펼치거나 접고,
+    /// 다른 탭에서 "이 항목 보기"로 넘어왔으면 화면을 그 카드로 옮깁니다.
+    pub fn after_card(&mut self, ui: &mut Ui, key: &K, outcome: &CardOutcome) {
+        if outcome.toggled {
+            self.expanded = (!self.is_open(key)).then(|| key.clone());
+            self.reveal_api_key = false;
+        }
+        if self.reveal.as_ref() == Some(key) {
+            self.reveal = None;
+            ui.scroll_to_rect(
+                outcome.response.rect.expand(REVEAL_MARGIN),
+                Some(Align::Min),
+            );
+        }
+    }
+
+    /// 목록을 다 그린 뒤에 부릅니다. 보여 주려던 카드가 목록에 없었으면 그만둡니다.
+    /// 나중에 그 항목이 생겼을 때 갑자기 화면이 옮겨지지 않게 하려는 것입니다.
+    pub fn end(&mut self) {
+        self.reveal = None;
+    }
+
+    /// `key` 카드를 펼치고, 다음에 그릴 때 화면을 그 카드로 옮깁니다.
+    pub fn show(&mut self, key: K) {
+        self.reveal_api_key = false;
+        self.expanded = Some(key.clone());
+        self.reveal = Some(key);
+    }
+
+    /// `key` 카드가 펼쳐져 있으면 접습니다 (항목을 지웠을 때).
+    pub fn forget(&mut self, key: &K) {
+        if self.is_open(key) {
+            self.expanded = None;
+        }
+    }
+}
+
+/// 빈 목록 안내에서 누른 버튼
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmptyAction {
+    /// "로컬 모델 내려받기" 탭으로
+    Download,
+    /// "외부 제공자" 탭으로
+    Providers,
+}
+
+/// 쓸 수 있는 항목이 하나도 없을 때의 안내와, 모델을 마련하는 탭으로 가는 버튼
+pub fn empty_state(ui: &mut Ui) -> Option<EmptyAction> {
+    let mut action = None;
+    card::card(ui, |ui| {
+        ui.label(text::strong(t!("models.available.empty.title")));
+        ui.label(text::muted(ui, t!("models.available.empty.body")));
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+            let download = t!("models.available.empty.go_download");
+            if controls::primary_icon_button(ui, Icon::Download, download).clicked() {
+                action = Some(EmptyAction::Download);
+            }
+            let providers = t!("models.available.empty.go_providers");
+            if controls::icon_text_button(ui, Icon::Cloud, providers).clicked() {
+                action = Some(EmptyAction::Providers);
+            }
+        });
+    });
+    action
+}
+
+/// 목록에서 "로컬 모델"과 "외부 제공자" 묶음이 시작되는 자리에 묶음 제목을 놓습니다.
+///
+/// 카드를 그리기 전에 항목마다 부릅니다. `previous`는 앞 항목이 로컬 모델이었는지를 기억하는
+/// 값이고, 목록을 그리기 시작할 때 `None`으로 둡니다.
+pub fn list_group(ui: &mut Ui, previous: &mut Option<bool>, local: bool) {
+    if *previous == Some(local) {
+        return;
+    }
+    if previous.is_some() {
+        ui.add_space(SECTION_GAP - CARD_GAP);
+    }
+    *previous = Some(local);
+    let title = if local {
+        t!("models.available.group.local")
+    } else {
+        t!("models.available.group.providers")
+    };
+    group_title(ui, &title);
+}
 
 /// 목록의 묶음 제목 (예: "로컬 모델")
-pub fn group_title(ui: &mut Ui, title: &str) {
+fn group_title(ui: &mut Ui, title: &str) {
     let palette = Palette::of(ui);
     ui.label(
         RichText::new(title)
@@ -59,6 +329,36 @@ pub fn action_row(ui: &mut Ui, add_left: impl FnOnce(&mut Ui), add_right: impl F
     });
 }
 
+/// 제거 버튼. 눌렀으면 `true`를 돌려줍니다.
+///
+/// 지금은 제거할 수 없으면 `blocked`에 그 이유를 넘깁니다. 버튼을 잠그고 이유를 풍선말로 보여 줍니다.
+pub fn remove_button(ui: &mut Ui, blocked: Option<&str>) -> bool {
+    ui.add_enabled_ui(blocked.is_none(), |ui| {
+        let button = controls::danger_button(ui, t!("models.available.remove"));
+        match blocked {
+            Some(reason) => {
+                button.on_disabled_hover_text(reason);
+                false
+            }
+            None => button.clicked(),
+        }
+    })
+    .inner
+}
+
+/// 제거 확인 창. 사용자가 답했으면 그 답을 돌려줍니다.
+pub fn confirm_removal(ui: &Ui, id: &str, title: &str, body: &str) -> Option<Answer> {
+    Confirm {
+        id,
+        title,
+        body,
+        confirm_label: &t!("models.available.remove"),
+        cancel_label: &t!("common.cancel"),
+        danger: true,
+    }
+    .show(ui)
+}
+
 /// 테스트 버튼을 누른 결과
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestClick {
@@ -66,29 +366,52 @@ pub enum TestClick {
     Cancel,
 }
 
-/// 테스트 버튼. `target`을 테스트하는 중이면 취소 버튼으로 바뀝니다.
-///
-/// 테스트는 한 번에 하나만 돌리므로, 다른 것을 테스트하는 중이면 누를 수 없습니다.
-pub fn test_button(
-    ui: &mut Ui,
-    label: &str,
-    running: Option<&ActiveTest>,
-    target: &TestTarget,
-) -> Option<TestClick> {
-    match running {
-        Some(active) if &active.target == target => ui
+/// 테스트 버튼이 보일 모습
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestState {
+    /// 테스트를 시작할 수 있습니다.
+    Idle,
+    /// 이 버튼의 대상을 테스트하는 중입니다. 취소 버튼으로 바뀝니다.
+    Running,
+    /// 다른 것을 테스트하는 중입니다. 테스트는 한 번에 하나만 돌리므로 누를 수 없습니다.
+    Busy,
+}
+
+impl TestState {
+    /// `running`은 지금 테스트하는 대상(없으면 `None`), `target`은 이 버튼의 대상입니다.
+    pub fn of<T: PartialEq>(running: Option<&T>, target: &T) -> Self {
+        match running {
+            None => Self::Idle,
+            Some(running) if running == target => Self::Running,
+            Some(_) => Self::Busy,
+        }
+    }
+}
+
+/// 테스트 버튼. 테스트하는 중이면 취소 버튼으로 바뀝니다.
+pub fn test_button(ui: &mut Ui, label: &str, state: TestState) -> Option<TestClick> {
+    if state == TestState::Running {
+        return ui
             .button(t!("common.cancel"))
             .clicked()
-            .then_some(TestClick::Cancel),
-        other => ui
-            .add_enabled_ui(other.is_none(), |ui| {
-                controls::icon_text_button(ui, Icon::PlugZap, label)
-                    .on_disabled_hover_text(t!("models.test.busy"))
-                    .clicked()
-            })
-            .inner
-            .then_some(TestClick::Start),
+            .then_some(TestClick::Cancel);
     }
+    ui.add_enabled_ui(state == TestState::Idle, |ui| {
+        controls::icon_text_button(ui, Icon::PlugZap, label)
+            .on_disabled_hover_text(t!("models.test.busy"))
+            .clicked()
+    })
+    .inner
+    .then_some(TestClick::Start)
+}
+
+/// 진행 중임을 알리는 한 줄: 돌아가는 표시와 글
+pub fn progress_line(ui: &mut Ui, status: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add(Spinner::new().size(16.0));
+        ui.label(text::muted(ui, status));
+    });
 }
 
 /// `target`을 테스트하는 중이면 경과 시간과, 가속 장치를 처음 쓸 때 오래 걸릴 수 있다는 안내를 보여 줍니다.
@@ -106,11 +429,7 @@ pub fn test_progress(ui: &mut Ui, running: Option<&ActiveTest>, target: &TestTar
     let hint = active
         .accel
         .and_then(|request| accel::first_run_hint(request, AccelEnv::current()));
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add(Spinner::new().size(16.0));
-        ui.label(text::muted(ui, status));
-    });
+    progress_line(ui, &status);
     if let Some(hint) = hint {
         ui.label(text::caption(ui, hint));
     }
@@ -206,16 +525,16 @@ pub fn accel_panel(ui: &mut Ui, accel: &EngineAccel, note: &str) {
             || t!("models.accel.backend_none").into_owned(),
             str::to_owned,
         );
-        accel_fact(ui, &t!("models.accel.backend"), &backend, palette.text);
+        fact(ui, &t!("models.accel.backend"), &backend, palette.text);
         for (kind, names) in &accel.devices {
             if names.is_empty() {
                 let missing = t!("models.accel.not_found");
-                accel_fact(ui, &kind.label(), &missing, palette.text_faint);
+                fact(ui, &kind.label(), &missing, palette.text_faint);
             } else {
-                accel_fact(ui, &kind.label(), &names.join(", "), palette.text);
+                fact(ui, &kind.label(), &names.join(", "), palette.text);
             }
         }
-        accel_fact(
+        fact(
             ui,
             &t!("models.accel.setting"),
             &accel.request.label(),
@@ -233,15 +552,15 @@ fn icon_line(ui: &mut Ui, icon: Icon, icon_color: Color32, text: RichText) {
     });
 }
 
-/// 예상 장치 칸의 한 줄: 왼쪽에 항목 이름, 오른쪽에 값. 값이 길면 줄을 바꿉니다.
-fn accel_fact(ui: &mut Ui, label: &str, value: &str, value_color: Color32) {
+/// 정보 칸(예상 장치, 모델 정보)의 한 줄: 왼쪽에 항목 이름, 오른쪽에 값. 값이 길면 줄을 바꿉니다.
+pub fn fact(ui: &mut Ui, label: &str, value: &str, value_color: Color32) {
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
         ui.allocate_ui_with_layout(
-            vec2(ACCEL_FACT_LABEL_WIDTH, 0.0),
+            vec2(FACT_LABEL_WIDTH, 0.0),
             Layout::top_down(Align::Min),
             |ui| {
-                ui.set_width(ACCEL_FACT_LABEL_WIDTH);
+                ui.set_width(FACT_LABEL_WIDTH);
                 ui.label(text::caption(ui, label));
             },
         );
@@ -333,10 +652,28 @@ fn progress_bar(ui: &mut Ui, fraction: f32, label: &str) {
     }
 }
 
+/// 등록한 제공자 카드의 공급자 줄. 공급자는 등록할 때 정해지고 카드에서는 바꾸지 않습니다.
+/// 이 PC에서 도는 서버나 개발 빌드 전용 가짜 제공자면 그 안내를 함께 보여 줍니다.
+pub fn provider_row(ui: &mut Ui, category: Category, provider: &str) {
+    let note = profiles::provider_note(category, provider);
+    Row::new(&t!("models.providers.field.provider"))
+        .help_opt(note.as_deref())
+        .show(ui, |ui| {
+            controls::badge(ui, &profiles::provider_label(category, provider));
+        });
+}
+
 /// 제공자의 이름·주소·API 키·모델 입력 칸. 공급자는 부르는 쪽에서 따로 보여 줍니다.
 ///
+/// 실제 요청 주소와 추천 모델, 모델 이름의 예시는 `category`(음성 인식인지 글 다듬기인지)를 따릅니다.
 /// `id_salt`는 입력 칸 ID가 다른 제공자의 것과 겹치지 않게 하는 값입니다(예: 제공자 ID).
-pub fn profile_fields(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile, reveal_key: &mut bool) {
+pub fn profile_fields(
+    ui: &mut Ui,
+    category: Category,
+    id_salt: &str,
+    profile: &mut ApiProfile,
+    reveal_key: &mut bool,
+) {
     let palette = Palette::of(ui);
 
     // 이름
@@ -353,7 +690,7 @@ pub fn profile_fields(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile, reve
     row::separator(ui);
 
     // 주소. 실제로 요청을 보낼 주소를 아래에 미리 보여 줍니다.
-    let endpoint_preview = normalize_transcriptions_url(&profile.endpoint);
+    let endpoint_preview = profiles::request_url(category, &profile.endpoint);
     Row::new(&t!("models.providers.field.endpoint")).show_below(ui, |ui| {
         ui.add(
             TextEdit::singleline(&mut profile.endpoint)
@@ -368,14 +705,11 @@ pub fn profile_fields(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile, reve
                     t!("models.providers.field.endpoint_resolved", url = url),
                 ));
             }
-            Err(error) => {
+            Err(message) => {
                 ui.label(
                     text::caption(
                         ui,
-                        t!(
-                            "models.providers.field.endpoint_invalid",
-                            message = error.to_string()
-                        ),
+                        t!("models.providers.field.endpoint_invalid", message = message),
                     )
                     .color(palette.warning_text),
                 );
@@ -410,14 +744,18 @@ pub fn profile_fields(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile, reve
     row::separator(ui);
 
     // 모델 이름과 추천 모델
+    let model_hint = match category {
+        Category::Stt => t!("models.providers.field.model_hint.stt"),
+        Category::Llm => t!("models.providers.field.model_hint.llm"),
+    };
     Row::new(&t!("models.providers.field.model")).show_below(ui, |ui| {
         ui.add(
             TextEdit::singleline(&mut profile.model)
                 .id_salt((id_salt, "model"))
                 .desired_width(f32::INFINITY)
-                .hint_text(t!("models.providers.field.model_hint")),
+                .hint_text(model_hint),
         );
-        if let Some(preset) = find_preset(&profile.provider)
+        if let Some(preset) = profiles::find_preset(category, &profile.provider)
             && !preset.model_suggestions.is_empty()
         {
             ui.horizontal_wrapped(|ui| {

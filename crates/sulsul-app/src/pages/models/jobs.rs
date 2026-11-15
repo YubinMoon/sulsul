@@ -2,6 +2,9 @@
 //!
 //! 화면을 그리지 않습니다. 작업 스레드를 띄우고, 화면 스레드는 매 프레임 진행 상황만 읽어 갑니다.
 //! 두 작업 모두 [`CancelToken`]으로 멈출 수 있습니다.
+//!
+//! 내려받기([`Downloads`])는 음성 인식과 글 다듬기 갈래가 함께 씁니다. 글 다듬기 제공자의 연결
+//! 테스트는 `sulsul_llm::client::ConnectionTest`가 작업 스레드를 맡습니다.
 
 use std::fs;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -50,10 +53,41 @@ pub enum DownloadEnd {
     Failed(String),
 }
 
+/// 내려받는 모델. 음성 인식 모델과 글 다듬기 모델이 같은 내려받기를 함께 씁니다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadTarget {
+    /// 음성 인식 엔진의 카탈로그 모델
+    Stt {
+        engine_id: String,
+        variant_id: String,
+    },
+    /// 글 다듬기 로컬 모델. 변형 ID는 모든 계열에서 겹치지 않습니다.
+    Llm { variant_id: String },
+}
+
+impl DownloadTarget {
+    pub fn stt(engine_id: &str, variant_id: &str) -> Self {
+        Self::Stt {
+            engine_id: engine_id.to_owned(),
+            variant_id: variant_id.to_owned(),
+        }
+    }
+
+    pub fn llm(variant_id: &str) -> Self {
+        Self::Llm {
+            variant_id: variant_id.to_owned(),
+        }
+    }
+
+    /// 글 다듬기 모델인지
+    pub fn is_llm(&self) -> bool {
+        matches!(self, Self::Llm { .. })
+    }
+}
+
 /// 진행 중인 모델 내려받기. 한 번에 하나만 돌립니다.
 pub struct ActiveDownload {
-    pub engine_id: String,
-    pub variant_id: String,
+    pub target: DownloadTarget,
     /// 알림에 보일 모델 이름
     pub variant_label: String,
     cancel: CancelToken,
@@ -66,7 +100,7 @@ impl ActiveDownload {
     /// 받을 파일이 없거나 스레드를 띄우지 못하면 `None`입니다.
     pub fn start(
         egui_ctx: &egui::Context,
-        engine_id: &str,
+        target: DownloadTarget,
         variant: &ModelVariant,
         variant_label: String,
     ) -> Option<Self> {
@@ -144,17 +178,12 @@ impl ActiveDownload {
         };
 
         Some(Self {
-            engine_id: engine_id.to_owned(),
-            variant_id: variant.id.clone(),
+            target,
             variant_label,
             cancel,
             snapshot,
             worker,
         })
-    }
-
-    pub fn is_for(&self, engine_id: &str, variant_id: &str) -> bool {
-        self.engine_id == engine_id && self.variant_id == variant_id
     }
 
     pub fn cancel(&self) {
@@ -183,6 +212,88 @@ impl ActiveDownload {
     }
 }
 
+/// 내려받지 못한 모델과 그 이유
+struct DownloadFailure {
+    target: DownloadTarget,
+    /// 화면에 보일 실패 이유
+    message: String,
+}
+
+/// 모델 내려받기 상태. 음성 인식과 글 다듬기 갈래가 함께 쓰고, 내려받기는 한 번에 하나만 합니다.
+#[derive(Default)]
+pub struct Downloads {
+    active: Option<ActiveDownload>,
+    failure: Option<DownloadFailure>,
+}
+
+impl Downloads {
+    /// 지금 진행 중인 내려받기
+    pub fn active(&self) -> Option<&ActiveDownload> {
+        self.active.as_ref()
+    }
+
+    /// `target`을 내려받는 중이면 그 내려받기
+    pub fn of(&self, target: &DownloadTarget) -> Option<&ActiveDownload> {
+        self.active
+            .as_ref()
+            .filter(|download| &download.target == target)
+    }
+
+    /// `target`을 마지막으로 내려받다 실패했으면 그 이유
+    pub fn failure_of(&self, target: &DownloadTarget) -> Option<&str> {
+        self.failure
+            .as_ref()
+            .filter(|failure| &failure.target == target)
+            .map(|failure| failure.message.as_str())
+    }
+
+    /// `variant`를 내려받기 시작합니다. 이미 다른 것을 받는 중이거나 받을 파일이 없으면 아무것도 하지 않습니다.
+    pub fn start(
+        &mut self,
+        egui_ctx: &egui::Context,
+        target: DownloadTarget,
+        variant: &ModelVariant,
+        variant_label: String,
+    ) {
+        if self.active.is_some() || variant.missing_files().is_empty() {
+            return;
+        }
+        self.failure = None;
+        self.active = ActiveDownload::start(egui_ctx, target.clone(), variant, variant_label);
+        if self.active.is_none() {
+            // 작업 스레드를 띄우지 못했습니다.
+            self.failure = Some(DownloadFailure {
+                target,
+                message: t!("models.download.crashed").into_owned(),
+            });
+        }
+    }
+
+    pub fn cancel(&self) {
+        if let Some(download) = &self.active {
+            download.cancel();
+        }
+    }
+
+    /// 내려받기가 끝났으면 내려놓고, 끝난 내려받기와 그 결과를 돌려줍니다.
+    /// 실패한 이유는 다음에 같은 모델을 다시 받기 시작할 때까지 기억합니다.
+    pub fn take_finished(&mut self) -> Option<(ActiveDownload, DownloadEnd)> {
+        let end = self.active.as_ref().and_then(ActiveDownload::poll)?;
+        let download = self.active.take()?;
+        match &end {
+            DownloadEnd::Done => self.failure = None,
+            DownloadEnd::Cancelled => {}
+            DownloadEnd::Failed(message) => {
+                self.failure = Some(DownloadFailure {
+                    target: download.target.clone(),
+                    message: message.clone(),
+                });
+            }
+        }
+        Some((download, end))
+    }
+}
+
 /// 내려받다 만 조각(`.part`) 파일의 크기 합. 0보다 크면 이어받을 수 있습니다.
 pub fn partial_bytes(variant: &ModelVariant) -> u64 {
     variant
@@ -199,7 +310,7 @@ pub fn partial_bytes(variant: &ModelVariant) -> u64 {
 /// 테스트하는 대상
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestTarget {
-    /// "사용 가능 엔진" 목록의 항목
+    /// "사용 가능 모델" 목록의 항목
     Entry(EntryKey),
     /// 아직 등록하지 않은 새 제공자 (초안)
     Draft,

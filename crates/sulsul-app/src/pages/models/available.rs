@@ -1,11 +1,12 @@
-//! "사용 가능 엔진" 탭: 지금 바로 쓸 수 있는 로컬 모델과 외부 제공자의 목록.
+//! 음성 인식 갈래의 "사용 가능 모델" 탭: 지금 바로 쓸 수 있는 로컬 모델과 외부 제공자의 목록.
 //!
 //! 항목마다 펼침 카드 하나를 두고, 스위치로 받아쓰기에 쓸 항목 하나를 고릅니다.
 //! 카드를 펼치면 그 자리에서 설정을 고치고, 테스트하고, 제거할 수 있습니다.
+//! 목록 아래에는 모든 모델이 함께 쓰는 "인식 정확도 높이기" 묶음(용어 힌트)이 있습니다.
 
 use std::path::Path;
 
-use egui::{Align, Ui};
+use egui::{TextEdit, Ui};
 use rust_i18n::t;
 use sulsul_core::settings::SettingField;
 use sulsul_core::stt::{
@@ -15,12 +16,13 @@ use sulsul_stt_cloud::ENGINE_ID as CLOUD_ENGINE_ID;
 
 use super::entries::{
     Entry, EntryKey, EntryKind, MODEL_PATH_KEY, activate, activate_first_ready, available_entries,
-    clear_custom_path, entry_languages, entry_test_config, profile_display_name, provider_label,
+    clear_custom_path, edit_engine_table, entry_languages, entry_test_config, model_path_field,
     remove_profile, selection_issue, variant_label,
 };
-use super::jobs::TestTarget;
-use super::parts::{self, TestClick};
-use super::{ModelsPage, SttTab};
+use super::jobs::{DownloadTarget, TestTarget};
+use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, EmptyAction, TestClick};
+use super::profiles::profile_display_name;
+use super::{Category, ModelsPage, Tab};
 use crate::accel::{AccelEnv, EngineAccel};
 use crate::i18n::{tr, tr_opt};
 use crate::icons::Icon;
@@ -28,21 +30,12 @@ use crate::pages::SECTION_GAP;
 use crate::session::PageContext;
 use crate::theme::Palette;
 use crate::widgets::banner::{Banner, Tone};
-use crate::widgets::card;
-use crate::widgets::confirm::{Answer, Confirm};
-use crate::widgets::controls;
-use crate::widgets::expander::Expander;
+use crate::widgets::card::Section;
+use crate::widgets::confirm::Answer;
 use crate::widgets::language::language_setting_row;
 use crate::widgets::row::{self, Row};
 use crate::widgets::setting_field::setting_field;
 use crate::widgets::text;
-
-/// 카드 사이 간격
-const CARD_GAP: f32 = 4.0;
-/// 펼친 카드 안에서 묶음 사이 간격
-const BODY_GAP: f32 = 12.0;
-/// 카드로 화면을 옮길 때 카드 위에 남기는 여백
-const REVEAL_MARGIN: f32 = 12.0;
 
 /// 사용자에게 확인을 받고 있는 제거
 pub(super) enum PendingConfirm {
@@ -73,136 +66,49 @@ impl PendingConfirm {
     }
 }
 
-/// 카드 머리 줄의 배지
-struct Badge {
-    text: String,
-    tone: BadgeTone,
-}
-
-#[derive(Clone, Copy)]
-enum BadgeTone {
-    Plain,
-    /// 추천 모델
-    Accent,
-    /// 지금은 쓸 수 없는 상태
-    Warning,
-}
-
-impl Badge {
-    fn plain(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            tone: BadgeTone::Plain,
-        }
-    }
-
-    fn accent(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            tone: BadgeTone::Accent,
-        }
-    }
-
-    fn warning(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            tone: BadgeTone::Warning,
-        }
-    }
-
-    fn show(&self, ui: &mut Ui) {
-        let palette = Palette::of(ui);
-        match self.tone {
-            BadgeTone::Plain => controls::badge(ui, &self.text),
-            BadgeTone::Accent => {
-                controls::tone_badge(ui, &self.text, palette.accent_soft, palette.accent_text)
+/// 카드 머리 줄에 보일 내용. `languages`는 이 항목이 인식할 수 있는 언어입니다 (`entry_languages`).
+fn entry_head(
+    engine_name: &str,
+    engine_description: Option<String>,
+    entry: &Entry,
+    languages: Option<&LanguageSupport>,
+) -> CardHead {
+    match &entry.kind {
+        EntryKind::Variant(variant) => {
+            let mut badges = vec![
+                Badge::plain(engine_name),
+                Badge::plain(format_bytes(variant.total_bytes())),
+            ];
+            // 한 언어만 인식하는 모델(영어 전용 등)은 카드를 펼치지 않아도 알 수 있게 합니다.
+            if let Some(languages) = languages.filter(|languages| languages.single().is_some()) {
+                badges.push(Badge::plain(parts::language_support_label(languages)));
             }
-            BadgeTone::Warning => {
-                controls::tone_badge(ui, &self.text, palette.warning_soft, palette.warning_text)
+            if variant.recommended {
+                badges.push(Badge::accent(t!("models.badge.recommended")));
             }
-        };
-    }
-}
-
-/// 카드 머리 줄에 보일 내용: 이름, 배지, 짧은 설명
-struct EntryHead {
-    name: String,
-    badges: Vec<Badge>,
-    description: Option<String>,
-}
-
-impl EntryHead {
-    /// `languages`는 이 항목이 인식할 수 있는 언어입니다 (`entry_languages`).
-    fn of(
-        engine_name: &str,
-        engine_description: Option<String>,
-        entry: &Entry,
-        languages: Option<&LanguageSupport>,
-    ) -> Self {
-        match &entry.kind {
-            EntryKind::Variant(variant) => {
-                let mut badges = vec![
-                    Badge::plain(engine_name),
-                    Badge::plain(format_bytes(variant.total_bytes())),
-                ];
-                // 한 언어만 인식하는 모델(영어 전용 등)은 카드를 펼치지 않아도 알 수 있게 합니다.
-                if let Some(languages) = languages.filter(|languages| languages.single().is_some())
-                {
-                    badges.push(Badge::plain(parts::language_support_label(languages)));
-                }
-                if variant.recommended {
-                    badges.push(Badge::accent(t!("models.badge.recommended")));
-                }
-                Self {
-                    name: variant_label(variant),
-                    badges,
-                    description: tr_opt(&variant.description_key),
-                }
-            }
-            EntryKind::Custom { .. } => {
-                let mut badges = vec![Badge::plain(engine_name)];
-                if !entry.ready {
-                    badges.push(Badge::warning(t!("models.available.custom.missing_badge")));
-                }
-                Self {
-                    name: t!("models.available.custom.name").into_owned(),
-                    badges,
-                    description: Some(t!("models.available.custom.description").into_owned()),
-                }
-            }
-            EntryKind::Engine => Self {
-                name: engine_name.to_owned(),
-                badges: vec![Badge::plain(t!("models.available.engine.no_model_badge"))],
-                description: engine_description,
-            },
-            EntryKind::Provider(profile) => {
-                let mut badges = vec![Badge::plain(provider_label(&profile.provider))];
-                if !entry.ready {
-                    badges.push(Badge::warning(t!(
-                        "models.available.provider.incomplete_badge"
-                    )));
-                }
-                let model = profile.model.trim();
-                Self {
-                    name: profile_display_name(profile),
-                    badges,
-                    description: (!model.is_empty()).then(|| model.to_owned()),
-                }
+            CardHead {
+                name: variant_label(variant),
+                badges,
+                description: tr_opt(&variant.description_key),
             }
         }
-    }
-
-    fn show(&self, ui: &mut Ui) {
-        ui.spacing_mut().item_spacing.y = 3.0;
-        row::title_line(ui, |ui| {
-            ui.label(text::strong(&self.name));
-            for badge in &self.badges {
-                badge.show(ui);
+        EntryKind::Custom { .. } => {
+            let mut badges = vec![Badge::plain(engine_name)];
+            if !entry.ready {
+                badges.push(Badge::warning(t!("models.available.custom.missing_badge")));
             }
-        });
-        if let Some(description) = &self.description {
-            ui.label(text::caption(ui, description));
+            CardHead {
+                name: t!("models.available.custom.name").into_owned(),
+                badges,
+                description: Some(t!("models.available.custom.description").into_owned()),
+            }
         }
+        EntryKind::Engine => CardHead {
+            name: engine_name.to_owned(),
+            badges: vec![Badge::plain(t!("models.available.engine.no_model_badge"))],
+            description: engine_description,
+        },
+        EntryKind::Provider(profile) => parts::provider_head(Category::Stt, profile, entry.ready),
     }
 }
 
@@ -219,43 +125,30 @@ impl ModelsPage {
             Banner::new(Tone::Warning).line(issue.text()).show(ui);
             ui.add_space(8.0);
         }
+        unregistered_engines_banner(ui, cx);
 
+        self.list
+            .begin(|key| entries.iter().any(|entry| &entry.key == key));
         if entries.is_empty() {
-            self.expanded = None;
-            self.reveal = None;
-            self.empty_state(ui);
+            self.list.end();
+            match parts::empty_state(ui) {
+                Some(EmptyAction::Download) => self.tab = Tab::Download,
+                Some(EmptyAction::Providers) => self.tab = Tab::Providers,
+                None => {}
+            }
             return;
-        }
-        // 펼쳐 둔 항목이 목록에서 사라졌으면 펼침 상태도 지웁니다.
-        if let Some(key) = &self.expanded
-            && entries.iter().all(|entry| &entry.key != key)
-        {
-            self.expanded = None;
         }
 
         let mut turn_on = None;
         let mut previous_local = None;
         for entry in &entries {
-            let local = entry.key.is_local();
-            if previous_local != Some(local) {
-                if previous_local.is_some() {
-                    ui.add_space(SECTION_GAP - CARD_GAP);
-                }
-                previous_local = Some(local);
-                let title = if local {
-                    t!("models.available.group.local")
-                } else {
-                    t!("models.available.group.providers")
-                };
-                parts::group_title(ui, &title);
-            }
+            parts::list_group(ui, &mut previous_local, entry.key.is_local());
             if self.entry_card(ui, cx, entry) {
                 turn_on = Some(entry.key.clone());
             }
             ui.add_space(CARD_GAP);
         }
-        // 보여 주려던 카드가 목록에 없었으면 그만둡니다. 나중에 생겼을 때 갑자기 화면이 옮겨지지 않게 합니다.
-        self.reveal = None;
+        self.list.end();
 
         // 스위치를 켠 항목으로 바꿉니다. 다른 항목의 스위치는 다음 프레임부터 꺼진 모습이 됩니다.
         if let Some(key) = turn_on
@@ -263,36 +156,8 @@ impl ModelsPage {
         {
             activate(&cx.shared.registry, &mut cx.config.stt, &key);
         }
-    }
 
-    /// 쓸 수 있는 항목이 하나도 없을 때의 안내
-    fn empty_state(&mut self, ui: &mut Ui) {
-        card::card(ui, |ui| {
-            ui.label(text::strong(t!("models.available.empty.title")));
-            ui.label(text::muted(ui, t!("models.available.empty.body")));
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
-                if controls::primary_icon_button(
-                    ui,
-                    Icon::Download,
-                    t!("models.available.empty.go_download"),
-                )
-                .clicked()
-                {
-                    self.tab = SttTab::Download;
-                }
-                if controls::icon_text_button(
-                    ui,
-                    Icon::Cloud,
-                    t!("models.available.empty.go_providers"),
-                )
-                .clicked()
-                {
-                    self.tab = SttTab::Providers;
-                }
-            });
-        });
+        accuracy_section(ui, cx);
     }
 
     /// 항목 카드 하나를 그립니다. 스위치를 눌러 켰으면 `true`를 돌려줍니다.
@@ -305,37 +170,22 @@ impl ModelsPage {
         let engine_description = descriptor.and_then(|d| tr_opt(&d.description_key));
         let languages = entry_languages(&cx.shared.registry, &cx.config.stt, &entry.key);
         let languages = languages.as_ref();
-        let head = EntryHead::of(&engine_name, engine_description, entry, languages);
+        let head = entry_head(&engine_name, engine_description, entry, languages);
 
-        let open = self.expanded.as_ref() == Some(&entry.key);
-        let shown_on = entry.shown_on();
+        let open = self.list.is_open(&entry.key);
         // 설정이 잠겨 있거나 파일이 없는 항목은 켤 수 없습니다.
         let can_turn_on = !cx.locked && entry.selectable();
-        let toggle_label = t!("models.available.use", name = head.name);
-        let mut turned_on = false;
-
-        let shown = Expander::new(&head.name, open).selected(shown_on).show(
+        let outcome = parts::entry_card(
             ui,
             ("available_entry", &entry.key),
-            |ui| head.show(ui),
-            |ui| {
-                ui.add_enabled_ui(can_turn_on, |ui| {
-                    turned_on = controls::choice_toggle(ui, shown_on, &toggle_label);
-                });
-            },
+            &head,
+            open,
+            entry.shown_on(),
+            can_turn_on,
             |ui| self.entry_body(ui, cx, entry, &engine_name, languages),
         );
-
-        if shown.toggled {
-            self.expanded = (!open).then(|| entry.key.clone());
-            self.reveal_api_key = false;
-        }
-        // 다른 탭에서 "이 항목 보기"로 넘어왔으면 화면을 이 카드로 옮깁니다.
-        if self.reveal.as_ref() == Some(&entry.key) {
-            self.reveal = None;
-            ui.scroll_to_rect(shown.response.rect.expand(REVEAL_MARGIN), Some(Align::Min));
-        }
-        turned_on
+        self.list.after_card(ui, &entry.key, &outcome);
+        outcome.turned_on
     }
 
     /// 펼친 카드의 내용. `languages`는 이 항목이 인식할 수 있는 언어입니다.
@@ -350,90 +200,10 @@ impl ModelsPage {
         match &entry.kind {
             EntryKind::Provider(_) => self.provider_body(ui, cx, entry, languages),
             EntryKind::Variant(_) | EntryKind::Custom { .. } | EntryKind::Engine => {
-                self.local_body(ui, cx, entry, engine_name, languages);
+                local_body(ui, cx, entry, engine_name, languages);
             }
         }
         self.entry_actions(ui, cx, entry, engine_name);
-    }
-
-    /// 로컬 항목: 직접 지정한 경로, 엔진 설정, 예상 장치
-    fn local_body(
-        &mut self,
-        ui: &mut Ui,
-        cx: &mut PageContext<'_>,
-        entry: &Entry,
-        engine_name: &str,
-        languages: Option<&LanguageSupport>,
-    ) {
-        let palette = Palette::of(ui);
-        let engine_id = entry.key.engine_id();
-
-        if let EntryKind::Custom { path } = &entry.kind {
-            parts::sub_title(ui, &t!("models.available.custom.path_title"));
-            ui.add(text::path_label(ui, Path::new(path)));
-            if !entry.ready {
-                ui.label(
-                    text::caption(ui, t!("models.available.custom.missing"))
-                        .color(palette.warning_text),
-                );
-            }
-            ui.label(text::caption(
-                ui,
-                t!(
-                    "models.available.custom.replaced_note",
-                    engine = engine_name
-                ),
-            ));
-            ui.add_space(BODY_GAP);
-        }
-
-        // 엔진 설정. 모델을 고르는 값은 이 목록의 스위치가 정하므로 빼고 보여 줍니다.
-        let model_key = cx
-            .shared
-            .registry
-            .model_setting_key(engine_id)
-            .ok()
-            .flatten();
-        let fields: Vec<SettingField> = cx
-            .shared
-            .registry
-            .descriptor(engine_id)
-            .map(|descriptor| {
-                descriptor
-                    .settings
-                    .iter()
-                    .filter(|field| {
-                        Some(field.key.as_str()) != model_key && field.key != MODEL_PATH_KEY
-                    })
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !fields.is_empty() {
-            parts::sub_title(ui, &t!("models.available.settings.title"));
-            engine_settings(ui, cx, engine_id, &fields, languages);
-            ui.add_space(4.0);
-            ui.label(text::caption(
-                ui,
-                t!("models.available.settings.shared", engine = engine_name),
-            ));
-            ui.add_space(BODY_GAP);
-        }
-
-        // 예상 장치. 지금 설정과 찾은 장치로 미리 본 값이고, 실제 장치는 테스트 결과에 나옵니다.
-        let accel = EngineAccel::of(
-            &cx.shared.registry,
-            &cx.config.stt,
-            engine_id,
-            AccelEnv::current(),
-        );
-        if let Some(accel) = accel {
-            parts::sub_title(ui, &t!("models.accel.expected"));
-            parts::accel_panel(ui, &accel, &accel.note(&cx.shared.registry));
-            ui.add_space(4.0);
-            ui.label(text::caption(ui, t!("models.accel.footnote")));
-            ui.add_space(BODY_GAP);
-        }
     }
 
     /// 외부 제공자: 이름·주소·API 키·모델 편집과 클라우드 공통 설정
@@ -459,12 +229,15 @@ impl ModelsPage {
 
         ui.add_enabled_ui(!cx.locked, |ui| {
             let profile = &mut cx.config.stt.api_profiles[index];
-            // 공급자는 등록할 때 정해지고 여기서는 바꾸지 않습니다.
-            Row::new(&t!("models.providers.field.provider")).show(ui, |ui| {
-                controls::badge(ui, &provider_label(&profile.provider));
-            });
+            parts::provider_row(ui, Category::Stt, &profile.provider);
             row::separator(ui);
-            parts::profile_fields(ui, profile_id, profile, &mut self.reveal_api_key);
+            parts::profile_fields(
+                ui,
+                Category::Stt,
+                profile_id,
+                profile,
+                &mut self.list.reveal_api_key,
+            );
         });
         ui.add_space(BODY_GAP);
 
@@ -479,6 +252,7 @@ impl ModelsPage {
             engine_settings(ui, cx, CLOUD_ENGINE_ID, &shared_fields, languages);
             ui.add_space(4.0);
             ui.label(text::caption(ui, t!("models.providers.shared.note")));
+            unknown_keys_warning(ui, cx, CLOUD_ENGINE_ID);
             ui.add_space(BODY_GAP);
         }
     }
@@ -496,10 +270,12 @@ impl ModelsPage {
         let removable = !matches!(entry.kind, EntryKind::Engine);
         // 같은 엔진의 모델은 파일을 함께 쓰기도 하므로, 그 엔진을 내려받는 동안에는 지우지 않습니다.
         let downloading = entry.key.is_local()
-            && self
-                .download
-                .as_ref()
-                .is_some_and(|download| download.engine_id == entry.key.engine_id());
+            && self.downloads.active().is_some_and(|download| {
+                matches!(
+                    &download.target,
+                    DownloadTarget::Stt { engine_id, .. } if engine_id == entry.key.engine_id()
+                )
+            });
         let remove_blocked = if cx.locked {
             Some(t!("models.available.remove_blocked.locked"))
         } else if self.is_testing(&target) {
@@ -511,27 +287,16 @@ impl ModelsPage {
         };
 
         let test_label = t!("models.test.button");
+        let test_state = self.test_state(&target);
         let mut test_click = None;
         let mut remove = false;
         parts::action_row(
             ui,
+            |ui| test_click = parts::test_button(ui, &test_label, test_state),
             |ui| {
-                test_click = parts::test_button(ui, &test_label, self.test.as_ref(), &target);
-            },
-            |ui| {
-                if !removable {
-                    return;
+                if removable {
+                    remove = parts::remove_button(ui, remove_blocked.as_deref());
                 }
-                ui.add_enabled_ui(remove_blocked.is_none(), |ui| {
-                    let button = controls::danger_button(ui, t!("models.available.remove"));
-                    remove = match &remove_blocked {
-                        Some(reason) => {
-                            button.on_disabled_hover_text(reason.as_ref());
-                            false
-                        }
-                        None => button.clicked(),
-                    };
-                });
             },
         );
         parts::test_progress(ui, self.test.as_ref(), &target);
@@ -589,16 +354,7 @@ impl ModelsPage {
                 t!("models.remove.provider.body", name = name),
             ),
         };
-        let answer = Confirm {
-            id,
-            title: &title,
-            body: &body,
-            confirm_label: &t!("models.available.remove"),
-            cancel_label: &t!("common.cancel"),
-            danger: true,
-        }
-        .show(ui);
-        match answer {
+        match parts::confirm_removal(ui, id, &title, &body) {
             Some(Answer::Confirm) => self.remove(cx, pending),
             Some(Answer::Cancel) => {}
             None => self.confirm = Some(pending),
@@ -654,9 +410,7 @@ impl ModelsPage {
             }
         }
 
-        if self.expanded.as_ref() == Some(&key) {
-            self.expanded = None;
-        }
+        self.list.forget(&key);
         self.forget_test(&TestTarget::Entry(key));
         if was_selected {
             activate_first_ready(&cx.shared.registry, &engine_ctx, &mut cx.config.stt);
@@ -665,10 +419,103 @@ impl ModelsPage {
 
     /// 다른 탭에서 이 탭으로 넘어와 `key` 카드를 펼쳐 보여 줍니다.
     pub(super) fn show_entry(&mut self, key: EntryKey) {
-        self.tab = SttTab::Available;
-        self.reveal_api_key = false;
-        self.expanded = Some(key.clone());
-        self.reveal = Some(key);
+        self.tab = Tab::Available;
+        self.list.show(key);
+    }
+}
+
+/// 로컬 항목: 직접 지정한 경로, 엔진 설정, 예상 장치
+fn local_body(
+    ui: &mut Ui,
+    cx: &mut PageContext<'_>,
+    entry: &Entry,
+    engine_name: &str,
+    languages: Option<&LanguageSupport>,
+) {
+    let palette = Palette::of(ui);
+    let engine_id = entry.key.engine_id();
+
+    if let EntryKind::Custom { path } = &entry.kind {
+        // 직접 지정한 경로는 여기서 고칩니다. 경로를 비우면 이 항목은 목록에서 빠집니다.
+        match model_path_field(&cx.shared.registry, engine_id) {
+            Some(field) => {
+                engine_settings(ui, cx, engine_id, std::slice::from_ref(&field), None);
+            }
+            None => {
+                ui.add(text::path_label(ui, Path::new(path)));
+            }
+        }
+        if !entry.ready {
+            ui.label(
+                text::caption(ui, t!("models.available.custom.missing"))
+                    .color(palette.warning_text),
+            );
+        }
+        ui.label(text::caption(
+            ui,
+            t!(
+                "models.available.custom.replaced_note",
+                engine = engine_name
+            ),
+        ));
+        ui.add_space(BODY_GAP);
+    }
+
+    // 엔진 설정. 엔진이 스키마에 선언한 항목만 그립니다. 모델을 고르는 값은 이 목록의 스위치가
+    // 정하고 직접 지정한 경로는 위에서 따로 고치므로 빼고 보여 줍니다.
+    let model_key = cx
+        .shared
+        .registry
+        .model_setting_key(engine_id)
+        .ok()
+        .flatten();
+    let fields: Vec<SettingField> = cx
+        .shared
+        .registry
+        .descriptor(engine_id)
+        .map(|descriptor| {
+            descriptor
+                .settings
+                .iter()
+                .filter(|field| {
+                    Some(field.key.as_str()) != model_key && field.key != MODEL_PATH_KEY
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_unknown_keys = !cx
+        .shared
+        .registry
+        .unknown_keys(&cx.config.stt, engine_id)
+        .is_empty();
+    if !fields.is_empty() || has_unknown_keys {
+        parts::sub_title(ui, &t!("models.available.settings.title"));
+        if !fields.is_empty() {
+            engine_settings(ui, cx, engine_id, &fields, languages);
+            ui.add_space(4.0);
+            ui.label(text::caption(
+                ui,
+                t!("models.available.settings.shared", engine = engine_name),
+            ));
+        }
+        unknown_keys_warning(ui, cx, engine_id);
+        ui.add_space(BODY_GAP);
+    }
+
+    // 예상 장치. 지금 설정과 찾은 장치로 미리 본 값이고, 실제 장치는 테스트 결과에 나옵니다.
+    let accel = EngineAccel::of(
+        &cx.shared.registry,
+        &cx.config.stt,
+        engine_id,
+        AccelEnv::current(),
+    );
+    if let Some(accel) = accel {
+        parts::sub_title(ui, &t!("models.accel.expected"));
+        parts::accel_panel(ui, &accel, &accel.note(&cx.shared.registry));
+        ui.add_space(4.0);
+        ui.label(text::caption(ui, t!("models.accel.footnote")));
+        ui.add_space(BODY_GAP);
     }
 }
 
@@ -678,7 +525,7 @@ impl ModelsPage {
 /// 인식하는 모델의 카드에서는 고정으로 보여 주고, 엔진이 함께 쓰는 언어 값은 바꾸지 않습니다.
 ///
 /// 보기만 해서는 설정에 빈 표가 생기지 않도록, 바뀐 값이 있을 때만 표를 넣습니다.
-fn engine_settings(
+pub(super) fn engine_settings(
     ui: &mut Ui,
     cx: &mut PageContext<'_>,
     engine_id: &str,
@@ -692,37 +539,156 @@ fn engine_settings(
         .resolve_settings(&cx.config.stt, engine_id)
         .map(|settings| settings.str(LANGUAGE_KEY).to_owned())
         .unwrap_or_default();
+    let frame = cx.frame;
     ui.add_enabled_ui(!cx.locked, |ui| {
-        let mut table = cx
-            .config
-            .stt
-            .engines
-            .get(engine_id)
-            .cloned()
-            .unwrap_or_default();
-        let mut changed = false;
-        for (index, field) in fields.iter().enumerate() {
-            if index > 0 {
-                row::separator(ui);
-            }
-            changed |= match languages {
-                Some(support) if field.key == LANGUAGE_KEY => {
-                    let help = field.help_key.as_deref().map(tr).unwrap_or_default();
-                    language_setting_row(
-                        ui,
-                        (engine_id, LANGUAGE_KEY),
-                        field,
-                        &help,
-                        support,
-                        &mut table,
-                        &language,
-                    )
+        edit_engine_table(&mut cx.config.stt, engine_id, |table| {
+            let mut changed = false;
+            for (index, field) in fields.iter().enumerate() {
+                if index > 0 {
+                    row::separator(ui);
                 }
-                _ => setting_field(ui, engine_id, field, &mut table, cx.frame),
-            };
-        }
-        if changed {
-            cx.config.stt.engines.insert(engine_id.to_owned(), table);
-        }
+                changed |= match languages {
+                    Some(support) if field.key == LANGUAGE_KEY => {
+                        let help = field.help_key.as_deref().map(tr).unwrap_or_default();
+                        language_setting_row(
+                            ui,
+                            (engine_id, LANGUAGE_KEY),
+                            field,
+                            &help,
+                            support,
+                            table,
+                            &language,
+                        )
+                    }
+                    _ => setting_field(ui, engine_id, field, table, frame),
+                };
+            }
+            changed
+        });
     });
+}
+
+/// 엔진 설정 표(`[stt.engines.<엔진 ID>]`)에 그 엔진이 모르는 키가 있으면 알립니다.
+/// 오타일 수 있습니다. 더 이상 쓰지 않는 키는 알리지 않습니다.
+fn unknown_keys_warning(ui: &mut Ui, cx: &PageContext<'_>, engine_id: &str) {
+    let keys = cx.shared.registry.unknown_keys(&cx.config.stt, engine_id);
+    if keys.is_empty() {
+        return;
+    }
+    let palette = Palette::of(ui);
+    ui.add_space(4.0);
+    ui.label(
+        text::caption(
+            ui,
+            t!(
+                "models.available.settings.unknown_keys",
+                keys = keys.join(", ")
+            ),
+        )
+        .color(palette.warning_text),
+    );
+}
+
+/// 설정 파일에 이 앱에 등록되지 않은 엔진의 설정 표가 있으면 알립니다
+/// (다른 빌드에서 쓰던 엔진이거나 오타).
+fn unregistered_engines_banner(ui: &mut Ui, cx: &PageContext<'_>) {
+    let orphaned: Vec<&str> = cx
+        .config
+        .stt
+        .engines
+        .keys()
+        .filter(|id| cx.shared.registry.descriptor(id).is_none())
+        .map(String::as_str)
+        .collect();
+    if orphaned.is_empty() {
+        return;
+    }
+    Banner::new(Tone::Warning)
+        .line(t!(
+            "models.available.unregistered_engines",
+            ids = orphaned.join(", ")
+        ))
+        .show(ui);
+    ui.add_space(8.0);
+}
+
+/// "인식 정확도 높이기" 묶음: 모든 모델이 함께 쓰는 용어 힌트(`stt.initial_prompt`).
+///
+/// 지금 고른 엔진이 용어 힌트를 쓰지 않으면 묶음을 통째로 숨깁니다. 쓸 수 없는 설정은 보여 주지 않습니다.
+fn accuracy_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
+    let supports_prompt = cx
+        .shared
+        .registry
+        .descriptor(&cx.config.stt.engine)
+        .is_some_and(|descriptor| descriptor.capabilities.supports_prompt);
+    if !supports_prompt {
+        return;
+    }
+    ui.add_space(SECTION_GAP - CARD_GAP);
+    Section::new(Icon::Target, &t!("models.accuracy.title"))
+        .badge(&t!("models.accuracy.shared"))
+        .show(ui, |ui| {
+            ui.add_enabled_ui(!cx.locked, |ui| {
+                Row::new(&t!("models.accuracy.prompt"))
+                    .help(&t!("models.accuracy.prompt_help"))
+                    .show_below(ui, |ui| {
+                        ui.add(
+                            TextEdit::multiline(&mut cx.config.stt.initial_prompt)
+                                .id_salt("stt_initial_prompt")
+                                .desired_rows(2)
+                                .desired_width(f32::INFINITY)
+                                .hint_text(t!("models.accuracy.prompt_hint")),
+                        );
+                    });
+            });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use sulsul_core::Config;
+    use sulsul_core::stt::mock::MOCK_ENGINE_ID;
+
+    use super::*;
+
+    #[test]
+    fn language_row_uses_the_engine_schema_field() {
+        let registry = crate::engines::registry();
+        for descriptor in registry.descriptors() {
+            // 지금 등록된 엔진은 모두 언어를 고를 수 있습니다. 카드의 언어 줄은 그 항목으로 그립니다.
+            let field = descriptor
+                .settings
+                .iter()
+                .find(|field| field.key == LANGUAGE_KEY);
+            assert!(
+                field.is_some_and(|field| field.label_key == "stt.language.label"),
+                "{}: 인식 언어 항목이 없습니다",
+                descriptor.id
+            );
+        }
+    }
+
+    /// 용어 힌트 묶음은 엔진이 알려 준 값(`supports_prompt`)만 보고 보이거나 숨습니다.
+    /// 화면 코드에 엔진 이름을 적어 두지 않으므로, 등록된 엔진의 값이 서로 다른지만 확인합니다.
+    #[test]
+    fn prompt_support_comes_from_the_engine_descriptor() {
+        let registry = crate::engines::registry();
+        let supports = |engine: &str| {
+            let mut config = Config::default();
+            config.stt.engine = engine.into();
+            registry
+                .descriptor(&config.stt.engine)
+                .is_some_and(|descriptor| descriptor.capabilities.supports_prompt)
+        };
+        assert!(
+            supports(sulsul_stt_whisper::ENGINE_ID),
+            "Whisper는 용어 힌트를 씁니다"
+        );
+        assert!(
+            !supports("no_such_engine"),
+            "모르는 엔진이면 용어 힌트 묶음을 숨깁니다"
+        );
+        // 개발 빌드에만 있는 가짜 엔진은 등록 여부만 봅니다 (값은 엔진이 정합니다).
+        let _ = supports(MOCK_ENGINE_ID);
+    }
 }

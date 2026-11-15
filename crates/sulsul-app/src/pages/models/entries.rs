@@ -1,16 +1,16 @@
-//! "사용 가능 엔진" 목록의 항목과, 항목을 켜거나 지울 때 설정을 바꾸는 규칙.
+//! 음성 인식 "사용 가능 모델" 목록의 항목과, 항목을 켜거나 지울 때 설정을 바꾸는 규칙.
 //!
 //! 화면을 그리지 않습니다. 목록에 무엇이 들어가고 어느 것이 켜져 있는지는 설정과 모델 파일
 //! 상태만으로 정해지므로, 여기서 따로 계산해 화면 코드와 테스트가 함께 씁니다.
 
 use rust_i18n::t;
 use sulsul_core::config::{ApiProfile, SttConfig};
+use sulsul_core::settings::SettingField;
 use sulsul_core::stt::{EngineContext, EngineKind, LanguageSupport, ModelVariant, SttRegistry};
 use sulsul_core::toml::{Table, Value};
-use sulsul_stt_cloud::{
-    ENGINE_ID as CLOUD_ENGINE_ID, find_preset, normalize_transcriptions_url, profile_from_preset,
-};
+use sulsul_stt_cloud::{ENGINE_ID as CLOUD_ENGINE_ID, find_preset, normalize_transcriptions_url};
 
+use super::profiles::profile_display_name;
 use crate::i18n::{tr, tr_opt};
 
 /// 모델 파일·폴더를 직접 지정하는 엔진 설정 키. 로컬 엔진들이 같은 이름을 씁니다.
@@ -191,6 +191,30 @@ pub fn custom_model_path(registry: &SttRegistry, stt: &SttConfig, engine_id: &st
         .resolve_settings(stt, engine_id)
         .map(|resolved| resolved.str(MODEL_PATH_KEY).trim().to_owned())
         .unwrap_or_default()
+}
+
+/// 엔진 스키마의 "모델 파일 직접 지정" 항목(`model_path`). 그런 항목이 없는 엔진이면 `None`입니다.
+pub fn model_path_field(registry: &SttRegistry, engine_id: &str) -> Option<SettingField> {
+    registry
+        .descriptor(engine_id)?
+        .settings
+        .iter()
+        .find(|field| field.key == MODEL_PATH_KEY)
+        .cloned()
+}
+
+/// 엔진 설정 표(`[stt.engines.<엔진 ID>]`)의 사본을 `edit`에 넘기고, 값이 바뀌었을 때만(`true`) 설정에 씁니다.
+///
+/// 화면을 보기만 해서는 설정에 빈 표가 생기거나 값이 바뀌지 않게 하려는 것입니다.
+pub fn edit_engine_table(
+    stt: &mut SttConfig,
+    engine_id: &str,
+    edit: impl FnOnce(&mut Table) -> bool,
+) {
+    let mut table = stt.engines.get(engine_id).cloned().unwrap_or_default();
+    if edit(&mut table) {
+        stt.engines.insert(engine_id.to_owned(), table);
+    }
 }
 
 /// 엔진 설정이 고른 카탈로그 모델 ID. 모델을 고르는 설정이 없는 엔진이면 `None`입니다.
@@ -384,94 +408,6 @@ pub fn variant_label(variant: &ModelVariant) -> String {
     tr_opt(&variant.name_key).unwrap_or_else(|| variant.id.clone())
 }
 
-/// 제공자의 이름. 이름을 비워 두었으면 ID를 보여 줍니다.
-pub fn profile_display_name(profile: &ApiProfile) -> String {
-    if profile.name.trim().is_empty() {
-        profile.id.clone()
-    } else {
-        profile.name.clone()
-    }
-}
-
-/// 공급자 프리셋의 이름. 모르는 공급자면 ID를 그대로 보여 줍니다.
-pub fn provider_label(provider: &str) -> String {
-    find_preset(provider).map_or_else(|| provider.to_owned(), |preset| tr(preset.name_key))
-}
-
-/// 공급자 프리셋의 기본값으로 새 제공자를 만듭니다. ID와 이름은 이미 있는 것과 겹치지 않게 정합니다.
-pub fn create_profile_from_preset(existing: &[ApiProfile], provider: &str) -> ApiProfile {
-    let id = next_profile_id(existing, provider);
-    let base_name = t!(
-        "models.providers.default_name",
-        provider = provider_label(provider)
-    )
-    .into_owned();
-    let name = next_profile_name(existing, &base_name);
-    profile_from_preset(provider, id, name)
-}
-
-/// `prefix`로 시작하고 `existing`과 겹치지 않는 ID (`openai`, `openai-2`, …)
-pub fn next_profile_id(existing: &[ApiProfile], prefix: &str) -> String {
-    let clean_prefix: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
-    let base = if clean_prefix.is_empty() {
-        "profile"
-    } else {
-        clean_prefix.as_str()
-    };
-    for n in 1usize.. {
-        let candidate = if n == 1 {
-            base.to_owned()
-        } else {
-            format!("{base}-{n}")
-        };
-        if !existing.iter().any(|p| p.id == candidate) {
-            return candidate;
-        }
-    }
-    unreachable!()
-}
-
-/// `base_name`이 이미 있으면 뒤에 번호를 붙입니다 (`내 OpenAI 2`, …).
-pub fn next_profile_name(existing: &[ApiProfile], base_name: &str) -> String {
-    if !existing.iter().any(|p| p.name == base_name) {
-        return base_name.to_owned();
-    }
-    for n in 2usize.. {
-        let candidate = format!("{base_name} {n}");
-        if !existing.iter().any(|p| p.name == candidate) {
-            return candidate;
-        }
-    }
-    unreachable!()
-}
-
-/// 공급자를 바꿨을 때, 사용자가 손대지 않은 주소·모델만 새 공급자의 기본값으로 바꿉니다.
-pub fn apply_provider_preset_switch(
-    profile: &mut ApiProfile,
-    old_provider: &str,
-    new_provider: &str,
-) {
-    let Some(new_preset) = find_preset(new_provider) else {
-        return;
-    };
-    let old_default_endpoint = find_preset(old_provider).map(|p| p.default_endpoint);
-    let old_default_model = find_preset(old_provider).map(|p| p.default_model);
-
-    if profile.endpoint.trim().is_empty()
-        || old_default_endpoint.is_some_and(|d| profile.endpoint.trim() == d)
-    {
-        profile.endpoint = new_preset.default_endpoint.to_owned();
-    }
-    if profile.model.trim().is_empty()
-        || old_default_model.is_some_and(|d| profile.model.trim() == d)
-    {
-        profile.model = new_preset.default_model.to_owned();
-    }
-}
-
 /// `profile` 하나만으로 클라우드 엔진을 테스트할 설정을 만듭니다.
 ///
 /// 같은 ID의 프로필이 있으면 바꿔 넣고 없으면 더한 뒤 그 프로필을 고릅니다. 엔진 테이블의
@@ -522,8 +458,10 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
+    use sulsul_core::stt::LANGUAGE_KEY;
     use sulsul_core::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
     use sulsul_core::{AppPaths, Config, ConfigStore};
+    use sulsul_stt_cloud::profile_from_preset;
 
     use super::*;
 
@@ -928,33 +866,45 @@ mod tests {
     }
 
     #[test]
-    fn next_profile_id_generates_unique_ids() {
-        let existing = vec![
-            ApiProfile {
-                id: "openai".into(),
-                ..ApiProfile::default()
-            },
-            ApiProfile {
-                id: "openai-2".into(),
-                ..ApiProfile::default()
-            },
-        ];
-        assert_eq!(next_profile_id(&existing, "openai"), "openai-3");
-        assert_eq!(next_profile_id(&existing, "groq"), "groq");
+    fn engine_table_is_written_only_when_something_changed() {
+        let mut stt = SttConfig::default();
+        stt.engines.clear();
+
+        // 화면을 보기만 했을 때: 빈 표가 생기면 안 됩니다.
+        edit_engine_table(&mut stt, WHISPER, |_| false);
+        assert!(
+            stt.engines.is_empty(),
+            "값을 바꾸지 않았으면 엔진 표를 만들지 않습니다"
+        );
+
+        // 언어를 골랐을 때: 그 엔진의 표에만 씁니다.
+        edit_engine_table(&mut stt, WHISPER, |table| {
+            table.insert(LANGUAGE_KEY.into(), Value::String("en".into()));
+            true
+        });
+        assert_eq!(
+            stt.engines[WHISPER][LANGUAGE_KEY],
+            Value::String("en".into())
+        );
+        assert_eq!(stt.engines.len(), 1);
+        assert_eq!(
+            stt.language,
+            SttConfig::default().language,
+            "예전 전역 언어 값은 건드리지 않습니다"
+        );
     }
 
     #[test]
-    fn provider_switch_updates_untouched_defaults_only() {
-        let mut p = profile_from_preset("openai", "o1".into(), "OpenAI".into());
-        apply_provider_preset_switch(&mut p, "openai", "groq");
-        assert_eq!(p.endpoint, "https://api.groq.com/openai/v1");
-        assert_eq!(p.model, "whisper-large-v3-turbo");
-
-        // 사용자가 엔드포인트를 직접 바꾼 뒤에는 프리셋 전환이 덮어쓰지 않습니다.
-        p.endpoint = "https://my-proxy.example.com/v1".into();
-        apply_provider_preset_switch(&mut p, "groq", "custom");
-        assert_eq!(p.endpoint, "https://my-proxy.example.com/v1");
-        assert_eq!(p.model, "whisper-1");
+    fn model_path_field_comes_from_the_engine_schema() {
+        let registry = registry();
+        let field = model_path_field(&registry, WHISPER);
+        assert!(
+            field.is_some_and(|field| field.key == MODEL_PATH_KEY),
+            "Whisper는 모델 파일을 직접 지정할 수 있습니다"
+        );
+        // 스키마에 그 항목이 없는 엔진과 모르는 엔진에서는 경로 칸을 그리지 않습니다.
+        assert_eq!(model_path_field(&registry, CLOUD_ENGINE_ID), None);
+        assert_eq!(model_path_field(&registry, "no_such_engine"), None);
     }
 
     #[test]
