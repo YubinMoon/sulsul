@@ -23,15 +23,61 @@ pub struct WhisperModel {
     pub size_bytes: u64,
     /// 파일 전체의 SHA-256 (소문자 16진수 64자)
     pub sha256: &'static str,
+    pub recommended: bool,
 }
 
-/// 지금은 OpenAI Whisper Large V3 하나만 제공합니다.
-pub const MODELS: &[WhisperModel] = &[WhisperModel {
-    id: "large-v3",
-    file_name: "ggml-large-v3.bin",
-    size_bytes: 3_095_033_483,
-    sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
-}];
+/// whisper.cpp 공식 GGML 모델 카탈로그 (`ggerganov/whisper.cpp`).
+pub const MODELS: &[WhisperModel] = &[
+    WhisperModel {
+        id: "tiny",
+        file_name: "ggml-tiny.bin",
+        size_bytes: 77_691_713,
+        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        recommended: false,
+    },
+    WhisperModel {
+        id: "base",
+        file_name: "ggml-base.bin",
+        size_bytes: 147_951_465,
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+        recommended: false,
+    },
+    WhisperModel {
+        id: "small",
+        file_name: "ggml-small.bin",
+        size_bytes: 487_601_967,
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+        recommended: false,
+    },
+    WhisperModel {
+        id: "large-v3-turbo-q5_0",
+        file_name: "ggml-large-v3-turbo-q5_0.bin",
+        size_bytes: 574_041_195,
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        recommended: false,
+    },
+    WhisperModel {
+        id: "medium",
+        file_name: "ggml-medium.bin",
+        size_bytes: 1_533_763_059,
+        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        recommended: false,
+    },
+    WhisperModel {
+        id: "large-v3-turbo",
+        file_name: "ggml-large-v3-turbo.bin",
+        size_bytes: 1_624_555_275,
+        sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+        recommended: true,
+    },
+    WhisperModel {
+        id: "large-v3",
+        file_name: "ggml-large-v3.bin",
+        size_bytes: 3_095_033_483,
+        sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+        recommended: false,
+    },
+];
 
 impl WhisperModel {
     pub fn download_url(&self) -> String {

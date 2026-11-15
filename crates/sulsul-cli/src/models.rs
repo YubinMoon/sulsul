@@ -48,12 +48,19 @@ fn status(selected: &Selected) -> Result<()> {
         }
         _ => println!("상태: 없음"),
     }
+    for extra in &model.extra_files {
+        let state = match std::fs::metadata(&extra.path) {
+            Ok(metadata) if metadata.is_file() => format!("있음 ({})", size_text(metadata.len())),
+            _ => "없음".to_owned(),
+        };
+        println!("추가 파일: {} ({state})", extra.path.display());
+    }
     match &model.asset {
         Some(asset) => {
             println!(
                 "내려받을 수 있는 모델: {} ({})",
                 asset.id,
-                size_text(asset.size_bytes)
+                size_text(model.total_bytes().unwrap_or(asset.size_bytes))
             );
             println!("URL: {}", asset.url);
             let part = download::part_path(&model.path);
@@ -83,31 +90,36 @@ fn download_model(selected: &Selected) -> Result<()> {
         );
         return Ok(());
     };
-    let Some(request) = DownloadRequest::for_model(&model) else {
+    let requests = DownloadRequest::for_model_all(&model);
+    if requests.is_empty() {
         bail!(
             "직접 지정한 모델 파일은 내려받을 수 없습니다: {}",
             model.path.display()
         );
-    };
+    }
     if model.is_installed() {
         println!("이미 있습니다: {}", model.path.display());
         return Ok(());
     }
 
     announce(&model);
-    let mut display = ProgressDisplay::new(std::io::stderr().is_terminal());
-    let result = download::download(&request, &CancelToken::new(), &mut |progress| {
-        display.show(progress);
-    });
-    display.finish();
-
-    match result {
-        Ok(()) => {
-            println!("받았습니다: {}", model.path.display());
-            Ok(())
+    for request in requests {
+        if request.dest.is_file() {
+            println!("이미 있습니다: {}", request.dest.display());
+            continue;
         }
-        Err(error) => bail!("내려받지 못했습니다: {error}\n{}", retry_hint(&error)),
+        eprintln!("받는 중: {} -> {}", request.url, request.dest.display());
+        let mut display = ProgressDisplay::new(std::io::stderr().is_terminal());
+        let result = download::download(&request, &CancelToken::new(), &mut |progress| {
+            display.show(progress);
+        });
+        display.finish();
+        match result {
+            Ok(()) => println!("받았습니다: {}", request.dest.display()),
+            Err(error) => bail!("내려받지 못했습니다: {error}\n{}", retry_hint(&error)),
+        }
     }
+    Ok(())
 }
 
 fn announce(model: &ModelRequirement) {

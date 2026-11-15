@@ -2,7 +2,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::{
-    EngineContext, EngineDescriptor, ModelRequirement, SttEngine, SttEngineFactory, SttError,
+    EngineContext, EngineDescriptor, ModelRequirement, ModelVariant, SttEngine, SttEngineFactory,
+    SttError,
 };
 use crate::config::SttConfig;
 use crate::settings::{self, ResolvedSettings, SettingIssue};
@@ -78,6 +79,26 @@ impl SttRegistry {
             .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
         let resolved = settings::resolve(&factory.descriptor().settings, config.engines.get(id));
         Ok(factory.model(ctx, &resolved))
+    }
+
+    /// 엔진이 제공하는 모델 크기·변형 카탈로그
+    pub fn model_variants(
+        &self,
+        ctx: &EngineContext,
+        id: &str,
+    ) -> Result<Vec<ModelVariant>, SttError> {
+        let factory = self
+            .get(id)
+            .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
+        Ok(factory.model_variants(ctx))
+    }
+
+    /// 카탈로그 모델 ID를 기록할 엔진 설정 키 (예: `"model"`)
+    pub fn model_setting_key(&self, id: &str) -> Result<Option<&'static str>, SttError> {
+        let factory = self
+            .get(id)
+            .ok_or_else(|| SttError::UnknownEngine(id.to_owned()))?;
+        Ok(factory.model_setting_key())
     }
 
     /// 설정 파일에 빠진 엔진 설정 키를 기본값으로 채웁니다.

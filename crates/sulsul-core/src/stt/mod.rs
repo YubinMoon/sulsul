@@ -20,7 +20,9 @@ mod transcriber;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub use model::{ModelAsset, ModelRequirement};
+pub use model::{
+    ModelAsset, ModelFile, ModelRequirement, ModelVariant, delete_variant, format_bytes,
+};
 pub use registry::SttRegistry;
 pub use transcriber::{Prepared, TranscribeError, TranscribeJob, Transcriber, Transcription};
 
@@ -185,6 +187,16 @@ pub trait SttEngineFactory: Send + Sync {
         _ctx: &EngineContext,
         _settings: &ResolvedSettings,
     ) -> Option<ModelRequirement> {
+        None
+    }
+
+    /// 엔진이 제공하는 다운로드 가능 모델 크기·변형 카탈로그.
+    fn model_variants(&self, _ctx: &EngineContext) -> Vec<ModelVariant> {
+        Vec::new()
+    }
+
+    /// 카탈로그 모델 ID를 기록할 엔진 설정 키 (예: `"model"`).
+    fn model_setting_key(&self) -> Option<&'static str> {
         None
     }
 }

@@ -49,6 +49,25 @@ impl DownloadRequest {
             sha256: Some(asset.sha256.clone()),
         })
     }
+
+    /// 개별 [`ModelFile`] 내려받기 요청을 만듭니다.
+    pub fn for_file(file: &crate::stt::ModelFile) -> Self {
+        Self {
+            url: file.asset.url.clone(),
+            dest: file.path.clone(),
+            expected_size: Some(file.asset.size_bytes),
+            sha256: Some(file.asset.sha256.clone()),
+        }
+    }
+
+    /// 주 모델 파일과 추가 필수 파일을 포함해 필요한 모든 다운로드 요청을 만듭니다.
+    pub fn for_model_all(requirement: &ModelRequirement) -> Vec<Self> {
+        requirement
+            .downloadable_files()
+            .into_iter()
+            .map(|file| Self::for_file(&file))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,6 +588,7 @@ mod tests {
                 size_bytes: 42,
                 sha256: "ab".repeat(32),
             }),
+            extra_files: Vec::new(),
         };
         assert_eq!(
             DownloadRequest::for_model(&requirement),

@@ -338,7 +338,7 @@ engine:
     description: 이 컴퓨터에서 whisper.cpp로 인식합니다. 인터넷 없이 동작하고 음성이 밖으로 나가지 않습니다.
     settings:
       model: 모델
-      model_help: 지금은 OpenAI Whisper Large V3 하나만 고를 수 있습니다. 한국어를 포함해 가장 정확하지만 파일이 크고 메모리를 많이 씁니다.
+      model_help: 모델 관리 탭에서 용량과 정확도에 맞춰 다양한 Whisper GGML 크기를 설치하고 선택할 수 있습니다.
       model_path: 모델 파일 직접 지정
       model_path_help: 비워 두면 모델 폴더에서 선택한 모델을 찾습니다.
       use_gpu: GPU 가속
@@ -349,6 +349,28 @@ engine:
       threads_help: 0이면 자동으로 정합니다.
       beam_size: 탐색 폭(beam size)
       beam_size_help: 클수록 정확하지만 느립니다. 1이면 가장 빠른 방식(greedy)으로 인식합니다.
+    models:
+      tiny:
+        name: Tiny
+        description: 약 78 MB. 매우 가볍고 빠르며 저사양 환경이나 빠른 테스트에 알맞습니다.
+      base:
+        name: Base
+        description: 약 148 MB. 가볍고 빠른 기본 입문형 모델입니다.
+      small:
+        name: Small
+        description: 약 488 MB. 속도와 정확도의 균형이 무난한 중소형 모델입니다.
+      large-v3-turbo-q5_0:
+        name: Large V3 Turbo (Q5_0 경량)
+        description: 약 574 MB. Large V3 Turbo를 5비트 양자화해 메모리 부담을 줄였습니다.
+      medium:
+        name: Medium
+        description: 약 1.5 GB. 안정적인 정확도를 갖춘 중형 다국어 모델입니다.
+      large-v3-turbo:
+        name: Large V3 Turbo (추천)
+        description: 약 1.6 GB. Large V3급 한국어·다국어 정확도를 훨씬 빠르게 제공합니다.
+      large-v3:
+        name: Large V3 (최고 정확도)
+        description: 약 3.1 GB. 가장 높은 인식 정확도를 내지만 용량과 메모리를 많이 씁니다.
   mock:
     name: 테스트용 가짜 엔진
     description: 실제 인식 없이 받은 오디오 정보를 돌려줍니다. 개발 중 화면 흐름을 확인할 때 씁니다.

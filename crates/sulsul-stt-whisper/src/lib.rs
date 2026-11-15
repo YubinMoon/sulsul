@@ -17,8 +17,8 @@ use std::sync::{Arc, OnceLock};
 use sulsul_core::AppPaths;
 use sulsul_core::settings::{ChoiceOption, PathKind, ResolvedSettings, SettingField};
 use sulsul_core::stt::{
-    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport,
-    ModelRequirement, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
+    EngineCapabilities, EngineContext, EngineDescriptor, EngineKind, LanguageSupport, ModelFile,
+    ModelRequirement, ModelVariant, SttEngine, SttEngineFactory, SttError, WHISPER_SAMPLE_RATE,
 };
 
 use engine::{EngineOptions, WhisperEngine};
@@ -197,16 +197,33 @@ impl SttEngineFactory for WhisperFactory {
     fn model(&self, ctx: &EngineContext, settings: &ResolvedSettings) -> Option<ModelRequirement> {
         let custom = settings.str(keys::MODEL_PATH).trim();
         if !custom.is_empty() {
-            return Some(ModelRequirement {
-                path: PathBuf::from(custom),
-                asset: None,
-            });
+            return Some(ModelRequirement::custom(PathBuf::from(custom)));
         }
         let model = find_model(settings.str(keys::MODEL))?;
-        Some(ModelRequirement {
-            path: ctx.paths.models_dir().join(model.file_name),
-            asset: Some(model.asset()),
-        })
+        Some(ModelRequirement::single(
+            ctx.paths.models_dir().join(model.file_name),
+            model.asset(),
+        ))
+    }
+
+    fn model_variants(&self, ctx: &EngineContext) -> Vec<ModelVariant> {
+        MODELS
+            .iter()
+            .map(|m| ModelVariant {
+                id: m.id.to_owned(),
+                name_key: format!("engine.{ENGINE_ID}.models.{}.name", m.id),
+                description_key: format!("engine.{ENGINE_ID}.models.{}.description", m.id),
+                recommended: m.recommended,
+                files: vec![ModelFile {
+                    path: ctx.paths.models_dir().join(m.file_name),
+                    asset: m.asset(),
+                }],
+            })
+            .collect()
+    }
+
+    fn model_setting_key(&self) -> Option<&'static str> {
+        Some(keys::MODEL)
     }
 }
 
