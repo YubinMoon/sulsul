@@ -1,139 +1,36 @@
-//! 효과음: 녹음 시작, 받아쓰기 완료, 실패.
+//! 효과음: 녹음 시작, 녹음 끝, 받아쓰기 완료, 실패.
 //!
-//! 소리 파일 없이 짧은 사인파 음을 코드로 만들어 메모리의 WAV로 재생합니다.
+//! 소리는 물방울 오버레이의 움직임에 맞춰 만든 WAV 파일(`prototypes/liquid-droplet/sounds`)을 빌드할 때 넣습니다.
+//! 파일은 그 폴더의 `make_sounds.py`로 만들고, 물방울 미리보기도 같은 파일을 재생합니다.
 //! Windows는 `PlaySoundW`로 비동기 재생하고, 다른 OS는 아직 소리를 내지 않습니다.
-
-use std::f32::consts::TAU;
-use std::sync::OnceLock;
-
-use sulsul_core::audio::{AudioClip, encode_wav_bytes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cue {
-    /// 녹음을 시작함: 올라가는 두 음
+    /// 녹음을 시작함: 물방울이 떠오르는 "블룹"과 수면에서 떨어지는 "똑"
     Start,
-    /// 받아쓴 글을 클립보드에 넣음: 맑은 한 음
+    /// 녹음을 끝내고 인식을 시작함: 물방울이 터지는 "뽁"과 흩어지는 작은 물방울들
+    Pop,
+    /// 받아쓴 글을 클립보드에 넣음: 고리가 빨려 들어가 합쳐지는 "뽀"와 사라지는 "뿅"
     Done,
-    /// 녹음·인식·복사에 실패했거나 인식된 말이 없음: 내려가는 낮은 두 음
+    /// 녹음·인식·복사에 실패했거나 인식된 말이 없음: 바람 빠지듯 내려가는 두 물소리
     Fail,
 }
 
-const SAMPLE_RATE: u32 = 44_100;
-/// 최대 음량 (0.0 ~ 1.0). 녹음 시작음이 마이크에 크게 들어가지 않게 작게 둡니다.
-const VOLUME: f32 = 0.2;
-/// 음 사이 쉼
-const GAP_SECONDS: f32 = 0.012;
-/// 음이 커지는 시간 (딸깍 소리 방지)
-const ATTACK_SECONDS: f32 = 0.004;
-/// 음 끝을 줄이는 시간 (딸깍 소리 방지)
-const RELEASE_SECONDS: f32 = 0.012;
-
-/// 음 하나: 주파수(Hz), 길이(초), 줄어드는 빠르기(1/초)
-struct Note {
-    frequency: f32,
-    seconds: f32,
-    decay: f32,
-}
-
 impl Cue {
-    const ALL: [Self; 3] = [Self::Start, Self::Done, Self::Fail];
-
-    fn notes(self) -> &'static [Note] {
+    /// 효과음 WAV
+    fn wav(self) -> &'static [u8] {
         match self {
-            // 레(D5) → 라(A5)
-            Self::Start => &[
-                Note {
-                    frequency: 587.3,
-                    seconds: 0.07,
-                    decay: 12.0,
-                },
-                Note {
-                    frequency: 880.0,
-                    seconds: 0.11,
-                    decay: 14.0,
-                },
-            ],
-            // 미(E6) 한 음을 길게 울림
-            Self::Done => &[Note {
-                frequency: 1318.5,
-                seconds: 0.2,
-                decay: 16.0,
-            }],
-            // 라(A4) → 레(D4)
-            Self::Fail => &[
-                Note {
-                    frequency: 440.0,
-                    seconds: 0.1,
-                    decay: 8.0,
-                },
-                Note {
-                    frequency: 293.7,
-                    seconds: 0.17,
-                    decay: 8.0,
-                },
-            ],
+            Self::Start => include_bytes!("../../../prototypes/liquid-droplet/sounds/start.wav"),
+            Self::Pop => include_bytes!("../../../prototypes/liquid-droplet/sounds/pop.wav"),
+            Self::Done => include_bytes!("../../../prototypes/liquid-droplet/sounds/done.wav"),
+            Self::Fail => include_bytes!("../../../prototypes/liquid-droplet/sounds/fail.wav"),
         }
     }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Start => 0,
-            Self::Done => 1,
-            Self::Fail => 2,
-        }
-    }
-}
-
-/// 효과음 샘플 (-1.0 ~ 1.0)
-fn render(cue: Cue) -> Vec<f32> {
-    let rate = SAMPLE_RATE as f32;
-    let mut samples = Vec::new();
-    for (i, note) in cue.notes().iter().enumerate() {
-        if i > 0 {
-            samples.extend(std::iter::repeat_n(0.0, (GAP_SECONDS * rate) as usize));
-        }
-        let length = (note.seconds * rate) as usize;
-        for n in 0..length {
-            let t = n as f32 / rate;
-            let remaining = note.seconds - t;
-            let envelope = (t / ATTACK_SECONDS).min(1.0)
-                * (-note.decay * t).exp()
-                * (remaining / RELEASE_SECONDS).min(1.0);
-            // 배음을 조금 섞어 부드럽게 만듭니다.
-            let phase = TAU * note.frequency * t;
-            let tone = phase.sin() * 0.85 + (phase * 2.0).sin() * 0.15;
-            samples.push(tone * envelope * VOLUME);
-        }
-    }
-    samples
-}
-
-/// 효과음 WAV (처음 쓸 때 한 번 만듭니다)
-fn wav(cue: Cue) -> &'static [u8] {
-    static WAVS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-    let wavs = WAVS.get_or_init(|| {
-        Cue::ALL
-            .iter()
-            .map(|cue| {
-                encode_wav_bytes(&AudioClip::new(render(*cue), SAMPLE_RATE)).unwrap_or_else(
-                    |error| {
-                        tracing::warn!("could not build the {cue:?} sound: {error}");
-                        Vec::new()
-                    },
-                )
-            })
-            .collect()
-    });
-    &wavs[cue.index()]
 }
 
 /// 효과음을 냅니다. 기다리지 않고 바로 돌아오며, 앞의 효과음이 아직 나고 있으면 끊고 새로 냅니다.
 pub fn play(cue: Cue) {
-    let bytes = wav(cue);
-    if bytes.is_empty() {
-        return;
-    }
-    platform_play(bytes);
+    platform_play(cue.wav());
 }
 
 #[cfg(windows)]
@@ -163,14 +60,51 @@ fn platform_play(_bytes: &'static [u8]) {
 mod tests {
     use super::*;
 
+    const ALL: [Cue; 4] = [Cue::Start, Cue::Pop, Cue::Done, Cue::Fail];
+
+    /// 16비트 모노 44.1kHz PCM WAV의 샘플 (-1.0 ~ 1.0)
+    fn samples(cue: Cue) -> Vec<f32> {
+        let bytes = cue.wav();
+        assert_eq!(&bytes[..4], b"RIFF", "{cue:?}: RIFF 파일이 아닙니다");
+        assert_eq!(&bytes[8..12], b"WAVE", "{cue:?}: WAVE 파일이 아닙니다");
+        let mut at = 12;
+        let mut data = None;
+        while at + 8 <= bytes.len() {
+            let id = &bytes[at..at + 4];
+            let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            let body = &bytes[at + 8..at + 8 + size];
+            match id {
+                b"fmt " => {
+                    let field = |i: usize| u16::from_le_bytes([body[i], body[i + 1]]);
+                    assert_eq!(field(0), 1, "{cue:?}: PCM이 아닙니다");
+                    assert_eq!(field(2), 1, "{cue:?}: 모노가 아닙니다");
+                    let rate = u32::from_le_bytes(body[4..8].try_into().unwrap());
+                    assert_eq!(rate, 44_100, "{cue:?}: 표본 빈도");
+                    assert_eq!(field(14), 16, "{cue:?}: 16비트가 아닙니다");
+                }
+                b"data" => data = Some(body),
+                _ => {}
+            }
+            at += 8 + size + size % 2;
+        }
+        let data = data.unwrap_or_else(|| panic!("{cue:?}: data 조각이 없습니다"));
+        data.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32767.0)
+            .collect()
+    }
+
     #[test]
     fn cues_are_short_quiet_and_click_free() {
-        for cue in Cue::ALL {
-            let samples = render(cue);
-            let seconds = samples.len() as f32 / SAMPLE_RATE as f32;
-            assert!((0.1..0.4).contains(&seconds), "{cue:?}: 길이 {seconds}초");
+        for cue in ALL {
+            let samples = samples(cue);
+            let seconds = samples.len() as f32 / 44_100.0;
+            assert!((0.2..0.8).contains(&seconds), "{cue:?}: 길이 {seconds}초");
             let peak = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
-            assert!(peak > 0.05 && peak <= VOLUME, "{cue:?}: 최대 음량 {peak}");
+            // 시작음은 녹음과 함께 나므로 마이크에 크게 들어가지 않게 작게 둡니다.
+            let limit = if cue == Cue::Start { 0.18 } else { 0.21 };
+            assert!(peak > 0.05 && peak <= limit, "{cue:?}: 최대 음량 {peak}");
             assert!(samples[0].abs() < 0.01, "{cue:?}: 시작이 0에 가까워야 함");
             assert!(
                 samples.last().unwrap().abs() < 0.01,
@@ -180,15 +114,11 @@ mod tests {
     }
 
     #[test]
-    fn cues_are_distinct_wav_files() {
-        let start = wav(Cue::Start);
-        let done = wav(Cue::Done);
-        let fail = wav(Cue::Fail);
-        for bytes in [start, done, fail] {
-            assert_eq!(&bytes[..4], b"RIFF");
-            assert_eq!(&bytes[8..12], b"WAVE");
+    fn cues_are_distinct() {
+        for (i, a) in ALL.iter().enumerate() {
+            for b in &ALL[i + 1..] {
+                assert_ne!(a.wav(), b.wav(), "{a:?}와 {b:?}의 소리가 같습니다");
+            }
         }
-        assert_ne!(start, done);
-        assert_ne!(done, fail);
     }
 }

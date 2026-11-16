@@ -5,6 +5,7 @@ const lensCanvas = document.getElementById('lens');
 const canvas = document.getElementById('water');
 const timeline = document.getElementById('time');
 const slow = document.getElementById('slow');
+const soundOn = document.getElementById('sound');
 const sample = document.getElementById('sample');
 const lensOn = document.getElementById('lens-on');
 const clock = document.getElementById('clock');
@@ -53,6 +54,30 @@ let doneAt = null;
 let last = 0;
 let frame = null;
 let background = 0;
+
+// 효과음: 앱과 같은 파일(sounds/*.wav, make_sounds.py로 만듦)을 각 동작이 시작될 때 냅니다.
+// 브라우저는 화면을 한 번 누르기 전에는 소리를 내지 않으므로, 처음 열 때의 등장은 조용합니다.
+// 느리게 볼 때와 시간 막대로 옮길 때는 움직임과 맞지 않아 내지 않습니다.
+const audio = window.AudioContext ? new AudioContext() : null;
+const sounds = {};
+if (audio) {
+  for (const name of ['start', 'pop', 'done']) {
+    fetch(`sounds/${name}.wav`)
+      .then(response => response.arrayBuffer())
+      .then(bytes => audio.decodeAudioData(bytes))
+      .then(buffer => { sounds[name] = buffer; })
+      .catch(error => console.warn(`could not load the ${name} sound`, error));
+  }
+}
+
+function playSound(name) {
+  if (!audio || !soundOn.checked || slow.checked || !sounds[name]) return;
+  if (audio.state === 'suspended') audio.resume();
+  const source = audio.createBufferSource();
+  source.buffer = sounds[name];
+  source.connect(audio.destination);
+  source.start();
+}
 
 function fail(message) {
   const error = document.getElementById('error');
@@ -266,6 +291,7 @@ try {
       last = performance.now();
       running = true;
       frame = requestAnimationFrame(animate);
+      playSound('start');
     }
 
     // 멈춰 있으면 다시 움직이고, 지금 모습을 그립니다. 움직임 줄이기를 켰으면 그리기만 합니다.
@@ -284,6 +310,7 @@ try {
       if (popAt !== null) return;
       popAt = reducedMotion ? time - POP_LENGTH : time;
       keepRunning();
+      playSound('pop');
     }
 
     // 후처리가 끝난 것처럼 고리를 거둡니다. 움직임 줄이기를 켰으면 바로 사라집니다.
@@ -291,6 +318,7 @@ try {
       if (popAt === null || doneAt !== null) return;
       doneAt = reducedMotion ? time - DONE_LENGTH : time;
       keepRunning();
+      playSound('done');
     }
 
     // 누를 때마다 터뜨리기, 처리 끝, 다시 보기 순서로 넘어갑니다.

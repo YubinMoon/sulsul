@@ -517,7 +517,10 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
                 let _ = tx.send(Msg::Transcribed(result));
             });
         match spawned {
-            Ok(_) => self.state = State::Transcribing { cancel },
+            Ok(_) => {
+                self.state = State::Transcribing { cancel };
+                self.cue(Cue::Pop);
+            }
             Err(error) => {
                 tracing::error!("could not start the dictation transcription thread: {error}");
                 self.fail(Notice::Failed(DictationError::Crashed));
@@ -798,7 +801,7 @@ mod tests {
             ["text:안녕하세요"],
             "앞뒤 공백은 지움"
         );
-        assert_eq!(h.cues(), [Cue::Start, Cue::Done]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
 
         h.send(HotkeyEvent::Paste);
         h.wait_until("원래 내용으로 되돌림", |h| {
@@ -817,7 +820,7 @@ mod tests {
         h.wait_until("인식 결과", |h| !h.notices.is_empty());
         assert!(matches!(h.notices.as_slice(), [Notice::Empty]));
         assert_eq!(h.clipboard.content(), ["원래 내용"]);
-        assert_eq!(h.cues(), [Cue::Start, Cue::Fail]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
         assert_eq!(h.dictation.state(), DictationState::Idle);
     }
 

@@ -501,7 +501,7 @@ settings:
     max_record_seconds: 최대 녹음 길이
     max_record_seconds_help: "이 시간을 넘으면 녹음을 자동으로 끝냅니다. (%{min} ~ %{max}초)"
     feedback_sounds: 효과음
-    feedback_sounds_help: 녹음을 시작할 때와 받아쓴 글을 클립보드에 넣었을 때 소리로 알려 줍니다.
+    feedback_sounds_help: 녹음을 시작하고 마칠 때와 받아쓴 글을 클립보드에 넣었을 때 소리로 알려 줍니다.
   postprocess:
     title: 후처리
     llm: 글 다듬기
