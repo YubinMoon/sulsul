@@ -24,9 +24,7 @@ use super::download::{
 };
 use super::entries::variant_label;
 use super::jobs::{DownloadTarget, Downloads};
-use super::parts::{
-    self, BODY_GAP, Badge, CARD_GAP, CardHead, EmptyAction, ListState, TestClick, TestState,
-};
+use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, ListState, TestClick, TestState};
 use super::profiles::{self, profile_display_name};
 use super::providers::{Draft, draft_form};
 use super::{Category, Tab, tab_bar};
@@ -133,12 +131,22 @@ impl LlmPane {
     fn available_tab(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, downloads: &Downloads) {
         let entries = available_entries(&cx.shared.paths, &cx.config.postprocess);
 
-        // 지금 설정이 가리키는 모델·제공자를 쓸 수 없으면 목록 위에서 먼저 알립니다.
+        // 빈 목록의 모델 준비 안내와 선택한 모델의 안내가 겹치지 않게 합니다.
         let issue = selection_issue(&cx.shared.paths, &cx.config.postprocess);
-        if let Some(issue) = issue {
-            Banner::new(Tone::Warning)
-                .line(issue_text(&cx.shared.paths, &cx.config.postprocess, &issue))
-                .show(ui);
+        if let Some(issue) = issue
+            && !(entries.is_empty()
+                && matches!(
+                    issue,
+                    SelectionIssue::NotInstalled { .. } | SelectionIssue::UnknownModel { .. }
+                ))
+        {
+            let message = issue_text(&cx.shared.paths, &cx.config.postprocess, &issue);
+            match issue {
+                SelectionIssue::NoProvider | SelectionIssue::ProviderIncomplete { .. } => {
+                    Banner::new(Tone::Warning).line(message).show(ui);
+                }
+                _ => parts::model_notice(ui, &message),
+            }
             ui.add_space(8.0);
         }
 
@@ -146,10 +154,8 @@ impl LlmPane {
             .begin(|key| entries.iter().any(|entry| &entry.key == key));
         if entries.is_empty() {
             self.list.end();
-            match parts::empty_state(ui) {
-                Some(EmptyAction::Download) => self.tab = Tab::Download,
-                Some(EmptyAction::Providers) => self.tab = Tab::Providers,
-                None => {}
+            if parts::empty_state(ui) {
+                self.tab = Tab::Download;
             }
             return;
         }

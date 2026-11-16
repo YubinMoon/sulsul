@@ -4,7 +4,7 @@ use egui::{Align, Color32, Frame, Layout, Margin, RichText, Stroke, Ui};
 
 use super::text;
 use crate::icons::{self, Icon};
-use crate::theme::{self, Palette, size};
+use crate::theme::{self, Palette, radius, size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
@@ -50,6 +50,7 @@ type Actions<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
 
 pub struct Banner<'a> {
     tone: Tone,
+    subtle: bool,
     title: Option<&'a str>,
     lines: Vec<String>,
 }
@@ -58,9 +59,16 @@ impl<'a> Banner<'a> {
     pub fn new(tone: Tone) -> Self {
         Self {
             tone,
+            subtle: false,
             title: None,
             lines: Vec::new(),
         }
+    }
+
+    /// 준비 상태는 중립적인 카드로 알리고, 상태 색은 아이콘에만 씁니다.
+    pub fn subtle(mut self) -> Self {
+        self.subtle = true;
+        self
     }
 
     pub fn title(mut self, title: &'a str) -> Self {
@@ -90,11 +98,15 @@ impl<'a> Banner<'a> {
 
     fn render(self, ui: &mut Ui, add_actions: Option<Actions<'_>>) {
         let palette = Palette::of(ui);
-        let colors = self.tone.colors(&palette);
+        let mut colors = self.tone.colors(&palette);
+        if self.subtle {
+            colors.fill = palette.card;
+            colors.border = palette.card_border;
+        }
         Frame::new()
             .fill(colors.fill)
             .stroke(Stroke::new(1.0, colors.border))
-            .corner_radius(10)
+            .corner_radius(radius::CARD)
             .inner_margin(Margin::symmetric(14, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -106,12 +118,20 @@ impl<'a> Banner<'a> {
                             .color(colors.icon),
                     );
                     ui.vertical(|ui| {
+                        ui.set_max_width(ui.available_width());
                         ui.spacing_mut().item_spacing.y = 4.0;
                         if let Some(title) = self.title {
-                            ui.label(text::strong(title).color(palette.text));
+                            ui.add(
+                                egui::Label::new(text::strong(title).color(palette.text)).wrap(),
+                            );
                         }
                         for line in &self.lines {
-                            ui.label(RichText::new(line).color(palette.text));
+                            let color = if self.subtle && self.title.is_some() {
+                                palette.text_muted
+                            } else {
+                                palette.text
+                            };
+                            ui.add(egui::Label::new(RichText::new(line).color(color)).wrap());
                         }
                         if let Some(add_actions) = add_actions {
                             ui.add_space(4.0);

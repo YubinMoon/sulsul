@@ -250,18 +250,19 @@ impl<K: PartialEq + Clone> ListState<K> {
     }
 }
 
-/// 빈 목록 안내에서 누른 버튼
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EmptyAction {
-    /// "로컬 모델 내려받기" 탭으로
-    Download,
-    /// "외부 제공자" 탭으로
-    Providers,
+/// 모델 준비 안내. 첫 줄은 제목, 나머지는 모델 이름 등의 보조 정보입니다.
+pub fn model_notice(ui: &mut Ui, message: &str) {
+    let mut lines = message.lines();
+    Banner::new(Tone::Warning)
+        .subtle()
+        .title(lines.next().unwrap_or_default())
+        .lines(lines.map(str::to_owned))
+        .show(ui);
 }
 
-/// 쓸 수 있는 항목이 하나도 없을 때의 안내와, 모델을 마련하는 탭으로 가는 버튼
-pub fn empty_state(ui: &mut Ui) -> Option<EmptyAction> {
-    let mut action = None;
+/// 빈 목록 안내. 내려받기 화면으로 이동하는 버튼을 눌렀으면 `true`입니다.
+pub fn empty_state(ui: &mut Ui) -> bool {
+    let mut go_download = false;
     card::card(ui, |ui| {
         ui.label(text::strong(t!("models.available.empty.title")));
         ui.label(text::muted(ui, t!("models.available.empty.body")));
@@ -270,15 +271,11 @@ pub fn empty_state(ui: &mut Ui) -> Option<EmptyAction> {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
             let download = t!("models.available.empty.go_download");
             if controls::primary_icon_button(ui, Icon::Download, download).clicked() {
-                action = Some(EmptyAction::Download);
-            }
-            let providers = t!("models.available.empty.go_providers");
-            if controls::icon_text_button(ui, Icon::Cloud, providers).clicked() {
-                action = Some(EmptyAction::Providers);
+                go_download = true;
             }
         });
     });
-    action
+    go_download
 }
 
 /// 목록에서 "로컬 모델"과 "외부 제공자" 묶음이 시작되는 자리에 묶음 제목을 놓습니다.

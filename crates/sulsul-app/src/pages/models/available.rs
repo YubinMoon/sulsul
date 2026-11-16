@@ -15,12 +15,12 @@ use sulsul_core::stt::{
 use sulsul_stt_cloud::ENGINE_ID as CLOUD_ENGINE_ID;
 
 use super::entries::{
-    Entry, EntryKey, EntryKind, MODEL_PATH_KEY, activate, activate_first_ready, available_entries,
-    clear_custom_path, edit_engine_table, entry_languages, entry_test_config, model_path_field,
-    remove_profile, selection_issue, variant_label,
+    Entry, EntryKey, EntryKind, MODEL_PATH_KEY, SelectionIssue, activate, activate_first_ready,
+    available_entries, clear_custom_path, edit_engine_table, entry_languages, entry_test_config,
+    model_path_field, remove_profile, selection_issue, variant_label,
 };
 use super::jobs::{DownloadTarget, TestTarget};
-use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, EmptyAction, TestClick};
+use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, TestClick};
 use super::profiles::profile_display_name;
 use super::{Category, ModelsPage, Tab};
 use crate::accel::{AccelEnv, EngineAccel};
@@ -119,10 +119,17 @@ impl ModelsPage {
         };
         let entries = available_entries(&cx.shared.registry, &engine_ctx, &cx.config.stt);
 
-        // 지금 설정이 가리키는 모델·제공자를 쓸 수 없으면 목록 위에서 먼저 알립니다.
+        // 빈 목록의 모델 준비 안내와 선택한 모델의 안내가 겹치지 않게 합니다.
         let issue = selection_issue(&cx.shared.registry, &engine_ctx, &cx.config.stt, &entries);
-        if let Some(issue) = issue {
-            Banner::new(Tone::Warning).line(issue.text()).show(ui);
+        if let Some(issue) = issue
+            && !(entries.is_empty() && matches!(issue, SelectionIssue::NotInstalled { .. }))
+        {
+            match issue {
+                SelectionIssue::NoProvider | SelectionIssue::ProviderIncomplete { .. } => {
+                    Banner::new(Tone::Warning).line(issue.text()).show(ui);
+                }
+                _ => parts::model_notice(ui, &issue.text()),
+            }
             ui.add_space(8.0);
         }
         unregistered_engines_banner(ui, cx);
@@ -131,10 +138,8 @@ impl ModelsPage {
             .begin(|key| entries.iter().any(|entry| &entry.key == key));
         if entries.is_empty() {
             self.list.end();
-            match parts::empty_state(ui) {
-                Some(EmptyAction::Download) => self.tab = Tab::Download,
-                Some(EmptyAction::Providers) => self.tab = Tab::Providers,
-                None => {}
+            if parts::empty_state(ui) {
+                self.tab = Tab::Download;
             }
             return;
         }

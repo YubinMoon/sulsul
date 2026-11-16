@@ -547,10 +547,10 @@ models:
   llm:
     preview_note: 글 다듬기는 아직 준비 중이라, 여기서 고른 모델이 받아쓰기 결과에 바로 쓰이지는 않습니다. 쓸 모델과 제공자를 미리 마련해 둘 수 있습니다.
     issue:
-      not_installed: "지금 설정은 %{model} 모델로 다듬도록 되어 있지만, 그 모델이 아직 설치되지 않았습니다. 다른 항목을 켜거나 그 모델을 내려받으세요."
-      no_model: 지금 설정은 로컬 모델로 다듬도록 되어 있지만 고른 모델이 없습니다. 쓸 항목을 켜세요.
-      unknown_model: "지금 설정에 적힌 모델 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
-      unknown_processor: "지금 설정에 적힌 후처리기 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
+      not_installed: "선택한 모델이 설치되지 않았습니다.\n%{model}"
+      no_model: 글 다듬기에 쓸 모델을 선택하세요.
+      unknown_model: "이 앱에서 지원하지 않는 모델입니다.\n%{id}"
+      unknown_processor: "이 앱에서 지원하지 않는 글 다듬기 방식입니다.\n%{id}"
     info:
       family: 모델
       file_size: 파일 크기
@@ -578,10 +578,9 @@ models:
       providers: 외부 제공자
     use: "%{name} 사용"
     empty:
-      title: 아직 쓸 수 있는 모델이 없습니다.
-      body: 로컬 모델을 내려받거나 외부 제공자를 등록하면 여기에 나타납니다.
-      go_download: 로컬 모델 내려받기
-      go_providers: 외부 제공자 등록
+      title: 사용할 모델을 준비해 주세요.
+      body: 로컬 모델을 내려받거나 외부 제공자를 등록하세요.
+      go_download: 모델 내려받기 화면으로
     custom:
       name: 직접 지정한 모델
       description: 직접 지정한 경로의 모델을 씁니다.
@@ -603,11 +602,11 @@ models:
       testing: 테스트가 끝난 뒤에 제거할 수 있습니다.
       downloading: 이 엔진의 모델을 내려받는 동안에는 제거할 수 없습니다.
     issue:
-      not_installed: "지금 설정은 %{engine}의 %{model} 모델을 쓰도록 되어 있지만, 그 모델이 아직 설치되지 않았습니다. 다른 항목을 켜거나 그 모델을 내려받으세요."
-      custom_missing: "지금 설정은 %{engine}에 직접 지정한 모델을 쓰도록 되어 있지만, 그 경로에서 모델을 찾지 못했습니다. 다른 항목을 켜거나 '직접 지정한 모델' 카드를 펼쳐 경로를 고치세요."
+      not_installed: "선택한 모델이 설치되지 않았습니다.\n%{engine} · %{model}"
+      custom_missing: "모델 파일을 찾지 못했습니다.\n%{engine} · 직접 지정한 모델 경로를 확인하세요."
       no_provider: 지금 설정은 외부 제공자를 쓰도록 되어 있지만 고른 제공자가 없습니다. 쓸 항목을 켜거나 제공자를 등록하세요.
       provider_incomplete: "지금 고른 제공자 '%{name}'에 주소·API 키·모델 중 빠진 값이 있습니다. 카드를 펼쳐 채우거나 다른 항목을 켜세요."
-      unknown_engine: "지금 설정에 적힌 엔진 '%{id}'은(는) 이 앱에 없습니다. 쓸 항목을 켜세요."
+      unknown_engine: "이 앱에서 지원하지 않는 인식 엔진입니다.\n%{id}"
   accuracy:
     title: 인식 정확도 높이기
     shared: 모든 모델 공통
