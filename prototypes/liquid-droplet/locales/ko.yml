@@ -1,0 +1,9 @@
+title: 물방울
+subtitle: 등장 동작
+replay: 다시 보기
+slow: 느리게
+background: 배경 전환
+canvas: 수면에서 늘어나다가 분리되어 말랑하게 떠오르는 반투명 물방울. 누르면 다시 재생합니다.
+timeline: 등장 동작의 재생 위치
+unsupported: 이 미리보기에는 WebGL 2를 지원하는 그래픽 환경이 필요합니다.
+failed: 미리보기를 열지 못했습니다. 실행 기록을 확인해 주세요.
