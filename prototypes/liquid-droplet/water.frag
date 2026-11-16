@@ -19,6 +19,16 @@ const float BODY_ALPHA = 0.88;
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 float sq(float x) { return x * x; }
 
+// 평면에서 a 라디안만큼 돌립니다.
+vec2 spin(vec2 v, float a) {
+    float c = cos(a);
+    float s = sin(a);
+    return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+}
+
+// 각도(도)를 -180~180 사이로 접습니다.
+float wrapDegrees(float a) { return mod(a + 180.0, 360.0) - 180.0; }
+
 float smoothUnion(float a, float b, float k) {
     float h = max(k - abs(a - b), 0.0) / k;
     return min(a, b) - h * h * k * 0.25;
@@ -57,22 +67,43 @@ vec2 bodyStretch(float t) {
     return vec2(1.0 - 0.52 * pull, 1.0 + pull);
 }
 
-vec2 bodyCenter(float t) {
+// 떠오르는 길. 다 올라온 자리가 기준 위치입니다.
+vec2 risePath(float t) {
     float rise = riseCurve(t);
-    // 자리를 잡은 뒤에도 서로 다른 주기로 조금씩 떠다닙니다.
-    float idle = smoothstep(0.80, INTRO, t);
-    vec2 drift = vec2(0.010 * sin(t * 0.87) + 0.004 * sin(t * 1.61),
-        0.012 * sin(t * 1.13) + 0.005 * sin(t * 0.63));
-    return vec2(0.018 * sin(rise * PI), -2.21 + 0.63 * rise) + drift * idle;
+    return vec2(0.018 * sin(rise * PI), -2.21 + 0.63 * rise);
 }
 
-// 윤곽이 원에서 벗어나는 정도. 끊어진 직후의 떨림과 계속 이어지는 느린 출렁임을 더합니다.
-// 출렁임은 방향이 천천히 도는 두 가지 모양이 번갈아 부풀었다 꺼지는 식이고, REST 시각에는 정확한 원을 지납니다.
+// 자리를 잡은 뒤 무중력에서처럼 느리게 떠다니는 정도. REST 시각에 기준 위치를 지납니다.
+vec2 bodyDrift(float t) {
+    float tt = t - REST;
+    vec2 drift = vec2(0.044 * sin(0.47 * tt) + 0.024 * sin(0.83 * tt) + 0.010 * sin(1.61 * tt),
+        0.032 * sin(0.59 * tt) + 0.018 * sin(1.03 * tt) + 0.008 * sin(1.87 * tt));
+    return drift * smoothstep(0.85, 2.3, t);
+}
+
+vec2 bodyCenter(float t) { return risePath(t) + bodyDrift(t); }
+
+// 윤곽이 원에서 벗어나는 정도. 끊어진 직후의 떨림과, 계속 이어지는 말랑한 출렁임을 더합니다.
+// 출렁임은 방향이 천천히 도는 세 가지 모양이 저마다 부풀었다 꺼지는 식이고, REST 시각에는 정확한 원을 지납니다.
 float bodyContour(float angle, float t) {
     float tt = t - REST;
     float flutter = 0.022 * sin(angle * 3.0 + t * 10.0) * exp(-max(t - 0.70, 0.0) * 5.6);
-    return 0.017 * sin(angle * 2.0 + 0.6 + 0.7 * sin(tt * 0.31)) * sin(tt * 1.17)
-        + 0.011 * sin(angle * 3.0 - 0.9 + 0.8 * sin(tt * 0.23)) * sin(tt * 0.83) + flutter;
+    // 떠오르는 동안에는 작게, 끊어진 뒤부터 크게 출렁입니다.
+    float alive = mix(0.4, 1.0, smoothstep(0.70, 1.9, t));
+    return alive * (0.042 * sin(angle * 2.0 + 0.6 + 0.9 * sin(tt * 0.31)) * sin(tt * 2.05)
+        + 0.016 * sin(angle * 3.0 - 0.9 + 0.8 * sin(tt * 0.23)) * sin(tt * 2.90)
+        + 0.007 * sin(angle * 4.0 + 1.7 + 0.7 * sin(tt * 0.41)) * sin(tt * 3.70)) + flutter;
+}
+
+// 물방울이 구슬처럼 천천히 돌고 기울 때, 안쪽 무늬의 어느 자리가 이 자리에 오는지 구합니다. REST 시각에는 그대로입니다.
+vec2 innerPoint(vec2 q, float t) {
+    float tt = t - REST;
+    float roll = 0.42 * sin(0.29 * tt) + 0.20 * sin(0.53 * tt) + 0.08 * sin(1.01 * tt);
+    vec2 tilt = vec2(0.20 * sin(0.41 * tt) + 0.08 * sin(0.89 * tt), 0.15 * sin(0.35 * tt) + 0.07 * sin(0.73 * tt));
+    vec3 s = vec3(q, sqrt(max(1.0 - dot(q, q), 0.0)));
+    s.xz = spin(s.xz, tilt.x);
+    s.yz = spin(s.yz, tilt.y);
+    return spin(s.xy, -roll);
 }
 
 float scene(vec2 p, float t) {
@@ -111,26 +142,45 @@ vec4 layerFromWhite(vec3 seen, float alpha) {
 vec4 shadeBody(vec2 q, float edge, float px, float t) {
     float r = length(q);
     vec2 dir = q / max(r, 0.0001);
-    float x = q.x;
-    float y = q.y;
-    float angle = degrees(atan(y, x));
+    float angle = degrees(atan(q.y, q.x));
     float tt = t - REST;
     // 안쪽 무늬는 본체에만 그리고, 수면과 이어진 부분은 바탕색으로 둡니다.
     float inside = 1.0 - smoothstep(1.02, 1.30, r);
 
+    // 물방울이 출렁이는 만큼 겉에 비친 빛이 테두리를 따라 미끄러집니다(도).
+    // A는 왼쪽 위의 큰 반사, B는 아래쪽에 고인 빛, C는 테두리와 오른쪽 위에 비친 빛입니다.
+    float slideA = 7.0 * sin(0.83 * tt) + 4.0 * sin(1.31 * tt);
+    float slideB = 11.0 * sin(0.57 * tt) + 5.0 * sin(1.13 * tt);
+    float slideC = 6.0 * sin(0.71 * tt) + 3.0 * sin(1.49 * tt);
+    vec2 qA = spin(q, radians(-slideA));
+    vec2 dirA = spin(dir, radians(-slideA));
+    float angleA = wrapDegrees(angle - slideA);
+    vec2 dirB = spin(dir, radians(-slideB));
+    float angleB = wrapDegrees(angle - slideB);
+    vec2 qC = spin(q, radians(-slideC));
+    vec2 dirC = spin(dir, radians(-slideC));
+    float angleC = wrapDegrees(angle - slideC);
+
+    // 안쪽 무늬는 물방울과 함께 돌고 기웁니다. 아래에서 x, y는 그렇게 돌린 안쪽 좌표입니다.
+    vec2 qi = innerPoint(q, t);
+    float x = qi.x;
+    float y = qi.y;
+    vec2 diri = qi / max(length(qi), 0.0001);
+
     // 가운데는 밝고 가장자리로 갈수록 푸른 바탕. 오른쪽 위가 가장 짙습니다.
-    vec3 rimTone = mix(vec3(0.53, 0.80, 0.975), vec3(0.415, 0.715, 0.925), toward(dir, 65.0, 0.9));
+    vec3 rimTone = mix(vec3(0.53, 0.80, 0.975), vec3(0.415, 0.715, 0.925), toward(dirC, 65.0, 0.9));
     vec3 col = mix(vec3(0.682, 0.886, 0.980), rimTone, smoothstep(0.05, 0.92, r));
     // 왼쪽 위 가운데는 조금 짙고, 오른쪽 위 안쪽은 옅게 밝습니다.
-    col = mix(col, vec3(0.45, 0.74, 0.92), 0.35 * exp(-sq((x + 0.33) / 0.26) - sq((y - 0.42) / 0.20)));
-    col = mix(col, vec3(0.76, 0.905, 0.995), 0.45 * exp(-sq((x - 0.42) / 0.30) - sq((y - 0.50) / 0.18))
+    col = mix(col, vec3(0.45, 0.74, 0.92), 0.35 * exp(-sq((qA.x + 0.33) / 0.26) - sq((qA.y - 0.42) / 0.20)));
+    col = mix(col, vec3(0.76, 0.905, 0.995), 0.45 * exp(-sq((qC.x - 0.42) / 0.30) - sq((qC.y - 0.50) / 0.18))
         * (1.0 - smoothstep(0.70, 0.88, r)));
 
     // 비단처럼 접힌 띠의 경계선들. 천천히 흔들리며 기준 그림의 자리를 오갑니다.
-    float shift = 0.035 * sin(0.52 * tt);
-    float lift = 0.020 * sin(0.71 * tt);
-    float wave = 0.022 * sin(2.4 * x - 0.95 * tt);
-    float waveSlope = 0.0528 * cos(2.4 * x - 0.95 * tt);
+    float shift = 0.070 * sin(0.52 * tt);
+    float lift = 0.045 * sin(0.71 * tt);
+    float swell = 0.028 * sin(0.63 * tt);
+    float wave = 0.022 * sin(2.4 * x - 0.95 * tt) + swell * sin(3.3 * x - 1.7 * tt + 0.5);
+    float waveSlope = 0.0528 * cos(2.4 * x - 0.95 * tt) + 3.3 * swell * cos(3.3 * x - 1.7 * tt + 0.5);
     float tanhT = tanh((x - 0.02 - shift) / 0.29);
     float lower = -0.09 + lift + 0.30 * tanhT - 1.8 * sq(max(x - 0.60, 0.0)) - 8.0 * sq(max(x - 0.74, 0.0)) + wave;
     float lowerSlope = 1.034 * (1.0 - sq(tanhT)) - 3.6 * max(x - 0.60, 0.0) - 16.0 * max(x - 0.74, 0.0) + waveSlope;
@@ -163,7 +213,7 @@ vec4 shadeBody(vec2 q, float edge, float px, float t) {
 
     // 오른쪽 아래로 갈수록 밝아지는 청록빛 웅덩이와 그 안의 옅은 겹
     float pond = smoothstep(-0.006, 0.012, sFloor) * (1.0 - smoothstep(-0.010, 0.004, sLower)) * inside;
-    float pondLight = smoothstep(0.0, 1.0, dot(q - vec2(0.20, -0.05), vec2(0.34, -0.94)) / 0.52);
+    float pondLight = smoothstep(0.0, 1.0, dot(qi - vec2(0.20, -0.05), vec2(0.34, -0.94)) / 0.52);
     vec3 pondColor = mix(vec3(0.385, 0.775, 0.950), vec3(0.62, 0.955, 0.995), pondLight);
     pondColor = mix(vec3(0.80, 0.97, 0.995), pondColor, smoothstep(-0.50, -0.12, x));
     float ply = smoothstep(-0.05, 0.15, x) * (1.0 - smoothstep(0.76, 0.92, x));
@@ -211,74 +261,76 @@ vec4 shadeBody(vec2 q, float edge, float px, float t) {
     // 왼쪽 테두리에 닿는 하얀 접힘과 그 끝의 반짝임
     float fold = exp(-sq((y - lower - 0.070) / 0.065)) * smoothstep(-0.28, -0.60, x) * inside;
     col = mix(col, vec3(0.92, 0.985, 1.0), 0.95 * fold);
-    col = mix(col, vec3(1.0, 0.925, 0.995), 0.60 * toward(dir, 203.0, 0.16) * exp(-sq((r - 0.89) / 0.10)) * inside);
-    float spark = toward(dir, 201.5, 0.085) * exp(-sq((r - 0.875) / 0.095)) * inside;
+    col = mix(col, vec3(1.0, 0.925, 0.995), 0.60 * toward(diri, 203.0, 0.16) * exp(-sq((r - 0.89) / 0.10)) * inside);
+    float spark = toward(diri, 201.5, 0.085) * exp(-sq((r - 0.875) / 0.095)) * inside;
     col = mix(col, vec3(1.0), spark);
 
     // 오른쪽 아래 안쪽에 고이는 흰 빛과 바닥을 따라 도는 청록빛
-    col = mix(col, vec3(0.40, 0.86, 0.99), 0.75 * exp(-sq((r - 0.885) / 0.035)) * toward(dir, 268.0, 0.50) * inside);
-    col = mix(col, vec3(0.60, 0.965, 0.997), 0.70 * exp(-sq((r - 0.87) / 0.05)) * toward(dir, 332.0, 0.30) * inside);
+    col = mix(col, vec3(0.40, 0.86, 0.99), 0.75 * exp(-sq((r - 0.885) / 0.035)) * toward(dirB, 268.0, 0.50) * inside);
+    col = mix(col, vec3(0.60, 0.965, 0.997), 0.70 * exp(-sq((r - 0.87) / 0.05)) * toward(dirB, 332.0, 0.30) * inside);
     // 왼쪽 아래 테두리 안쪽을 따라 도는 밝은 청록빛 줄
-    col = mix(col, vec3(0.80, 0.99, 0.997), 0.95 * sat(1.3 * toward(dir, 238.0, 0.50))
-        * smoothstep(-146.0, -136.0, angle) * exp(-sq((r - 0.92) / 0.020)) * inside);
-    col = mix(col, vec3(0.85, 0.985, 1.0), 0.45 * exp(-sq((r - 0.78) / 0.09)) * toward(dir, 282.0, 0.38) * inside);
-    float pooled = exp(-sq(max(0.86 - r, 0.0) / 0.20) - sq(max(r - 0.86, 0.0) / 0.10)) * toward(dir, 300.0, 0.36);
+    col = mix(col, vec3(0.80, 0.99, 0.997), 0.95 * sat(1.3 * toward(dirB, 238.0, 0.50))
+        * smoothstep(-146.0, -136.0, angleB) * exp(-sq((r - 0.92) / 0.020)) * inside);
+    col = mix(col, vec3(0.85, 0.985, 1.0), 0.45 * exp(-sq((r - 0.78) / 0.09)) * toward(dirB, 282.0, 0.38) * inside);
+    float pooled = exp(-sq(max(0.86 - r, 0.0) / 0.20) - sq(max(r - 0.86, 0.0) / 0.10)) * toward(dirB, 300.0, 0.36);
     col = mix(col, vec3(0.95, 0.995, 1.0), sat(1.05 * pooled) * inside);
 
     // 오른쪽 위 안쪽을 따라 도는 청록빛 호와 그 둘레의 옅은 빛
-    col = mix(col, vec3(0.385, 0.685, 0.915), 0.22 * exp(-sq((r - 0.81) / 0.055)) * toward(dir, 62.0, 0.50) * inside);
+    col = mix(col, vec3(0.385, 0.685, 0.915), 0.22 * exp(-sq((r - 0.81) / 0.055)) * toward(dirC, 62.0, 0.50) * inside);
     col = mix(col, vec3(0.60, 0.81, 0.99),
-        0.50 * toward(dir, 32.0, 0.25) * exp(-sq(max(abs(r - 0.88) - 0.07, 0.0) / 0.03)) * inside);
-    float arcSpan = smoothstep(4.0, 16.0, angle) * (1.0 - smoothstep(58.0, 78.0, angle));
-    float arcR = 0.943 - 0.00125 * angle;
-    float arcWidth = mix(0.024, 0.013, smoothstep(45.0, 62.0, angle));
+        0.50 * toward(dirC, 32.0, 0.25) * exp(-sq(max(abs(r - 0.88) - 0.07, 0.0) / 0.03)) * inside);
+    float arcSpan = smoothstep(4.0, 16.0, angleC) * (1.0 - smoothstep(58.0, 78.0, angleC));
+    float arcR = 0.943 - 0.00125 * angleC;
+    float arcWidth = mix(0.024, 0.013, smoothstep(45.0, 62.0, angleC));
     // 호 바깥의 짙은 띠와, 아래로 갈수록 희어지는 호
     col = mix(col, vec3(0.43, 0.715, 0.945), 0.85 * exp(-sq((r - arcR - 0.048) / 0.022))
-        * smoothstep(26.0, 40.0, angle) * (1.0 - smoothstep(66.0, 84.0, angle)) * inside);
-    col = mix(col, mix(vec3(0.50, 0.94, 1.0), vec3(0.97, 1.0, 1.0), smoothstep(44.0, 26.0, angle)),
+        * smoothstep(26.0, 40.0, angleC) * (1.0 - smoothstep(66.0, 84.0, angleC)) * inside);
+    col = mix(col, mix(vec3(0.50, 0.94, 1.0), vec3(0.97, 1.0, 1.0), smoothstep(44.0, 26.0, angleC)),
         0.92 * exp(-sq(sq((r - arcR) / arcWidth))) * arcSpan * inside);
     // 오른쪽 테두리 안쪽의 옅은 띠
-    col = mix(col, vec3(0.75, 0.90, 1.0), 0.30 * exp(-sq((r - 0.825) / 0.035)) * toward(dir, 2.0, 0.25) * inside);
+    col = mix(col, vec3(0.75, 0.90, 1.0), 0.30 * exp(-sq((r - 0.825) / 0.035)) * toward(dirC, 2.0, 0.25) * inside);
 
     // 테두리 가까이에 비치는 연보랏빛과 분홍빛
-    float violetLeft = exp(-sq(max(abs(r - 0.85) - 0.04, 0.0) / 0.04)) * toward(dir, 211.0, 0.16) * inside;
+    float violetLeft = exp(-sq(max(abs(r - 0.85) - 0.04, 0.0) / 0.04)) * toward(diri, 211.0, 0.16) * inside;
     col = mix(col, vec3(0.70, 0.83, 0.995), 0.95 * violetLeft * (1.0 - spark));
-    float violetRight = exp(-sq(max(0.93 - r, 0.0) / 0.10) - sq(max(r - 0.93, 0.0) / 0.05)) * toward(dir, 3.0, 0.22) * inside;
+    float violetRight = exp(-sq(max(0.93 - r, 0.0) / 0.10) - sq(max(r - 0.93, 0.0) / 0.05)) * toward(dirC, 3.0, 0.22) * inside;
     col = mix(col, vec3(0.66, 0.74, 0.985), 0.60 * violetRight);
-    col = mix(col, vec3(1.0, 0.93, 1.0), 0.65 * toward(dir, 17.5, 0.13) * exp(-sq((r - 0.89) / 0.085)) * inside);
-    float blush = toward(dir, 16.0, 0.11) * exp(-sq((r - 0.912) / 0.035)) * inside;
+    col = mix(col, vec3(1.0, 0.93, 1.0), 0.65 * toward(dirC, 17.5, 0.13) * exp(-sq((r - 0.89) / 0.085)) * inside);
+    float blush = toward(dirC, 16.0, 0.11) * exp(-sq((r - 0.912) / 0.035)) * inside;
     col = mix(col, vec3(1.0), 0.95 * blush);
 
     // 유리 껍질: 가장자리 안쪽의 옅은 띠와 흰 띠, 그 사이의 가는 선, 바깥 윤곽선
-    float lightAmt = 0.15 + 0.60 * toward(dir, 116.0, 0.30) + 0.75 * toward(dir, 288.0, 0.35) + 0.20 * toward(dir, 75.0, 0.50);
+    float lightAmt = 0.15 + 0.60 * toward(dirC, 116.0, 0.30) + 0.75 * toward(dirC, 288.0, 0.35) + 0.20 * toward(dirC, 75.0, 0.50);
     col = mix(col, vec3(0.88, 0.975, 1.0), sat(lightAmt * (1.0 - smoothstep(0.030, 0.105, edge))));
     // 위쪽에는 안쪽으로 한 줄이 더 비칩니다.
-    col = mix(col, vec3(0.90, 0.97, 1.0), 0.60 * line(edge - 0.060 + 0.015 * smoothstep(100.0, 135.0, angle), 0.008, px)
-        * sat(toward(dir, 85.0, 0.45) + toward(dir, 142.0, 0.35)));
-    col = mix(col, vec3(0.55, 0.78, 0.96), (0.22 + 0.15 * toward(dir, 95.0, 0.45)) * line(edge - 0.038, 0.007, px));
+    col = mix(col, vec3(0.90, 0.97, 1.0), 0.60 * line(edge - 0.060 + 0.015 * smoothstep(100.0, 135.0, angleC), 0.008, px)
+        * sat(toward(dirC, 85.0, 0.45) + toward(dirC, 142.0, 0.35)));
+    col = mix(col, vec3(0.55, 0.78, 0.96), (0.22 + 0.15 * toward(dirC, 95.0, 0.45)) * line(edge - 0.038, 0.007, px));
     // 가장자리 바로 안쪽의 흰 줄. 오른쪽 아래에서는 거의 사라지고, 조금 더 안쪽에 따로 비칩니다.
-    float whiteAmt = 0.88 - 0.78 * toward(dir, 345.0, 0.35) - 0.50 * toward(dir, 12.0, 0.15);
-    float narrow = toward(dir, 170.0, 0.50);
+    float whiteAmt = 0.88 - 0.78 * toward(dirC, 345.0, 0.35) - 0.50 * toward(dirC, 12.0, 0.15);
+    float narrow = toward(dirC, 170.0, 0.50);
     col = mix(col, vec3(1.0), sat(whiteAmt) * exp(-sq((edge - 0.016 + 0.006 * narrow) / (0.013 - 0.004 * narrow))));
-    col = mix(col, vec3(0.92, 0.985, 1.0), 0.80 * line(edge - 0.030, 0.009, px) * toward(dir, 352.0, 0.14));
+    col = mix(col, vec3(0.92, 0.985, 1.0), 0.80 * line(edge - 0.030, 0.009, px) * toward(dirC, 352.0, 0.14));
     // 오른쪽 테두리에 비치는 푸른 보랏빛 줄
-    col = mix(col, vec3(0.53, 0.68, 0.985), 0.85 * exp(-sq((edge - 0.038) / 0.016)) * toward(dir, 9.0, 0.20));
-    float outline = line(edge - 0.002, 0.0050, px) * (0.92 - 0.85 * toward(dir, 70.0, 1.1));
+    col = mix(col, vec3(0.53, 0.68, 0.985), 0.85 * exp(-sq((edge - 0.038) / 0.016)) * toward(dirC, 9.0, 0.20));
+    float outline = line(edge - 0.002, 0.0050, px) * (0.92 - 0.85 * toward(dirC, 70.0, 1.1));
     col = mix(col, vec3(0.43, 0.70, 0.945), outline);
 
     // 왼쪽 위의 큰 반사. 테두리를 따라 휘어진 둥근 모양입니다.
     // 바깥쪽 경계는 또렷하고, 비스듬한 직선에 가까운 안쪽 경계는 부드럽게 풀립니다.
-    float outer = 0.927 - 0.0024 * max(abs(angle - 121.0) - 3.0, 0.0) - 0.00012 * sq(max(angle - 136.0, 0.0));
-    float along = dot(q - vec2(-0.353, 0.640), vec2(0.834, 0.552));
-    float chord = dot(q, vec2(-0.552, 0.834)) - 0.702 + 0.012 * max(1.0 - sq(along / 0.25), 0.0)
+    // 물방울이 출렁이면 도톰하고 짧아졌다가 얇고 길어집니다.
+    float puff = 0.55 * sin(0.93 * tt) + 0.35 * sin(1.57 * tt);
+    float outer = 0.927 - 0.0024 * max(abs(angleA - 121.0) - 3.0, 0.0) - 0.00012 * sq(max(angleA - 136.0, 0.0));
+    float along = dot(qA - vec2(-0.353, 0.640), vec2(0.834, 0.552)) * (1.0 + 0.14 * puff);
+    float chord = dot(qA, vec2(-0.552, 0.834)) - 0.702 + 0.040 * puff + 0.012 * max(1.0 - sq(along / 0.25), 0.0)
         - 0.034 * sq(max(along - 0.18, 0.0) / 0.177) - 0.019 * sq(max(-along - 0.27, 0.0) / 0.12);
     float glint = (1.0 - smoothstep(outer - 0.006, outer + 0.008, r)) * (1.0 - exp(-max(chord + 0.044, 0.0) / 0.0455))
-        * step(0.0, y) * inside;
+        * step(0.0, qA.y) * inside;
     // 큰 반사와 작은 반사 사이의 짙은 그늘
-    col = mix(col, vec3(0.41, 0.72, 0.91), 0.70 * toward(dir, 151.0, 0.13) * exp(-sq((r - 0.895) / 0.04)) * inside);
+    col = mix(col, vec3(0.41, 0.72, 0.91), 0.70 * toward(dirA, 151.0, 0.13) * exp(-sq((r - 0.895) / 0.04)) * inside);
     // 왼쪽 테두리 가까이의 작은 반사
-    float glintSmall = (1.0 - smoothstep(0.50, 1.0, sq((angle - 169.5) / 7.5) + sq((r - 0.892) / 0.032)))
-        * step(0.0, -x) * inside;
+    float glintSmall = (1.0 - smoothstep(0.50, 1.0, sq(wrapDegrees(angleA - 169.5) / 7.5) + sq((r - 0.892) / 0.032)))
+        * step(0.0, -qA.x) * inside;
     float shine = sat(glint + glintSmall);
     col = mix(col, vec3(1.0), shine);
 
@@ -286,7 +338,7 @@ vec4 shadeBody(vec2 q, float edge, float px, float t) {
     for (int i = 0; i < 2; i++) {
         vec2 at = i == 0 ? vec2(0.210, 0.365) : vec2(0.555, -0.050);
         at += 0.012 * vec2(sin(tt * 0.9 + float(i) * 2.1), cos(tt * 0.7 + float(i) * 1.3));
-        vec2 s = (q - at) / 0.015;
+        vec2 s = (qi - at) / 0.015;
         float bubble = (1.0 - smoothstep(1.0 - px / 0.015, 1.0 + px / 0.015, length(s))) * inside;
         col = mix(col, mix(vec3(1.0), vec3(0.36, 0.66, 0.93), smoothstep(-0.2, 0.7, dot(s, vec2(-0.707, 0.707)))), bubble);
     }
@@ -344,11 +396,15 @@ void main() {
     // 끊어진 뒤 본체 곁으로 떨어져 나와 조금 늦게 따라 움직이는 작은 물방울 둘
     float born = smoothstep(0.66, 1.05, t);
     if (born > 0.0) {
-        vec2 anchor = bodyCenter(t - 0.12);
+        vec2 anchor = risePath(t - 0.12) + bodyDrift(t);
+        float tt = t - REST;
         for (int i = 0; i < 2; i++) {
             vec2 rest = i == 0 ? vec2(0.944, 0.963) : vec2(0.867, 0.761);
             float size = (i == 0 ? 0.059 : 0.028) * born;
-            vec2 bob = 0.030 * vec2(sin(t * 1.3 + float(i) * 2.4), cos(t * 1.1 + float(i) * 1.7));
+            // 본체와 함께 떠다니면서 저마다 조금씩 떠돕니다. REST 시각에는 기준 자리에 있습니다.
+            vec2 bob = i == 0
+                ? vec2(0.085 * sin(0.61 * tt) + 0.035 * sin(1.43 * tt), 0.070 * sin(0.79 * tt) + 0.035 * sin(1.21 * tt))
+                : vec2(0.050 * sin(0.87 * tt) + 0.025 * sin(1.69 * tt), 0.045 * sin(0.69 * tt) + 0.025 * sin(1.37 * tt));
             vec2 at = anchor + (rest * mix(0.62, 1.0, born) + bob) * RADIUS;
             vec2 s = (p - at) / (size * RADIUS);
             if (dot(s, s) < 1.5) {
