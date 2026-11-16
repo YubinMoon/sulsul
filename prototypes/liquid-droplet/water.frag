@@ -1,9 +1,14 @@
 #version 300 es
 precision highp float;
 
-// 물방울 레이어만 그립니다. 배경을 입력으로 받지 않고, 같은 시각이면 언제나 같은 RGBA를 냅니다.
+// 물방울을 두 가지로 그립니다.
+// 기본: 물방울 레이어. 화면 크기와 시각만 입력받고, 같은 시각이면 언제나 같은 RGBA를 냅니다.
+// LENS를 정의하고 컴파일하면: 물방울 너머로 휘어 보이는 뒤 화면. 뒤 화면을 옮겨 올 뿐이고 물방울 레이어와는 따로 그립니다.
 uniform vec2 u_resolution;
 uniform float u_time;
+#ifdef LENS
+uniform sampler2D u_backdrop;
+#endif
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
@@ -16,6 +21,8 @@ const float REST = 2.0;
 // 본체가 뒤를 가리는 정도. 가운데가 가장 맑고 테두리로 갈수록 덜 비칩니다. 반사와 흰 선은 불투명합니다.
 const float CLEAR_CENTER = 0.42;
 const float CLEAR_RIM = 0.72;
+// 뒤 화면이 물방울 가운데에서 몇 배로 크게 보이는지. 1이면 전혀 휘지 않습니다.
+const float LENS_MAGNIFY = 1.4;
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 float sq(float x) { return x * x; }
@@ -366,6 +373,57 @@ vec4 shadeBead(vec2 s, float px) {
     return vec4(layer.rgb, layer.a * coverage);
 }
 
+#ifdef LENS
+
+// 물방울 너머로 뒤 화면의 어느 자리가 보이는지 구합니다. s는 가운데 0, 테두리 1인 거리이고 돌려주는 값도 같은 단위입니다.
+// 가운데는 LENS_MAGNIFY배로 조금 크게 보이고, 테두리로 갈수록 눌리면서 물방울 밖의 화면과 끊김 없이 이어집니다.
+float throughBall(float s) {
+    return s * mix(1.0 / LENS_MAGNIFY, 1.0, sq(sq(s)));
+}
+
+// 물방울이 덮은 자리에, 물방울을 지나며 휘어진 뒤 화면을 그립니다. 물방울 레이어 바로 아래에 깔립니다.
+void main() {
+    vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y * 4.0;
+    float pixel = 4.0 / u_resolution.y;
+    float t = u_time;
+    vec2 center = bodyCenter(t);
+    fragColor = vec4(0.0);
+    if (abs(p.x - center.x) > 0.60 || p.y > center.y + RADIUS * 2.2) return;
+    float distance = scene(p, t);
+    if (distance >= pixel) return;
+
+    vec2 stretch = bodyStretch(t);
+    vec2 q = (p - center) / (RADIUS * stretch);
+    float swell = 1.0 + bodyContour(atan(q.y, q.x), t);
+    q /= swell;
+    float r = length(q);
+    // 수면과 이어져 있는 동안에는 이어진 쪽이 덜 휘도록, 실제 가장자리까지의 깊이도 함께 봅니다.
+    float s = clamp(min(r, 1.0 + distance / RADIUS), 0.0, 1.0);
+    float seen = throughBall(s);
+    vec2 bend = q / max(r, 0.0001) * (seen - s) * RADIUS * stretch * swell;
+    // 넓은 범위가 좁게 눌려 비치는 테두리 쪽은 그만큼 뭉개서 가져옵니다.
+    float lo = max(s - 0.003, 0.0);
+    float hi = min(s + 0.003, 1.0);
+    float squeeze = max(abs(throughBall(hi) - throughBall(lo)) / (hi - lo), abs(seen) / max(s, 0.05));
+    float blur = log2(max(squeeze, 1.0));
+
+    if (t < INTRO) {
+        // 수면과 연결부는 가장자리에서만 살짝 휩니다.
+        vec2 slope = vec2(scene(p + vec2(pixel, 0.0), t) - scene(p - vec2(pixel, 0.0), t),
+            scene(p + vec2(0.0, pixel), t) - scene(p - vec2(0.0, pixel), t));
+        vec2 rim = -slope / max(length(slope), 0.00001) * 0.022 * exp(min(distance, 0.0) / 0.035);
+        float ball = 1.0 - smoothstep(1.0, 1.25, r);
+        bend = mix(rim, bend, ball);
+        blur *= ball;
+    }
+
+    vec2 uv = (p + bend) / 4.0 * vec2(u_resolution.y / u_resolution.x, 1.0) + 0.5;
+    float coverage = 1.0 - smoothstep(-0.7 * pixel, 0.7 * pixel, distance);
+    fragColor = vec4(textureLod(u_backdrop, uv, blur).rgb, coverage);
+}
+
+#else
+
 void main() {
     vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y * 4.0;
     float pixel = 4.0 / u_resolution.y;
@@ -420,3 +478,5 @@ void main() {
     }
     fragColor = vec4(color / max(alpha, 0.00001), alpha);
 }
+
+#endif
