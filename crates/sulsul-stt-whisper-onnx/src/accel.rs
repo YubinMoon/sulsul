@@ -5,8 +5,9 @@
 //! GPU를 골라도 GPU에서 도는 것은 인코더뿐이고 디코더는 늘 CPU에서 돕니다. 그쪽이 더 빨랐습니다(`runner.rs` 참고).
 //! 그래도 보고하는 장치는 인코더가 쓰는 장치(`DirectML (어댑터 이름)`)입니다.
 //!
-//! NPU는 넣지 않았습니다. NPU가 있는 PC에서 인코더가 DirectML로 도는지 확인하지 못했기 때문입니다
-//! (개발 PC에는 NPU가 없음). 확인할 수 있게 되면 SenseVoice처럼 `npu` 선택지를 더할 수 있습니다.
+//! NPU는 지원하지 않습니다. AMD Hawk Point의 NPU가 Windows에 보여도 DirectML에서 쓸 수 있다는
+//! 뜻은 아닙니다. 현재 sherpa-onnx Whisper 인코더의 NPU 실행 경로는 검증되지 않았습니다.
+//! 공급자 등록이나 세션 생성만으로 NPU 연산이 실행되었다고 판단하지 않습니다.
 
 use sulsul_core::settings::ChoiceOption;
 use sulsul_core::stt::ComputeDevice;

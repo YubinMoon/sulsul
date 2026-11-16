@@ -844,7 +844,7 @@ engine:
       model_path: 모델 폴더 직접 지정
       model_path_help: 비워 두면 기본 폴더(models/whisper_onnx)를 씁니다. 고른 모델의 인코더·디코더·토큰 파일이 함께 있어야 합니다.
       device: 가속 장치
-      device_help: GPU를 고르면 DirectML로 소리를 분석하는 인코더를 GPU에서 돌리고, 글자를 만드는 디코더는 CPU에서 돌립니다. 고른 장치를 쓸 수 없으면 CPU로 실행하고 원인을 로그에 남깁니다.
+      device_help: GPU를 고르면 DirectML로 소리를 분석하는 인코더를 GPU에서 돌리고, 글자를 만드는 디코더는 CPU에서 돌립니다. 고른 장치를 쓸 수 없으면 CPU로 실행하고 원인을 로그에 남깁니다. 이 엔진은 아직 NPU를 지원하지 않습니다. Ryzen 7040·8040 계열의 NPU가 있어도 현재 Whisper 모델을 가속하는 공식 경로는 확인되지 않았습니다.
       device_auto: 자동 (GPU → CPU)
       device_gpu: GPU
       device_cpu: CPU

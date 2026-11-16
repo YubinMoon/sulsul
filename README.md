@@ -41,6 +41,8 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 
 ## 개발
 
+NPU 지원 범위와 현재 PC의 장치 진단 결과는 [AMD NPU 확인 기록](docs/npu-validation.md)을 참고하세요.
+
 필요한 도구: Rust(stable, MSVC), CMake, LLVM/Clang(whisper.cpp 바인딩 생성용),
 Vulkan SDK(기본 빌드에 들어가는 Whisper GPU 가속용)
 
