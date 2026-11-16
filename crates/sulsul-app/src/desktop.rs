@@ -1,9 +1,9 @@
-//! 데스크톱 연동: 전역 단축키, 단축키 받아쓰기, 트레이, 로그인할 때 자동 실행, 창 보이기·숨기기.
+//! 데스크톱 연동: 전역 단축키, 단축키 받아쓰기, 트레이, 녹음 중 오버레이, 로그인할 때 자동 실행, 창 보이기·숨기기.
 //!
 //! 앱이 시작할 때 [`Desktop::start`]로 만들고 매 프레임 `logic`에서 [`Desktop::tick`]을 부릅니다.
 //! 창이 트레이에 숨겨져 있어도 eframe은 다시 그려 달라는 요청이 오면 `logic`을 부르므로 여기 일은 계속 동작합니다.
 //! 녹음·인식·클립보드는 받아쓰기 스레드([`Dictation`])가, 키 읽기는 후크 스레드([`GlobalHotkey`])가 맡고,
-//! 여기서는 설정 값을 그쪽에 넘기고 상태·알림을 화면과 트레이에 옮깁니다.
+//! 여기서는 설정 값을 그쪽에 넘기고 상태·알림을 화면·트레이·오버레이에 옮깁니다.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,7 @@ use crate::autostart::{self, Entry, SystemLoginItems};
 use crate::dictation::{Dictation, DictationSettings, Notice};
 use crate::error_text;
 use crate::hotkey::{Binding, GlobalHotkey, HotkeySpec};
+use crate::overlay::Overlay;
 use crate::pages::Page;
 use crate::session::{DictationState, DictationStatus, Shared};
 use crate::tray::{Tray, TrayCommand};
@@ -60,6 +61,8 @@ pub struct Desktop {
     /// 전역 단축키를 시작하지 못한 이유 (화면 문구)
     hotkey_unavailable: Option<String>,
     tray: Option<Tray>,
+    /// 녹음하는 동안 화면에 띄우는 물방울
+    overlay: Option<Overlay>,
     /// 받아쓰기 스레드에 넘긴 설정
     applied_settings: Option<DictationSettings>,
     /// 후크에 넘긴 단축키 값과 방식
@@ -121,6 +124,14 @@ impl Desktop {
             }
         };
 
+        let overlay = match Overlay::start(cc.wgpu_render_state.as_ref()) {
+            Ok(overlay) => Some(overlay),
+            Err(error) => {
+                tracing::warn!("recording overlay unavailable: {error}");
+                None
+            }
+        };
+
         let autostart_entry = match Entry::current(launch.home.as_deref()) {
             Ok(entry) => Some(entry),
             Err(error) => {
@@ -134,6 +145,7 @@ impl Desktop {
             hotkey,
             hotkey_unavailable,
             tray,
+            overlay,
             applied_settings: Some(DictationSettings::from_config(config)),
             applied_binding: None,
             invalid_key: None,
@@ -180,9 +192,10 @@ impl Desktop {
         shared.transcriber.release_idle(&config.stt, ctx);
     }
 
-    /// 앱을 끝낼 때 부릅니다. 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌리고, 후크와 트레이를 뗍니다.
+    /// 앱을 끝낼 때 부릅니다. 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌리고, 후크·오버레이·트레이를 뗍니다.
     pub fn shutdown(&mut self) {
         self.hotkey = None;
+        self.overlay = None;
         if let Some(mut dictation) = self.dictation.take() {
             dictation.shutdown();
         }
@@ -231,7 +244,7 @@ impl Desktop {
         self.applied_binding = Some(wanted);
     }
 
-    /// 받아쓰기 상태와 알림을 화면·트레이로 옮깁니다.
+    /// 받아쓰기 상태와 알림을 화면·트레이·오버레이로 옮깁니다.
     fn collect_status(&mut self, shared: &mut Shared) {
         let state = self
             .dictation
@@ -261,6 +274,9 @@ impl Desktop {
         }
         if let Some(tray) = &mut self.tray {
             tray.update(shared.dictation.state);
+        }
+        if let Some(overlay) = &mut self.overlay {
+            overlay.update(shared.dictation.state);
         }
     }
 

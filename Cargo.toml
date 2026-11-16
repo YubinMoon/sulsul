@@ -58,6 +58,8 @@ rust-i18n = "4"
 rfd = "0.18"
 opener = "0.9"
 lucide-icons = "1"
+# 녹음 중 물방울 오버레이. eframe이 쓰는 wgpu와 같은 판이어야 하고, GLSL 셰이더를 읽으려고 `glsl`을 켭니다.
+wgpu = { version = "30", default-features = false, features = ["glsl"] }
 
 # 데스크톱 연동 (전역 단축키·클립보드·트레이·자동 실행, Windows)
 windows-sys = "0.61"
