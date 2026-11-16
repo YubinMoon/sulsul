@@ -8,7 +8,9 @@ use sulsul_core::config::{ApiProfile, SttConfig};
 use sulsul_core::settings::SettingField;
 use sulsul_core::stt::{EngineContext, EngineKind, LanguageSupport, ModelVariant, SttRegistry};
 use sulsul_core::toml::{Table, Value};
-use sulsul_stt_cloud::{ENGINE_ID as CLOUD_ENGINE_ID, find_preset, normalize_transcriptions_url};
+use sulsul_stt_cloud::{
+    ENGINE_ID as CLOUD_ENGINE_ID, normalize_transcriptions_url, requires_api_key,
+};
 
 use super::profiles::profile_display_name;
 use crate::i18n::{tr, tr_opt};
@@ -399,7 +401,7 @@ pub fn cloud_profile_ready(profile: &ApiProfile) -> bool {
     if normalize_transcriptions_url(&profile.endpoint).is_err() || profile.model.trim().is_empty() {
         return false;
     }
-    let key_required = find_preset(&profile.provider).is_some_and(|preset| preset.requires_api_key);
+    let key_required = requires_api_key(&profile.provider, &profile.endpoint);
     !key_required || !profile.api_key.trim().is_empty()
 }
 
@@ -914,7 +916,14 @@ mod tests {
         openai.api_key = "sk-test".into();
         assert!(cloud_profile_ready(&openai));
 
-        let custom = profile_from_preset("custom", "c1".into(), "Custom".into());
+        openai.endpoint = "http://127.0.0.1:8000/v1".into();
+        openai.api_key.clear();
+        assert!(cloud_profile_ready(&openai));
+
+        let custom = ApiProfile {
+            provider: "custom".into(),
+            ..openai
+        };
         assert!(cloud_profile_ready(&custom));
     }
 }

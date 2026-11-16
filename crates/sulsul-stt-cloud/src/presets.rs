@@ -29,23 +29,34 @@ pub const PRESETS: &[ProviderPreset] = &[
         model_suggestions: &["whisper-large-v3-turbo", "whisper-large-v3"],
         requires_api_key: true,
     },
-    ProviderPreset {
-        id: "custom",
-        name_key: "engine.cloud_api.providers.custom",
-        default_endpoint: "http://127.0.0.1:8000/v1",
-        default_model: "whisper-1",
-        model_suggestions: &["whisper-1"],
-        requires_api_key: false,
-    },
 ];
 
 pub fn find_preset(id: &str) -> Option<&'static ProviderPreset> {
     PRESETS.iter().find(|p| p.id == id)
 }
 
-/// 선택한 공급자 프리셋에 맞는 기본 [`ApiProfile`]을 만듭니다.
+/// OpenAI 프리셋에서 주소를 바꾼 호환 서버와 예전 `custom` 제공자는 키 없이도 연결할 수 있습니다.
+pub fn requires_api_key(provider: &str, endpoint: &str) -> bool {
+    let Some(preset) = find_preset(provider) else {
+        return false;
+    };
+    if provider != "openai" {
+        return preset.requires_api_key;
+    }
+    endpoint
+        .trim()
+        .parse::<ureq::http::Uri>()
+        .ok()
+        .and_then(|uri| {
+            uri.host()
+                .map(|host| host.eq_ignore_ascii_case("api.openai.com"))
+        })
+        .unwrap_or(true)
+}
+
+/// 선택한 공급자 프리셋에 맞는 기본 [`ApiProfile`]을 만듭니다. 모르는 공급자면 OpenAI를 씁니다.
 pub fn profile_from_preset(provider: &str, id: String, name: String) -> ApiProfile {
-    let preset = find_preset(provider).unwrap_or(&PRESETS[2]);
+    let preset = find_preset(provider).unwrap_or(&PRESETS[0]);
     ApiProfile {
         id,
         name,
@@ -71,5 +82,24 @@ mod tests {
         assert_eq!(groq.provider, "groq");
         assert_eq!(groq.endpoint, "https://api.groq.com/openai/v1");
         assert_eq!(groq.model, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn openai_compatible_servers_can_use_an_optional_key() {
+        for endpoint in [
+            "https://api.openai.com/v1",
+            " https://API.OPENAI.COM:443/v1/audio/transcriptions/ ",
+        ] {
+            assert!(requires_api_key("openai", endpoint), "{endpoint}");
+        }
+        for endpoint in [
+            "http://127.0.0.1:8000/v1",
+            "http://[::1]:8000/v1",
+            "https://stt.example.com/v1/audio/transcriptions",
+        ] {
+            assert!(!requires_api_key("openai", endpoint), "{endpoint}");
+        }
+        assert!(requires_api_key("groq", "https://api.groq.com/openai/v1"));
+        assert!(!requires_api_key("custom", "http://127.0.0.1:8000/v1"));
     }
 }

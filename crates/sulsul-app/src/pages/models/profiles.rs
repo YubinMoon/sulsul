@@ -45,7 +45,7 @@ impl Preset {
         category == Category::Llm && self.id == MOCK_PROVIDER_ID
     }
 
-    /// 공급자를 고르는 목록에서 놓일 묶음. 두 갈래 모두 직접 입력 프리셋의 ID는 `custom`입니다.
+    /// 공급자를 고르는 목록에서 놓일 묶음. 글 다듬기의 직접 입력 프리셋 ID는 `custom`입니다.
     pub fn kind(&self) -> PresetKind {
         if self.id == CUSTOM_PROVIDER_ID {
             PresetKind::Custom
@@ -107,6 +107,12 @@ pub fn find_preset(category: Category, id: &str) -> Option<Preset> {
 
 /// 공급자 프리셋의 이름. 모르는 공급자면 ID를 그대로 보여 줍니다.
 pub fn provider_label(category: Category, provider: &str) -> String {
+    // 예전에 등록한 음성 인식 custom은 저장된 값은 그대로 두고 OpenAI 호환 제공자로 표시합니다.
+    let provider = if category == Category::Stt && provider == "custom" {
+        "openai"
+    } else {
+        provider
+    };
     find_preset(category, provider)
         .map_or_else(|| provider.to_owned(), |preset| tr(preset.name_key))
 }
@@ -225,15 +231,15 @@ mod tests {
     #[test]
     fn presets_fall_into_cloud_local_and_custom_groups() {
         rust_i18n::set_locale("ko");
-        // 음성 인식 공급자에는 이 PC에서 도는 서버가 없습니다.
+        // 음성 인식은 OpenAI 호환 서버도 OpenAI 프리셋에서 설정합니다.
         assert!(
             presets(Category::Stt)
                 .iter()
-                .all(|preset| preset.kind() != PresetKind::Local)
+                .all(|preset| preset.kind() == PresetKind::Cloud)
         );
+        let custom = find_preset(Category::Llm, "custom").unwrap();
+        assert_eq!(custom.kind(), PresetKind::Custom);
         for category in BOTH {
-            let custom = find_preset(category, "custom").unwrap();
-            assert_eq!(custom.kind(), PresetKind::Custom, "{category:?}");
             assert_eq!(provider_note(category, "custom"), None);
             assert_eq!(provider_note(category, "openai"), None);
             assert_eq!(provider_note(category, "no-such-provider"), None);
@@ -306,10 +312,19 @@ mod tests {
             // 직접 넣은 값은 공급자를 바꿔도 그대로 둡니다.
             profile.endpoint = "https://my.server/v1".into();
             profile.model = "my-model".into();
-            switch_provider(category, &mut profile, "groq", "custom");
+            switch_provider(category, &mut profile, "groq", "openai");
             assert_eq!(profile.endpoint, "https://my.server/v1");
             assert_eq!(profile.model, "my-model");
         }
+    }
+
+    #[test]
+    fn legacy_stt_custom_provider_uses_the_openai_compatible_label() {
+        rust_i18n::set_locale("ko");
+        assert_eq!(
+            provider_label(Category::Stt, "custom"),
+            provider_label(Category::Stt, "openai")
+        );
     }
 
     #[test]

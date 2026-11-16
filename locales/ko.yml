@@ -663,7 +663,7 @@ models:
       missing: 이 경로에서 모델을 찾지 못했습니다.
   providers:
     help:
-      stt: OpenAI 호환 `/audio/transcriptions` 주소로 음성을 보내 인식하는 외부 제공자를 등록합니다. 연결 테스트를 통과해야 등록할 수 있습니다.
+      stt: OpenAI 호환 `/audio/transcriptions` 주소로 음성을 보내 인식하는 외부 제공자를 등록합니다. 다른 호환 서버는 OpenAI를 고른 뒤 주소와 모델 이름을 바꾸세요. 연결 테스트를 통과해야 등록할 수 있습니다.
       llm: OpenAI 호환 `/chat/completions` 주소로 글을 보내 다듬는 외부 제공자를 등록합니다. 연결 테스트를 통과해야 등록할 수 있습니다.
     note: 등록한 제공자는 '사용 가능 모델' 탭에서 고르고, 고치고, 지울 수 있습니다.
     # 공급자를 고르는 목록의 묶음 제목 (이 PC에서 도는 서버가 있는 갈래에서만 보입니다)
@@ -968,9 +968,8 @@ engine:
       timeout_seconds: 요청 제한 시간(초)
       timeout_seconds_help: HTTP 요청 전체 응답을 기다리는 최대 시간입니다.
     providers:
-      openai: OpenAI
+      openai: OpenAI (호환 서버 포함)
       groq: Groq
-      custom: 커스텀 (OpenAI 호환)
   mock:
     name: 테스트용 가짜 엔진
     description: 실제 인식 없이 받은 오디오 정보를 돌려줍니다. 개발 중 화면 흐름을 확인할 때 씁니다.

@@ -646,8 +646,7 @@ fn active_setup_row(ui: &mut Ui, shared: &mut Shared, config: &Config, engine_id
             let ready = profile.is_some_and(|p| {
                 sulsul_stt_cloud::normalize_transcriptions_url(&p.endpoint).is_ok()
                     && !p.model.trim().is_empty()
-                    && (!sulsul_stt_cloud::find_preset(&p.provider)
-                        .is_some_and(|preset| preset.requires_api_key)
+                    && (!sulsul_stt_cloud::requires_api_key(&p.provider, &p.endpoint)
                         || !p.api_key.trim().is_empty())
             });
             status_badge(ui, &palette, ready);

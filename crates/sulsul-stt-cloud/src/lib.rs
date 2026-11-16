@@ -18,7 +18,7 @@ use sulsul_core::stt::{
 
 pub use client::normalize_transcriptions_url;
 use client::{CloudConfig, CloudEngine};
-pub use presets::{PRESETS, ProviderPreset, find_preset, profile_from_preset};
+pub use presets::{PRESETS, ProviderPreset, find_preset, profile_from_preset, requires_api_key};
 
 pub const ENGINE_ID: &str = "cloud_api";
 
@@ -122,7 +122,7 @@ impl SttEngineFactory for CloudFactory {
                     .into(),
             ));
         }
-        if find_preset(provider).is_some_and(|p| p.requires_api_key) && api_key.is_empty() {
+        if requires_api_key(provider, endpoint) && api_key.is_empty() {
             return Err(SttError::Backend(
                 "선택한 API 공급자에는 API 키가 필요합니다. 모델 관리 탭에서 API 키를 입력하세요."
                     .into(),
@@ -225,5 +225,36 @@ mod tests {
             .push(profile_from_preset("openai", "o1".into(), "OpenAI".into()));
         let missing_key = factory.resolve_settings(&stt);
         assert!(factory.create(&ctx, &missing_key).is_err());
+    }
+
+    #[test]
+    fn create_accepts_keyless_compatible_servers_and_legacy_custom_profiles() {
+        let factory = CloudFactory::new();
+        let ctx = EngineContext {
+            paths: AppPaths::under("unused"),
+        };
+        for provider in ["openai", "custom"] {
+            let profile = ApiProfile {
+                id: "compatible".into(),
+                name: "호환 서버".into(),
+                provider: provider.into(),
+                endpoint: "http://127.0.0.1:8000/v1".into(),
+                model: "my-whisper".into(),
+                ..ApiProfile::default()
+            };
+            let stt = SttConfig {
+                api_profile: profile.id.clone(),
+                api_profiles: vec![profile.clone()],
+                ..SttConfig::default()
+            };
+            let resolved = factory.resolve_settings(&stt);
+            assert_eq!(resolved.str(keys::PROVIDER), provider);
+            assert_eq!(resolved.str(keys::ENDPOINT), profile.endpoint);
+            assert_eq!(resolved.str(keys::MODEL), profile.model);
+            assert!(
+                factory.create(&ctx, &resolved).is_ok(),
+                "{provider}: 인증 없는 호환 서버를 쓸 수 있어야 합니다"
+            );
+        }
     }
 }

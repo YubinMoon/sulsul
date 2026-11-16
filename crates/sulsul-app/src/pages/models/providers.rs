@@ -415,8 +415,8 @@ mod tests {
         profile(&mut draft).name = "회사 서버".into();
         profile(&mut draft).endpoint = "https://stt.example.com/v1".into();
         profile(&mut draft).api_key = "secret".into();
-        draft.choose_provider(Category::Stt, &[], "custom");
-        assert_eq!(profile(&mut draft).provider, "custom");
+        draft.choose_provider(Category::Stt, &[], "openai");
+        assert_eq!(profile(&mut draft).provider, "openai");
         assert_eq!(profile(&mut draft).name, "회사 서버");
         assert_eq!(profile(&mut draft).endpoint, "https://stt.example.com/v1");
         assert_eq!(profile(&mut draft).api_key, "secret");
@@ -483,7 +483,13 @@ mod tests {
         rust_i18n::set_locale("ko");
         // 음성 인식: 이 PC에서 도는 서버가 없으므로 묶음 제목을 붙이지 않습니다.
         let stt = provider_items(Category::Stt);
-        assert_eq!(stt.len(), profiles::presets(Category::Stt).len());
+        assert_eq!(
+            stt.iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            ["openai", "groq"],
+            "음성 인식의 호환 서버는 OpenAI에서 설정하고 별도 커스텀 항목은 두지 않습니다"
+        );
         assert!(stt.iter().all(|item| item.group.is_none()));
 
         // 글 다듬기: 클라우드 → 이 PC에서 실행 → 직접 입력 순서로, 묶음마다 이어져 있어야
@@ -509,7 +515,7 @@ mod tests {
 
     #[test]
     fn failed_test_clears_an_earlier_pass() {
-        let mut draft = draft_with("custom");
+        let mut draft = draft_with("openai");
         draft.begin_test();
         draft.finish_test(true);
         assert_eq!(draft.register_block(false), None);
@@ -525,7 +531,7 @@ mod tests {
 
     #[test]
     fn values_changed_during_a_test_do_not_count_as_tested() {
-        let mut draft = draft_with("custom");
+        let mut draft = draft_with("openai");
         draft.begin_test();
         profile(&mut draft).endpoint = "https://changed.example.com/v1".into();
         draft.finish_test(true);
