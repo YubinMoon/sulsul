@@ -64,10 +64,17 @@ impl PromptsPage {
             .line(t!("prompts.usage_note"))
             .line(t!("prompts.preview_note"))
             .show(ui);
+        if !cx.config.postprocess.enabled {
+            ui.add_space(8.0);
+            Banner::new(Tone::Info)
+                .line(t!("prompts.disabled_note"))
+                .show(ui);
+        }
         ui.add_space(SECTION_GAP);
 
         let locked = cx.locked;
         let post = &mut cx.config.postprocess;
+        let can_use = !locked && post.enabled;
 
         // 설정 파일을 직접 고쳐 목록에 없는 프롬프트를 가리키게 됐으면 알립니다.
         if !post.prompts.is_empty() && post.active_prompt().is_none() {
@@ -114,7 +121,7 @@ impl PromptsPage {
                 Some(CardAction::Toggle(id)) => {
                     self.expanded = (self.expanded.as_ref() != Some(&id)).then_some(id);
                 }
-                Some(CardAction::Use(id)) if !locked => post.prompt = id,
+                Some(CardAction::Use(id)) if can_use => post.prompt = id,
                 Some(CardAction::Remove(pending)) if !locked => {
                     self.confirm_remove = Some(pending);
                 }
@@ -144,6 +151,7 @@ impl PromptsPage {
                 .iter()
                 .position(|prompt| prompt.id == active.id)
         });
+        let can_use = !locked && post.enabled;
         let mut action = None;
         for (index, prompt) in post.prompts.iter_mut().enumerate() {
             let id = prompt.id.clone();
@@ -162,7 +170,7 @@ impl PromptsPage {
                 ("prompt_card", index, id.as_str()),
                 |ui| card_head(ui, &name, &preview, in_use),
                 |ui| {
-                    ui.add_enabled_ui(!locked, |ui| {
+                    ui.add_enabled_ui(can_use, |ui| {
                         let label = t!("prompts.use_named", name = name.as_str());
                         turned_on = controls::choice_toggle(ui, in_use, &label);
                     });
@@ -181,9 +189,11 @@ impl PromptsPage {
                                 remove_clicked = controls::danger_button(ui, remove).clicked();
                                 if !in_use {
                                     let label = t!("prompts.use");
-                                    use_clicked =
-                                        controls::icon_text_button(ui, Icon::Check, label)
-                                            .clicked();
+                                    ui.add_enabled_ui(can_use, |ui| {
+                                        use_clicked =
+                                            controls::icon_text_button(ui, Icon::Check, label)
+                                                .clicked();
+                                    });
                                 }
                             });
                         },

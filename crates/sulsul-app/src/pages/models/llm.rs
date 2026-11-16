@@ -4,7 +4,7 @@
 //! 목록에 무엇이 들어가고 어느 것이 골라져 있는지는 `sulsul_llm::entries`가 정하고, 값은 설정의
 //! `[postprocess]`에 들어갑니다.
 //!
-//! 여기서는 "무엇으로 다듬을지"만 고릅니다. 다듬기를 켜고 끄는 스위치는 설정 화면의 후처리 묶음에 있습니다.
+//! 다듬기를 켜고 끄는 스위치와 "무엇으로 다듬을지"를 함께 둡니다.
 
 use egui::Ui;
 use rust_i18n::t;
@@ -112,6 +112,16 @@ impl LlmPane {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, downloads: &mut Downloads) {
+        let label = t!("models.llm.enabled");
+        row::Row::new(&label)
+            .help(&t!("models.llm.enabled_help"))
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!cx.locked, |ui| {
+                    controls::toggle(ui, &mut cx.config.postprocess.enabled, &label)
+                });
+            });
+        ui.add_space(SECTION_GAP);
+
         // 다듬기 자체는 아직 동작하지 않습니다. 고른 모델이 바로 쓰이지 않는다는 것을 먼저 알립니다.
         Banner::new(Tone::Info)
             .line(t!("models.llm.preview_note"))

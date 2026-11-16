@@ -283,7 +283,7 @@ fn postprocess_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
             Row::new(&label)
                 .help(&t!("settings.postprocess.llm_help"))
                 .show(ui, |ui| {
-                    // 아직 후처리기가 없어 켤 수 없습니다. 파일의 값만 보여 줍니다.
+                    // 켜고 끄기는 모델 관리에서 합니다. 여기서는 저장된 상태만 보여 줍니다.
                     let mut enabled = cx.config.postprocess.enabled;
                     ui.add_enabled_ui(false, |ui| controls::toggle(ui, &mut enabled, &label));
                 });
