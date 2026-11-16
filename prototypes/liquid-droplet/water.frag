@@ -13,8 +13,9 @@ const float RADIUS = 0.185;
 const float INTRO = 1.30;
 // 안쪽 무늬가 기준 그림과 같은 자리를 지나는 시각(초)
 const float REST = 2.0;
-// 본체의 불투명도. 반사와 테두리는 이보다 진하게, 빛 번짐은 훨씬 옅게 둡니다.
-const float BODY_ALPHA = 0.88;
+// 본체가 뒤를 가리는 정도. 가운데가 가장 맑고 테두리로 갈수록 덜 비칩니다. 반사와 흰 선은 불투명합니다.
+const float CLEAR_CENTER = 0.42;
+const float CLEAR_RIM = 0.72;
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 float sq(float x) { return x * x; }
@@ -343,9 +344,12 @@ vec4 shadeBody(vec2 q, float edge, float px, float t) {
         col = mix(col, mix(vec3(1.0), vec3(0.36, 0.66, 0.93), smoothstep(-0.2, 0.7, dot(s, vec2(-0.707, 0.707)))), bubble);
     }
 
-    // 반사와 선은 불투명하게, 나머지는 살짝 비치게 둡니다.
+    // 본체는 뒤가 비치는 맑은 물입니다. 가운데가 가장 맑고, 테두리로 갈수록 그리고 색이 짙을수록 덜 비칩니다.
+    // 반사와 흰 선은 불투명합니다. 어느 쪽이든 흰 바탕 위에서 보이는 색은 같습니다.
     float solid = sat(max(max(shine, max(spark, blush)), max(outline, 0.8 * lines)));
-    return layerFromWhite(col, mix(BODY_ALPHA, 1.0, solid));
+    float clear = mix(CLEAR_CENTER, CLEAR_RIM, smoothstep(0.50, 1.0, r));
+    float dense = 1.12 * (1.0 - min(col.r, min(col.g, col.b)));
+    return layerFromWhite(col, mix(max(clear, dense), 1.0, solid));
 }
 
 // 곁에 떠 있는 작은 물방울. 가운데는 맑고 테두리가 짙습니다.
