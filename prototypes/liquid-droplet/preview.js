@@ -8,7 +8,18 @@ const slow = document.getElementById('slow');
 const sample = document.getElementById('sample');
 const lensOn = document.getElementById('lens-on');
 const clock = document.getElementById('clock');
-const DURATION = 1.3;
+const popButton = document.getElementById('pop');
+const doneButton = document.getElementById('done');
+const popTimeline = document.getElementById('pop-time');
+const popClock = document.getElementById('pop-clock');
+// 등장 동작 길이(실제 초). water.frag의 장면 시계가 INTRO(1.3)에 닿는 순간입니다(RISE_SPEED 3일 때 약 0.44초).
+const DURATION = 0.45;
+// 터지는 동작 길이(초). water.frag의 POP_LENGTH와 같습니다.
+const POP_LENGTH = 0.75;
+// 후처리가 끝난 뒤 고리가 모여 뿅 하고 사라지기까지의 시간(초). water.frag의 DONE_LENGTH와 같습니다.
+const DONE_LENGTH = 0.62;
+// 터짐·기다림 시간 막대의 끝(초). 고리가 모인 뒤 한 바퀴 남짓 도는 데까지 볼 수 있습니다.
+const POP_SHOWN = 2.6;
 const BACKGROUNDS = ['#000', '#292929', '#b8b8b8', '#fff'];
 // 예시 화면에 놓는 색 카드
 const CARDS = ['#d9683a', '#2f9e74', '#3f7fd4', '#a65bc4'];
@@ -25,14 +36,20 @@ const labels = Object.fromEntries(
 );
 const t = key => labels[key];
 timeline.max = DURATION;
+popTimeline.max = POP_SHOWN;
 document.title = `${t('title')} · ${t('subtitle')}`;
 document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
 canvas.setAttribute('aria-label', t('canvas'));
 timeline.setAttribute('aria-label', t('timeline'));
+popTimeline.setAttribute('aria-label', t('pop_timeline'));
 document.querySelector('.backgrounds').setAttribute('aria-label', t('background'));
 
 let running = false;
 let time = 0;
+// 터지기 시작한 시각(time 기준). 아직 터지지 않았으면(녹음 중) null입니다.
+let popAt = null;
+// 후처리가 끝난 시각(time 기준). 아직 기다리는 중이면 null입니다.
+let doneAt = null;
 let last = 0;
 let frame = null;
 let background = 0;
@@ -77,12 +94,16 @@ function createPass(target, fragmentSource) {
   gl.bindVertexArray(gl.createVertexArray());
   const resolution = gl.getUniformLocation(program, 'u_resolution');
   const clockTime = gl.getUniformLocation(program, 'u_time');
+  const popClockTime = gl.getUniformLocation(program, 'u_pop');
+  const doneClockTime = gl.getUniformLocation(program, 'u_done');
   return {
     gl, program,
-    draw(seconds) {
+    draw(seconds, pop, done) {
       gl.viewport(0, 0, target.width, target.height);
       gl.uniform2f(resolution, target.width, target.height);
       gl.uniform1f(clockTime, seconds);
+      gl.uniform1f(popClockTime, pop);
+      gl.uniform1f(doneClockTime, done);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
   };
@@ -159,15 +180,40 @@ try {
     }
     await document.fonts.load('15px Pretendard');
 
+    // 터지기 시작한 뒤 지난 시간. 아직 터지지 않았으면 -1입니다.
+    function popTime() {
+      return popAt === null ? -1 : time - popAt;
+    }
+
+    // 후처리가 끝난 뒤 지난 시간. 아직 기다리는 중이면 -1입니다.
+    function doneTime() {
+      return doneAt === null ? -1 : time - doneAt;
+    }
+
+    // 다 터지고 고리도 사라져 더 그릴 것이 없는 시각. 아직 기다리는 중이면 null입니다.
+    function endTime() {
+      return popAt === null || doneAt === null ? null : Math.max(popAt + POP_LENGTH, doneAt + DONE_LENGTH);
+    }
+
     function draw() {
-      if (lens && lensOn.checked) lens.draw(time);
-      layer.draw(time);
+      const pop = popTime();
+      const done = doneTime();
+      if (lens && lensOn.checked) lens.draw(time, pop, done);
+      layer.draw(time, pop, done);
       const introTime = Math.min(time, DURATION);
       if (root.dataset.time !== introTime.toFixed(3)) {
         timeline.value = introTime;
         clock.value = introTime.toFixed(2);
         root.dataset.time = introTime.toFixed(3);
       }
+      const popShown = Math.min(Math.max(pop, 0), POP_SHOWN);
+      if (root.dataset.pop !== popShown.toFixed(3)) {
+        popTimeline.value = popShown;
+        popClock.value = popShown.toFixed(2);
+        root.dataset.pop = popShown.toFixed(3);
+      }
+      popButton.disabled = popAt !== null;
+      doneButton.disabled = popAt === null || doneAt !== null;
     }
 
     // 뒤 화면을 다시 그립니다. 고른 배경색을 깔고, 예시 화면을 켰으면 글과 색 카드를 얹습니다.
@@ -182,7 +228,7 @@ try {
         const { gl } = lens;
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, backdrop);
         gl.generateMipmap(gl.TEXTURE_2D);
-        lens.draw(time);
+        lens.draw(time, popTime(), doneTime());
       }
     }
 
@@ -202,36 +248,102 @@ try {
       const dt = (now - last) / 1000;
       last = now;
       time += dt * (slow.checked ? .32 : 1);
+      // 다 터지고 고리도 사라졌으면 마지막 모습(아무것도 없음)에서 멈춥니다. 기다리는 동안에는 계속 돕니다.
+      const end = endTime();
+      const finished = end !== null && time >= end;
+      if (finished) time = end;
       draw();
-      if (time < DURATION || !reducedMotion) frame = requestAnimationFrame(animate);
+      if (!finished && (time < DURATION || !reducedMotion)) frame = requestAnimationFrame(animate);
       else running = false;
     }
 
+    // 녹음을 시작한 것처럼 수면에서 다시 떠오릅니다.
     function replay() {
       if (frame !== null) cancelAnimationFrame(frame);
       time = 0;
+      popAt = null;
+      doneAt = null;
       last = performance.now();
       running = true;
       frame = requestAnimationFrame(animate);
+    }
+
+    // 멈춰 있으면 다시 움직이고, 지금 모습을 그립니다. 움직임 줄이기를 켰으면 그리기만 합니다.
+    function keepRunning() {
+      if (!reducedMotion && !running) {
+        running = true;
+        last = performance.now();
+        frame = requestAnimationFrame(animate);
+      }
+      draw();
+    }
+
+    // 녹음이 끝난 것처럼 지금 자리에서 터뜨리고, 후처리를 기다리는 고리를 띄웁니다.
+    // 움직임 줄이기를 켰으면 터지는 동작 없이 멈춘 고리만 보입니다.
+    function pop() {
+      if (popAt !== null) return;
+      popAt = reducedMotion ? time - POP_LENGTH : time;
+      keepRunning();
+    }
+
+    // 후처리가 끝난 것처럼 고리를 거둡니다. 움직임 줄이기를 켰으면 바로 사라집니다.
+    function finish() {
+      if (popAt === null || doneAt !== null) return;
+      doneAt = reducedMotion ? time - DONE_LENGTH : time;
+      keepRunning();
+    }
+
+    // 누를 때마다 터뜨리기, 처리 끝, 다시 보기 순서로 넘어갑니다.
+    function poke() {
+      if (popAt === null) pop();
+      else if (doneAt === null) finish();
+      else replay();
     }
 
     function seek(value) {
       running = false;
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
+      popAt = null;
+      doneAt = null;
       time = Math.max(0, Number(value));
       draw();
     }
 
+    // 터지는 동작이나 기다리는 동작의 한 순간에 멈춰 봅니다. 아직 터지지 않았으면 지금 자리에서 터뜨린 것으로 봅니다.
+    function seekPop(value) {
+      running = false;
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      doneAt = null;
+      if (popAt === null) popAt = time;
+      time = popAt + Math.max(0, Number(value));
+      draw();
+    }
+
+    // 후처리가 끝난 뒤의 한 순간에 멈춰 봅니다. 아직 기다리는 중이면 지금 끝난 것으로 봅니다.
+    function seekDone(value) {
+      running = false;
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      if (popAt === null) popAt = time;
+      if (doneAt === null) doneAt = time;
+      time = doneAt + Math.max(0, Number(value));
+      draw();
+    }
+
     document.getElementById('replay').addEventListener('click', replay);
-    canvas.addEventListener('click', replay);
+    popButton.addEventListener('click', pop);
+    doneButton.addEventListener('click', finish);
+    canvas.addEventListener('click', poke);
     canvas.addEventListener('keydown', event => {
       if (event.code === 'Space' || event.code === 'Enter') {
         event.preventDefault();
-        replay();
+        poke();
       }
     });
     timeline.addEventListener('input', () => seek(timeline.value));
+    popTimeline.addEventListener('input', () => seekPop(popTimeline.value));
     const backgrounds = document.querySelectorAll('[data-background]');
     backgrounds.forEach(button => {
       button.addEventListener('click', () => {
@@ -263,8 +375,10 @@ try {
 
     // 미리보기와 프레임 검사에서 같은 동작을 같은 시각으로 살펴봅니다.
     window.dropletPreview = {
-      replay, seek,
+      replay, seek, pop, finish, seekPop, seekDone,
       get time() { return time; },
+      get popTime() { return popTime(); },
+      get doneTime() { return doneTime(); },
       get running() { return running; },
       get renderer() { return layer.gl.getParameter(layer.gl.RENDERER); },
     };

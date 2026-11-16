@@ -2,10 +2,14 @@
 precision highp float;
 
 // 물방울을 두 가지로 그립니다.
-// 기본: 물방울 레이어. 화면 크기와 시각만 입력받고, 같은 시각이면 언제나 같은 RGBA를 냅니다.
+// 기본: 물방울 레이어. 화면 크기와 세 시각(u_time, u_pop, u_done)만 입력받고, 같은 시각이면 언제나 같은 RGBA를 냅니다.
 // LENS를 정의하고 컴파일하면: 물방울 너머로 휘어 보이는 뒤 화면. 뒤 화면을 옮겨 올 뿐이고 물방울 레이어와는 따로 그립니다.
 uniform vec2 u_resolution;
 uniform float u_time;
+// 터지기 시작한 뒤 지난 시간(초). 음수면 아직 터지지 않았습니다(녹음 중).
+uniform float u_pop;
+// 후처리가 끝난 뒤 지난 시간(초). 음수면 아직 후처리 중입니다(터진 뒤 기다리는 중).
+uniform float u_done;
 #ifdef LENS
 uniform sampler2D u_backdrop;
 #endif
@@ -14,18 +18,63 @@ out vec4 fragColor;
 const float PI = 3.14159265359;
 const float FLOOR = -2.02;
 const float RADIUS = 0.185;
-// 등장 동작 길이(초). 이 뒤로는 수면과 연결부를 계산하지 않습니다.
+// 아래의 등장·떠다님 시각은 모두 장면 시계(sceneTime) 기준입니다.
+// 등장 동작 길이. 이 뒤로는 수면과 연결부를 계산하지 않습니다. 실제 시각으로는 약 0.45초입니다.
 const float INTRO = 1.30;
-// 안쪽 무늬가 기준 그림과 같은 자리를 지나는 시각(초)
+// 안쪽 무늬가 기준 그림과 같은 자리를 지나는 시각. 실제 시각으로는 1.0초입니다.
 const float REST = 2.0;
+// 등장(떠오르기, 늘어나 끊어지기, 튕기기)을 처음 미리보기보다 몇 배 빠르게 재생하는지.
+// 3이면 떠오르는 데 걸리는 시간이 1/3이 됩니다. 바꾸면 preview.js의 DURATION도 맞춥니다.
+const float RISE_SPEED = 3.0;
+// 이 실제 시각 사이에 장면 시계가 RISE_SPEED배에서 원래 빠르기로 부드럽게 돌아옵니다(다 떠오른 뒤).
+const float RISE_EASE_FROM = 0.9 / RISE_SPEED;
+const float RISE_EASE_TO = RISE_EASE_FROM + 0.4;
 // 본체가 뒤를 가리는 정도. 가운데가 가장 맑고 테두리로 갈수록 덜 비칩니다. 반사와 흰 선은 불투명합니다.
 const float CLEAR_CENTER = 0.42;
 const float CLEAR_RIM = 0.72;
 // 뒤 화면이 물방울 가운데에서 몇 배로 크게 보이는지. 1이면 전혀 휘지 않습니다.
 const float LENS_MAGNIFY = 1.4;
+// 터지는 동작(초, u_pop 기준). 잠깐 팽팽하게 부풀었다가 POP_RUPTURE에 막이 찢어지고,
+// 구멍이 POP_SWEEP 동안 반대쪽 끝까지 번지며 막이 걷힙니다. POP_LENGTH 뒤에는 아무것도 남지 않습니다.
+const float POP_RUPTURE = 0.07;
+const float POP_SWEEP = 0.17;
+const float POP_LENGTH = 0.75;
+// 막이 처음 찢어지는 방향(도). 큰 반사의 반대쪽인 오른쪽 위입니다.
+const float POP_ANGLE = 58.0;
+// 걷히는 가장자리에서 떨어져 나와 흩어지는 작은 물방울 수
+const int SPRAY = 14;
+// 함께 떨어져 나왔다가 사라지지 않고 고리로 모이는 작은 물방울 수. 후처리를 기다리는 동안 시계방향으로 돕니다.
+const int ORBIT = 8;
+// 고리 반지름(물방울 반지름 단위)과 한 바퀴 도는 시간(초)
+const float ORBIT_RADIUS = 0.8;
+const float ORBIT_PERIOD = 1.3;
+// 이 시각(u_pop 기준) 사이에 튀어 나간 물방울이 고리로 모이고, 도는 빠르기가 다 오릅니다.
+const float ORBIT_GATHER_FROM = 0.25;
+const float ORBIT_GATHER_TO = 0.70;
+// 후처리가 끝난 뒤(u_done 기준)의 동작(초). 고리의 물방울들이 점점 빨리 돌며 가운데로 모여 DONE_MERGE에 하나로 합쳐지고,
+// 잠깐 부풀었다가 DONE_POP에 뿅 하고 터져 작은 물방울과 물결을 남깁니다. DONE_LENGTH 뒤에는 아무것도 남지 않습니다.
+const float DONE_MERGE = 0.28;
+const float DONE_POP = 0.40;
+const float DONE_LENGTH = 0.62;
 
 float sat(float x) { return clamp(x, 0.0, 1.0); }
 float sq(float x) { return x * x; }
+// 0~1 사이의 고정된 난수. 같은 n이면 늘 같은 값입니다.
+float hash(float n) { return fract(sin(n * 12.9898 + 4.1414) * 43758.5453); }
+
+// 빠르기가 begin~end 동안 0에서 1로 smoothstep처럼 오를 때 t까지 간 거리(smoothstep의 적분).
+// end 뒤로는 1초에 1씩 늘어납니다.
+float rampDistance(float t, float begin, float end) {
+    float span = end - begin;
+    float u = sat((t - begin) / span);
+    return span * (u * u * u - 0.5 * u * u * u * u) + max(t - end, 0.0);
+}
+
+// 실제 시각(u_time)을 장면 시계로 바꿉니다. 다 떠오를 때까지는 RISE_SPEED배로 흐르다가
+// RISE_EASE_FROM~RISE_EASE_TO 동안 원래 빠르기로 부드럽게 돌아오므로, 떠다니는 움직임의 빠르기는 그대로입니다.
+float sceneTime(float t) {
+    return RISE_SPEED * t - (RISE_SPEED - 1.0) * rampDistance(t, RISE_EASE_FROM, RISE_EASE_TO);
+}
 
 // 평면에서 a 라디안만큼 돌립니다.
 vec2 spin(vec2 v, float a) {
@@ -91,6 +140,36 @@ vec2 bodyDrift(float t) {
 
 vec2 bodyCenter(float t) { return risePath(t) + bodyDrift(t); }
 
+// 터지기 직전 막이 팽팽해지며 부푸는 정도. 찢어진 뒤에는 그대로입니다.
+float popSwell(float pop) { return 1.0 + 0.07 * smoothstep(0.0, POP_RUPTURE, pop); }
+
+vec2 popDirection() {
+    float a = radians(POP_ANGLE);
+    return vec2(cos(a), sin(a));
+}
+
+// 막이 찢어지는 자리. scale은 물방울 반지름에 곱해지는 늘어남·부풂입니다.
+vec2 popOrigin(vec2 center, vec2 scale) { return center + popDirection() * 0.97 * RADIUS * scale; }
+
+// 찢어진 구멍의 반지름(물방울 반지름 단위). 막이 걷히는 빠르기는 일정해서 고르게 넓어지고,
+// POP_SWEEP 뒤에 반대쪽 끝(2.2)을 넘어갑니다. 아직 찢어지지 않았으면 음수입니다.
+float popHole(float pop) { return pop < POP_RUPTURE ? -1.0 : 2.2 * (pop - POP_RUPTURE) / POP_SWEEP; }
+
+// 고리를 이루는 물방울마다 미리 골라 둔 크기(물방울 반지름 단위). 이웃끼리 들쭉날쭉하도록 섞어 두었습니다.
+float orbitSize(int i) {
+    return i == 0 ? 0.135 : i == 1 ? 0.070 : i == 2 ? 0.110 : i == 3 ? 0.155
+        : i == 4 ? 0.060 : i == 5 ? 0.120 : i == 6 ? 0.085 : 0.145;
+}
+
+// 고리의 물방울이 모두 합쳐졌을 때의 크기. 물의 양(넓이)이 같도록 orbitSize들의 제곱합의 제곱근입니다.
+const float ORBIT_MERGED = 0.325;
+
+// 위에 겹쳐 그립니다. color는 알파를 곱한 색입니다.
+void layerOver(inout vec3 color, inout float alpha, vec3 rgb, float a) {
+    color = color * (1.0 - a) + rgb * a;
+    alpha = alpha * (1.0 - a) + a;
+}
+
 // 윤곽이 원에서 벗어나는 정도. 끊어진 직후의 떨림과, 계속 이어지는 말랑한 출렁임을 더합니다.
 // 출렁임은 방향이 천천히 도는 세 가지 모양이 저마다 부풀었다 꺼지는 식이고, REST 시각에는 정확한 원을 지납니다.
 float bodyContour(float angle, float t) {
@@ -114,20 +193,26 @@ vec2 innerPoint(vec2 q, float t) {
     return spin(s.xy, -roll);
 }
 
-float scene(vec2 p, float t) {
+float scene(vec2 p, float t, float pop) {
     vec2 center = bodyCenter(t);
-    vec2 stretch = bodyStretch(t);
+    vec2 stretch = bodyStretch(t) * popSwell(pop);
     vec2 q = (p - center) / (RADIUS * stretch);
     float body = (length(q) - 1.0 - bodyContour(atan(q.y, q.x), t)) * RADIUS * min(stretch.x, stretch.y);
+    // 찢어진 구멍만큼 막이 걷힙니다.
+    float hole = popHole(pop);
+    float cut = hole > 0.0 ? hole * RADIUS - length(p - popOrigin(center, stretch)) : -1.0;
+    body = max(body, cut);
     if (t >= INTRO) return body;
 
     // 수면과의 연결은 가운데부터 가늘어지고, 끊긴 뒤 되돌아갑니다.
+    // 등장 도중에 터지면 연결부는 빠르게 수면으로 돌아가고 수면은 가라앉습니다.
+    float gone = smoothstep(0.0, 0.25, pop);
     float height = max(center.y - FLOOR, 0.015);
     float along = clamp((p.y - FLOOR) / height, 0.0, 1.0);
     float thin = smoothstep(0.39, 0.70, t);
     float retract = smoothstep(0.69, 0.91, t);
     float neckRadius = mix(0.105, 0.095, along) * (1.0 - retract)
-        - (0.033 + 0.125 * thin) * pow(sin(along * PI), 1.2) - retract * 0.06;
+        - (0.033 + 0.125 * thin) * pow(sin(along * PI), 1.2) - retract * 0.06 - 0.15 * gone;
     float offset = 0.012 * sin(along * PI);
     float neck = max(abs(p.x - offset) - neckRadius, max(FLOOR - p.y, p.y - center.y));
     neck = max(neck, -p.y - 2.06);
@@ -136,8 +221,9 @@ float scene(vec2 p, float t) {
     float surfaceRise = smoothstep(0.02, 0.19, t);
     float poolDrop = smoothstep(0.575, 1.15, t);
     float ripple = sin((t - 0.575) * 26.0) * exp(-max(t - 0.575, 0.0) * 9.0) * release;
-    float pool = ellipse(p - vec2(0.0, -2.145 + 0.065 * surfaceRise - 0.16 * poolDrop + 0.009 * ripple), vec2(0.41, 0.115));
-    float joined = smoothUnion(body, neck, mix(0.09, 0.043, thin));
+    float pool = ellipse(p - vec2(0.0, -2.145 + 0.065 * surfaceRise - 0.16 * poolDrop + 0.009 * ripple - 0.2 * gone),
+        vec2(0.41, 0.115));
+    float joined = max(smoothUnion(body, neck, mix(0.09, 0.043, thin)), cut);
     return smoothUnion(joined, pool, 0.08);
 }
 
@@ -385,14 +471,15 @@ float throughBall(float s) {
 void main() {
     vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y * 4.0;
     float pixel = 4.0 / u_resolution.y;
-    float t = u_time;
+    float t = sceneTime(u_time);
+    float pop = u_pop;
     vec2 center = bodyCenter(t);
     fragColor = vec4(0.0);
-    if (abs(p.x - center.x) > 0.60 || p.y > center.y + RADIUS * 2.2) return;
-    float distance = scene(p, t);
+    if (pop >= POP_LENGTH || abs(p.x - center.x) > 0.60 || p.y > center.y + RADIUS * 2.2) return;
+    float distance = scene(p, t, pop);
     if (distance >= pixel) return;
 
-    vec2 stretch = bodyStretch(t);
+    vec2 stretch = bodyStretch(t) * popSwell(pop);
     vec2 q = (p - center) / (RADIUS * stretch);
     float swell = 1.0 + bodyContour(atan(q.y, q.x), t);
     q /= swell;
@@ -409,8 +496,8 @@ void main() {
 
     if (t < INTRO) {
         // 수면과 연결부는 가장자리에서만 살짝 휩니다.
-        vec2 slope = vec2(scene(p + vec2(pixel, 0.0), t) - scene(p - vec2(pixel, 0.0), t),
-            scene(p + vec2(0.0, pixel), t) - scene(p - vec2(0.0, pixel), t));
+        vec2 slope = vec2(scene(p + vec2(pixel, 0.0), t, pop) - scene(p - vec2(pixel, 0.0), t, pop),
+            scene(p + vec2(0.0, pixel), t, pop) - scene(p - vec2(0.0, pixel), t, pop));
         vec2 rim = -slope / max(length(slope), 0.00001) * 0.022 * exp(min(distance, 0.0) / 0.035);
         float ball = 1.0 - smoothstep(1.0, 1.25, r);
         bend = mix(rim, bend, ball);
@@ -427,47 +514,175 @@ void main() {
 void main() {
     vec2 p = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y * 4.0;
     float pixel = 4.0 / u_resolution.y;
-    float t = u_time;
+    float t = sceneTime(u_time);
+    float pop = u_pop;
+    float done = u_done;
     vec2 center = bodyCenter(t);
-    // 물방울에서 먼 곳은 계산하지 않습니다.
-    if (abs(p.x - center.x) > 0.60 || p.y > center.y + RADIUS * 2.2) {
+    // 물방울에서 먼 곳과, 다 터지고 기다림도 끝난 뒤는 계산하지 않습니다. 터진 뒤에는 흩어지는 물방울까지 넓게 봅니다.
+    bool finished = pop >= POP_LENGTH && done >= DONE_LENGTH;
+    if (finished || abs(p.x - center.x) > 0.60 || p.y > center.y + RADIUS * (pop >= 0.0 ? 2.7 : 2.2)) {
         fragColor = vec4(0.0);
         return;
     }
-    float distance = scene(p, t);
+    float distance = scene(p, t, pop);
     float px = pixel / RADIUS;
+    vec2 scale = bodyStretch(t) * popSwell(pop);
 
-    // 테두리 밖으로 번지는 푸른 빛. 아래쪽이 더 짙습니다.
+    // 테두리 밖으로 번지는 푸른 빛. 아래쪽이 더 짙고, 막이 찢어지면 곧 사라집니다.
     float outside = max(distance, 0.0) / RADIUS;
     float below = smoothstep(-0.9, 0.9, -normalize(p - center + vec2(0.0, 0.00001)).y);
-    float glow = mix(0.075, 0.22, below) * exp(-pow(outside / 0.19, 1.5)) * (1.0 - smoothstep(0.45, 0.62, outside));
+    float glow = mix(0.075, 0.22, below) * exp(-pow(outside / 0.19, 1.5)) * (1.0 - smoothstep(0.45, 0.62, outside))
+        * (1.0 - smoothstep(POP_RUPTURE, POP_RUPTURE + 0.12, pop));
     vec3 color = vec3(0.25, 0.70, 0.96) * glow;
     float alpha = glow;
 
     if (distance < pixel) {
         float coverage = 1.0 - smoothstep(-0.7 * pixel, 0.7 * pixel, distance);
-        vec2 q = (p - center) / (RADIUS * bodyStretch(t));
+        vec2 q = (p - center) / (RADIUS * scale);
         // 윤곽이 출렁여도 무늬가 가장자리를 따라가도록 반지름을 맞춥니다.
         q /= 1.0 + bodyContour(atan(q.y, q.x), t);
         vec4 body = shadeBody(q, -distance / RADIUS, px, t);
+        // 걷히는 막의 가장자리에는 물이 모여 하얗게 빛나는 테두리가 생기고, 걷힐수록 도톰해집니다.
+        float hole = popHole(pop);
+        if (hole > 0.0) {
+            float fromHole = length(p - popOrigin(center, scale)) / RADIUS - hole;
+            float rim = exp(-sq(fromHole / mix(0.035, 0.075, sat(hole / 2.2))));
+            body = vec4(mix(body.rgb, vec3(0.90, 0.985, 1.0), rim), mix(body.a, 1.0, 0.9 * rim));
+        }
         float cover = coverage * body.a;
         color = body.rgb * cover + vec3(0.25, 0.70, 0.96) * glow * (1.0 - coverage);
         alpha = cover + glow * (1.0 - coverage);
     }
 
-    // 끊어진 뒤 본체 곁으로 떨어져 나와 조금 늦게 따라 움직이는 작은 물방울 둘
+    if (pop >= 0.0) {
+        vec2 origin = popOrigin(center, scale);
+        // 막이 찢어지는 순간 그 자리가 하얗게 반짝입니다.
+        float flash = exp(-sq((pop - POP_RUPTURE) / 0.025) - sq(length(p - origin) / (0.16 * RADIUS)));
+        layerOver(color, alpha, vec3(1.0), 0.9 * flash);
+
+        // 터진 자리에서 옅은 물결 고리가 퍼지며 사라집니다.
+        float wave = sat((pop - POP_RUPTURE) / 0.40);
+        float ringRadius = RADIUS * (1.05 + 0.85 * (1.0 - sq(1.0 - wave)));
+        float ring = exp(-sq((length(p - center) - ringRadius) / (0.025 * RADIUS + pixel)))
+            * 0.30 * sq(1.0 - wave) * step(POP_RUPTURE, pop);
+        layerOver(color, alpha, vec3(0.62, 0.88, 1.0), ring);
+
+        // 걷히는 가장자리가 지나가는 자리마다 작은 물방울이 떨어져 나와, 막이 걷히는 쪽으로 기울어 바깥으로 튑니다.
+        // 무중력이라 떨어지지 않고, 점점 느려지며 작아집니다. 작은 것이 많고 큰 것은 드물며,
+        // 큰 것일수록 덜 날아가고 오래 남습니다. 모두 POP_LENGTH 안에 사라집니다.
+        vec2 tear = popDirection() * 0.97;
+        for (int i = 0; i < SPRAY; i++) {
+            float fi = float(i);
+            float angle = radians(POP_ANGLE) + 2.0 * PI * (fi + 0.5 + 0.9 * (hash(fi) - 0.5)) / float(SPRAY);
+            vec2 dir = vec2(cos(angle), sin(angle));
+            float age = pop - (POP_RUPTURE + POP_SWEEP * length(dir - tear) / 2.2);
+            if (age <= 0.0) continue;
+            float big = sq(hash(fi + 23.0));
+            float pace = hash(fi + 37.0);
+            float life = mix(0.18, 0.38, pace) + 0.10 * big;
+            float size = mix(0.03, 0.115, big) * smoothstep(0.0, 0.025, age) * (1.0 - smoothstep(0.5 * life, life, age));
+            if (size <= 0.0) continue;
+            float reach = mix(0.15, 1.3, hash(fi + 11.0)) * (1.0 - 0.5 * big);
+            float travel = reach * (1.0 - exp(-mix(4.0, 9.0, pace) * age));
+            float start = mix(0.88, 1.0, hash(fi + 51.0));
+            vec2 away = sign(sin(angle - radians(POP_ANGLE))) * vec2(-dir.y, dir.x);
+            vec2 at = center + (dir * (start + travel) + away * 0.4 * travel) * RADIUS * scale;
+            vec2 s = (p - at) / (size * RADIUS);
+            if (dot(s, s) < 1.5) {
+                vec4 drop = shadeBead(s, px / size);
+                layerOver(color, alpha, drop.rgb, drop.a);
+            }
+        }
+
+        // 남은 물방울 ORBIT개. 다른 물방울처럼 튀어 나갔다가 다시 모여 고리를 이루고, 후처리를 기다리는 동안
+        // 시계방향으로 돕니다. 크기는 저마다 들쭉날쭉하고(orbitSize), 고리는 천천히 숨 쉬듯 커졌다 작아집니다.
+        // 후처리가 끝나면 점점 빨리 돌며 가운데로 빨려 들어가 하나로 합쳐집니다.
+        float gather = smoothstep(ORBIT_GATHER_FROM, ORBIT_GATHER_TO, pop);
+        float drawIn = done < 0.0 ? 0.0 : sat(done / DONE_MERGE);
+        float pull = drawIn * drawIn;
+        float spun = 2.0 * PI / ORBIT_PERIOD * rampDistance(pop, ORBIT_GATHER_FROM - 0.10, ORBIT_GATHER_TO) + 2.5 * pull;
+        float orbitRadius = ORBIT_RADIUS * (1.0 + 0.04 * sin(2.0 * PI * pop / 1.7));
+        // 도는 동안에는 가는 쪽으로 살짝 늘어나고, 빨려 들어가며 빨라질수록 더 늘어납니다.
+        float elongate = 1.0 + 0.15 * smoothstep(ORBIT_GATHER_FROM - 0.10, ORBIT_GATHER_TO, pop) + 0.25 * pull;
+        // 가운데에 다다른 물방울은 합쳐진 물방울 속으로 사라집니다.
+        float merging = 1.0 - smoothstep(0.8, 1.0, drawIn);
+        for (int i = 0; i < ORBIT; i++) {
+            float fi = float(i);
+            // 0번은 찢어진 자리 가까이에서 가장 먼저 떨어져 나오고, 나머지는 반시계 방향으로 고르게 놓입니다.
+            float home = radians(POP_ANGLE - 20.0) + 2.0 * PI * fi / float(ORBIT);
+            float age = pop - (POP_RUPTURE + POP_SWEEP * length(vec2(cos(home), sin(home)) - tear) / 2.2);
+            if (age <= 0.0) continue;
+            float size = orbitSize(i) * smoothstep(0.0, 0.025, age) * merging;
+            if (size <= 0.0) continue;
+            float flight = mix(0.95, 1.0, hash(fi + 61.0)) + mix(0.35, 0.65, hash(fi + 71.0)) * (1.0 - exp(-7.0 * age));
+            float angle = home - spun;
+            vec2 dir = vec2(cos(angle), sin(angle));
+            vec2 at = center + dir * mix(flight, orbitRadius, gather) * (1.0 - pull) * RADIUS * scale;
+            vec2 ahead = vec2(dir.y, -dir.x);
+            vec2 s = (p - at) / (size * RADIUS);
+            s += ahead * dot(s, ahead) * (1.0 / elongate - 1.0);
+            if (dot(s, s) < 1.5) {
+                vec4 drop = shadeBead(s, px / size);
+                layerOver(color, alpha, drop.rgb, drop.a);
+            }
+        }
+
+        if (done >= 0.0 && done < DONE_LENGTH) {
+            // 가운데로 모인 물방울은 하나로 합쳐져 말랑하게 출렁이며 잠깐 부풀다가, DONE_POP에 뿅 하고 사라집니다.
+            float merged = ORBIT_MERGED * smoothstep(0.75, 1.0, drawIn)
+                * (1.0 + 0.3 * smoothstep(DONE_MERGE, DONE_POP, done))
+                * (1.0 - smoothstep(DONE_POP - 0.015, DONE_POP + 0.03, done));
+            if (merged > 0.0) {
+                float settle = max(done - DONE_MERGE, 0.0);
+                float wobble = 0.14 * sin(48.0 * settle) * exp(-10.0 * settle) * step(DONE_MERGE, done);
+                vec2 s = (p - center) / (merged * RADIUS) * vec2(1.0 + wobble, 1.0 - wobble);
+                if (dot(s, s) < 1.5) {
+                    vec4 drop = shadeBead(s, px / merged);
+                    layerOver(color, alpha, drop.rgb, drop.a);
+                }
+            }
+
+            // 뿅: 사라지는 순간 하얗게 반짝이고, 옅은 물결이 퍼지며, 아주 작은 물방울 여섯 개가 튀어 나가 작아집니다.
+            float poof = done - DONE_POP;
+            float poofFlash = exp(-sq(poof / 0.02) - sq(length(p - center) / (0.30 * RADIUS)));
+            layerOver(color, alpha, vec3(1.0), 0.85 * poofFlash);
+            if (poof > 0.0) {
+                float poofWave = sat(poof / (DONE_LENGTH - DONE_POP));
+                float poofRadius = RADIUS * (0.30 + 0.75 * (1.0 - sq(1.0 - poofWave)));
+                float poofRing = exp(-sq((length(p - center) - poofRadius) / (0.02 * RADIUS + pixel)))
+                    * 0.45 * sq(1.0 - poofWave);
+                layerOver(color, alpha, vec3(0.70, 0.92, 1.0), poofRing);
+                for (int k = 0; k < 6; k++) {
+                    float fk = float(k);
+                    float angle = 2.0 * PI * (fk + 0.3 * hash(fk + 91.0)) / 6.0 - spun;
+                    float reach = mix(0.55, 0.85, hash(fk + 97.0));
+                    vec2 at = center + vec2(cos(angle), sin(angle)) * (0.25 + reach * (1.0 - exp(-9.0 * poof))) * RADIUS;
+                    float size = mix(0.045, 0.075, hash(fk + 101.0)) * (1.0 - smoothstep(0.3, 1.0, poofWave));
+                    vec2 s = (p - at) / (max(size, 0.0001) * RADIUS);
+                    if (size > 0.0 && dot(s, s) < 1.5) {
+                        vec4 drop = shadeBead(s, px / size);
+                        layerOver(color, alpha, drop.rgb, drop.a);
+                    }
+                }
+            }
+        }
+    }
+
+    // 끊어진 뒤 본체 곁으로 떨어져 나와 조금 늦게 따라 움직이는 작은 물방울 둘.
+    // 본체가 터지면 바깥으로 밀려나며 작아집니다.
     float born = smoothstep(0.66, 1.05, t);
-    if (born > 0.0) {
+    float flung = smoothstep(POP_RUPTURE, POP_RUPTURE + 0.30, pop);
+    if (born > 0.0 && flung < 1.0) {
         vec2 anchor = risePath(t - 0.12) + bodyDrift(t);
         float tt = t - REST;
         for (int i = 0; i < 2; i++) {
             vec2 rest = i == 0 ? vec2(0.944, 0.963) : vec2(0.867, 0.761);
-            float size = (i == 0 ? 0.059 : 0.028) * born;
+            float size = (i == 0 ? 0.059 : 0.028) * born * (1.0 - flung);
             // 본체와 함께 떠다니면서 저마다 조금씩 떠돕니다. REST 시각에는 기준 자리에 있습니다.
             vec2 bob = i == 0
                 ? vec2(0.085 * sin(0.61 * tt) + 0.035 * sin(1.43 * tt), 0.070 * sin(0.79 * tt) + 0.035 * sin(1.21 * tt))
                 : vec2(0.050 * sin(0.87 * tt) + 0.025 * sin(1.69 * tt), 0.045 * sin(0.69 * tt) + 0.025 * sin(1.37 * tt));
-            vec2 at = anchor + (rest * mix(0.62, 1.0, born) + bob) * RADIUS;
+            vec2 at = anchor + (rest * mix(0.62, 1.0, born) + bob) * RADIUS * (1.0 + 1.2 * flung);
             vec2 s = (p - at) / (size * RADIUS);
             if (dot(s, s) < 1.5) {
                 vec4 bead = shadeBead(s, px / size);
