@@ -15,7 +15,12 @@
       <div class="controls">
         <button id="replay" data-i18n="replay"></button>
         <label class="slow"><input id="slow" type="checkbox"><span data-i18n="slow"></span></label>
-        <button id="background" data-i18n="background"></button>
+        <div class="backgrounds" role="group">
+          <button data-background="0" data-i18n="black" aria-pressed="true"></button>
+          <button data-background="1" data-i18n="dark_gray" aria-pressed="false"></button>
+          <button data-background="2" data-i18n="light_gray" aria-pressed="false"></button>
+          <button data-background="3" data-i18n="white" aria-pressed="false"></button>
+        </div>
       </div>
     </header>
     <div class="timeline">

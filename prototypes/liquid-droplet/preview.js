@@ -4,6 +4,8 @@ const timeline = document.getElementById('time');
 const slow = document.getElementById('slow');
 const clock = document.getElementById('clock');
 const DURATION = 1.3;
+const BACKGROUNDS = ['#000', '#292929', '#b8b8b8', '#fff'];
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const labels = Object.fromEntries(
   (await (await fetch('locales/ko.yml')).text()).trim().split('\n').map(line => {
     const at = line.indexOf(':');
@@ -16,16 +18,16 @@ document.title = `${t('title')} · ${t('subtitle')}`;
 document.querySelectorAll('[data-i18n]').forEach(node => { node.textContent = t(node.dataset.i18n); });
 canvas.setAttribute('aria-label', t('canvas'));
 timeline.setAttribute('aria-label', t('timeline'));
+document.querySelector('.backgrounds').setAttribute('aria-label', t('background'));
 
 const gl = canvas.getContext('webgl2', {
-  alpha: false, antialias: false, depth: false, stencil: false,
+  alpha: true, premultipliedAlpha: false, antialias: false, depth: false, stencil: false,
   powerPreference: 'high-performance', preserveDrawingBuffer: true,
 });
 
 let running = false;
 let time = 0;
 let last = 0;
-let light = false;
 let frame = null;
 
 function fail(message) {
@@ -68,16 +70,18 @@ if (!gl) {
     gl.useProgram(program);
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const uniforms = Object.fromEntries(['resolution', 'time', 'light'].map(name => [name, gl.getUniformLocation(program, `u_${name}`)]));
+    const uniforms = Object.fromEntries(['resolution', 'time'].map(name => [name, gl.getUniformLocation(program, `u_${name}`)]));
 
     function draw() {
       gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
       gl.uniform1f(uniforms.time, time);
-      gl.uniform1f(uniforms.light, light ? 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      timeline.value = time;
-      clock.value = time.toFixed(2);
-      root.dataset.time = time.toFixed(3);
+      const introTime = Math.min(time, DURATION);
+      if (root.dataset.time !== introTime.toFixed(3)) {
+        timeline.value = introTime;
+        clock.value = introTime.toFixed(2);
+        root.dataset.time = introTime.toFixed(3);
+      }
     }
 
     function resize() {
@@ -93,9 +97,9 @@ if (!gl) {
       if (!running) return;
       const dt = (now - last) / 1000;
       last = now;
-      time = Math.min(DURATION, time + dt * (slow.checked ? .32 : 1));
+      time += dt * (slow.checked ? .32 : 1);
       draw();
-      if (time < DURATION) frame = requestAnimationFrame(animate);
+      if (time < DURATION || !reducedMotion) frame = requestAnimationFrame(animate);
       else running = false;
     }
 
@@ -111,7 +115,7 @@ if (!gl) {
       running = false;
       if (frame !== null) cancelAnimationFrame(frame);
       frame = null;
-      time = Math.max(0, Math.min(DURATION, Number(value)));
+      time = Math.max(0, Number(value));
       draw();
     }
 
@@ -124,10 +128,14 @@ if (!gl) {
       }
     });
     timeline.addEventListener('input', () => seek(timeline.value));
-    document.getElementById('background').addEventListener('click', () => {
-      light = !light;
-      root.classList.toggle('light', light);
-      draw();
+    const backgrounds = document.querySelectorAll('[data-background]');
+    backgrounds.forEach(button => {
+      button.addEventListener('click', () => {
+        const background = Number(button.dataset.background);
+        root.style.setProperty('--preview-background', BACKGROUNDS[background]);
+        root.classList.toggle('light', background >= 2);
+        backgrounds.forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+      });
     });
     canvas.addEventListener('webglcontextlost', event => {
       event.preventDefault();
@@ -138,9 +146,11 @@ if (!gl) {
     new ResizeObserver(resize).observe(canvas);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        running = false;
         if (frame !== null) cancelAnimationFrame(frame);
         frame = null;
+      } else if (running && frame === null) {
+        last = performance.now();
+        frame = requestAnimationFrame(animate);
       }
     });
 
@@ -153,7 +163,7 @@ if (!gl) {
     };
     resize();
     root.dataset.ready = 'true';
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) seek(DURATION);
+    if (reducedMotion) seek(DURATION);
     else replay();
   } catch (error) {
     console.error(error);
