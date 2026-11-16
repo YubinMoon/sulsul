@@ -65,6 +65,7 @@ impl SulsulApp {
         registry: SttRegistry,
         mut sync: ConfigSync,
         launch: Launch,
+        key_capture: crate::hotkey::KeyCapture,
     ) -> Self {
         let ctx = &cc.egui_ctx;
         crate::fonts::install(ctx);
@@ -73,6 +74,7 @@ impl SulsulApp {
         sync.start_watching(ctx.clone());
 
         let mut shared = Shared::new(paths, registry);
+        shared.key_capture = key_capture;
         let desktop = Desktop::start(cc, &mut shared, &sync.config, launch);
         let mut app = Self {
             shared,

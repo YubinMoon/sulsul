@@ -22,6 +22,8 @@ use sulsul_core::config::HotkeyMode;
 pub use keys::Key;
 pub use machine::HotkeyEvent;
 pub use spec::HotkeySpec;
+#[cfg(windows)]
+pub use windows::install_window_capture;
 
 /// 단축키 입력받기 결과
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,8 @@ pub enum Captured {
 #[derive(Debug, Clone, Default)]
 pub struct KeyCapture {
     state: Arc<Mutex<CaptureState>>,
+    #[cfg(windows)]
+    window_input: windows::WindowInput,
 }
 
 #[derive(Debug, Default)]
@@ -137,7 +141,7 @@ impl GlobalHotkey {
     #[cfg(windows)]
     pub fn start(
         capture: KeyCapture,
-        on_event: impl Fn(HotkeyEvent) + Send + 'static,
+        on_event: impl Fn(HotkeyEvent) + Send + Sync + 'static,
     ) -> Result<Self, HotkeyError> {
         let hook = windows::Hook::start(capture, Box::new(on_event))?;
         Ok(Self { hook })

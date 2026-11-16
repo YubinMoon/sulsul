@@ -118,7 +118,9 @@ fn run() -> anyhow::Result<()> {
         "starting sulsul"
     );
 
-    let options = eframe::NativeOptions {
+    let key_capture = hotkey::KeyCapture::default();
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(t!("app.name"))
             .with_app_id("sulsul")
@@ -128,6 +130,8 @@ fn run() -> anyhow::Result<()> {
         // 창을 늘 보이게 하므로 `with_visible(false)`로는 안 되고, `Desktop`이 그 뒤에 숨깁니다.
         ..Default::default()
     };
+    #[cfg(windows)]
+    hotkey::install_window_capture(&mut options, key_capture.clone());
     let launch = Launch {
         background: args.background,
         home,
@@ -136,7 +140,16 @@ fn run() -> anyhow::Result<()> {
     eframe::run_native(
         "sulsul",
         options,
-        Box::new(move |cc| Ok(Box::new(SulsulApp::new(cc, paths, registry, sync, launch)))),
+        Box::new(move |cc| {
+            Ok(Box::new(SulsulApp::new(
+                cc,
+                paths,
+                registry,
+                sync,
+                launch,
+                key_capture,
+            )))
+        }),
     )
     .map_err(|error| anyhow::anyhow!("could not run the window: {error}"))
 }

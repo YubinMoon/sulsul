@@ -6,7 +6,7 @@
 //! 쓰지 않는 키 코드(`0xE8`)를 가짜로 눌렀다 떼기도 합니다.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread::JoinHandle;
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -25,8 +25,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG,
     PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEHWHEEL,
-    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_USER, WM_XBUTTONDOWN,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
+    WM_XBUTTONDOWN,
 };
 
 use super::machine::{CaptureUpdate, KeyInput, KeyProbe, Machine, Mask};
@@ -43,6 +44,61 @@ const SCAN_RIGHT_SHIFT: u32 = 0x36;
 /// AltGr를 누르면 Windows가 함께 만드는 가짜 왼쪽 Ctrl의 스캔 코드
 const SCAN_ALTGR_CTRL: u32 = 0x21D;
 
+/// 창으로 직접 온 키도 egui보다 먼저 받습니다. 원격 입력처럼 저수준 후크를 거치지 않는 입력도
+/// 수정 키의 방향을 보존하고, Space·Enter가 입력란 버튼을 다시 누르지 않게 합니다.
+pub fn install_window_capture(options: &mut eframe::NativeOptions, capture: KeyCapture) {
+    use winit::platform::windows::EventLoopBuilderExtWindows as _;
+
+    options.event_loop_builder = Some(Box::new(move |builder| {
+        let mut window = WindowCapture {
+            input: capture.window_input,
+        };
+        builder.with_msg_hook(move |message| {
+            // SAFETY: winit이 메시지를 전달하는 동안 유효한 MSG 포인터입니다.
+            window.on_message(unsafe { &*(message as *const MSG) })
+        });
+    }));
+}
+
+struct WindowCapture {
+    input: WindowInput,
+}
+
+/// 창 입력도 전역 후크와 같은 판단 상태·녹음 알림을 씁니다. 약한 참조라 후크를 끄면 함께 끊깁니다.
+#[derive(Clone, Debug, Default)]
+pub(super) struct WindowInput(Arc<Mutex<Weak<Context>>>);
+
+impl WindowCapture {
+    fn on_message(&mut self, message: &MSG) -> bool {
+        if !matches!(
+            message.message,
+            WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP
+        ) {
+            return false;
+        }
+        let info = KBDLLHOOKSTRUCT {
+            vkCode: message.wParam as u32,
+            scanCode: ((message.lParam as usize >> 16) & 0xFF) as u32,
+            flags: if message.lParam as usize & (1 << 24) != 0 {
+                LLKHF_EXTENDED
+            } else {
+                0
+            },
+            ..KBDLLHOOKSTRUCT::default()
+        };
+        let context = self
+            .input
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .upgrade();
+        let Some(context) = context else {
+            return false;
+        };
+        context.on_key_with_probe(message.message, &info, &WindowKeyState)
+    }
+}
+
 /// 후크 스레드
 pub struct Hook {
     machine: Arc<Mutex<Machine>>,
@@ -53,15 +109,21 @@ pub struct Hook {
 impl Hook {
     pub fn start(
         capture: KeyCapture,
-        on_event: Box<dyn Fn(HotkeyEvent) + Send>,
+        on_event: Box<dyn Fn(HotkeyEvent) + Send + Sync>,
     ) -> Result<Self, HotkeyError> {
         let machine = Arc::new(Mutex::new(Machine::default()));
         let (ready_tx, ready_rx) = mpsc::channel();
-        let context = Context {
+        let context = Arc::new(Context {
             machine: Arc::clone(&machine),
             capture,
             on_event,
-        };
+        });
+        *context
+            .capture
+            .window_input
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&context);
         let thread = std::thread::Builder::new()
             .name("sulsul-hotkey".into())
             .spawn(move || run(context, ready_tx))
@@ -106,14 +168,14 @@ impl Drop for Hook {
 struct Context {
     machine: Arc<Mutex<Machine>>,
     capture: KeyCapture,
-    on_event: Box<dyn Fn(HotkeyEvent) + Send>,
+    on_event: Box<dyn Fn(HotkeyEvent) + Send + Sync>,
 }
 
 thread_local! {
-    static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) };
+    static CONTEXT: RefCell<Option<Arc<Context>>> = const { RefCell::new(None) };
 }
 
-fn run(context: Context, ready: mpsc::Sender<std::io::Result<u32>>) {
+fn run(context: Arc<Context>, ready: mpsc::Sender<std::io::Result<u32>>) {
     let mut msg = MSG::default();
     // 메시지 큐를 먼저 만들어 둡니다. 그래야 끝내라는 메시지(PostThreadMessageW)가 사라지지 않습니다.
     // SAFETY: `msg`는 유효한 MSG이고, 메시지를 꺼내지 않고 들여다보기만 합니다.
@@ -217,6 +279,15 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 impl Context {
     /// 키 하나를 처리합니다. 막아야 하면 `true`.
     fn on_key(&self, message: u32, info: &KBDLLHOOKSTRUCT) -> bool {
+        self.on_key_with_probe(message, info, &AsyncKeyState)
+    }
+
+    fn on_key_with_probe(
+        &self,
+        message: u32,
+        info: &KBDLLHOOKSTRUCT,
+        probe: &dyn KeyProbe,
+    ) -> bool {
         if info.dwExtraInfo == SIGNATURE {
             return false;
         }
@@ -230,7 +301,7 @@ impl Context {
             raw: info.vkCode,
         };
         let capturing = self.capture.is_active();
-        let verdict = lock(&self.machine).handle(input, capturing, &AsyncKeyState);
+        let verdict = lock(&self.machine).handle(input, capturing, probe);
 
         match verdict.capture {
             Some(CaptureUpdate::Preview(preview)) => self.capture.set_preview(preview),
@@ -265,6 +336,15 @@ impl Context {
 
 /// 지금 OS가 아는 키 상태
 struct AsyncKeyState;
+
+/// 창 입력은 메시지의 누름·뗌을 기준으로 합니다. 원격 입력은 OS의 비동기 키 상태에 없을 수 있습니다.
+struct WindowKeyState;
+
+impl KeyProbe for WindowKeyState {
+    fn is_down(&self, _raw: u32) -> bool {
+        true
+    }
+}
 
 impl KeyProbe for AsyncKeyState {
     fn is_down(&self, raw: u32) -> bool {
@@ -405,6 +485,137 @@ fn lock(machine: &Mutex<Machine>) -> MutexGuard<'_, Machine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn window_context(
+        capture: &KeyCapture,
+        on_event: impl Fn(HotkeyEvent) + Send + Sync + 'static,
+    ) -> (WindowCapture, Arc<Context>) {
+        let context = Arc::new(Context {
+            machine: Arc::new(Mutex::new(Machine::default())),
+            capture: capture.clone(),
+            on_event: Box::new(on_event),
+        });
+        *capture
+            .window_input
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::downgrade(&context);
+        (
+            WindowCapture {
+                input: capture.window_input.clone(),
+            },
+            context,
+        )
+    }
+
+    fn window_message(vk: u16, scan: u32, extended: bool, down: bool) -> MSG {
+        MSG {
+            message: if down { WM_KEYDOWN } else { WM_KEYUP },
+            wParam: usize::from(vk),
+            lParam: ((scan << 16) | (u32::from(extended) << 24)) as isize,
+            ..MSG::default()
+        }
+    }
+
+    #[test]
+    fn window_messages_capture_combination_without_the_global_hook() {
+        let capture = KeyCapture::default();
+        let (mut window, _context) = window_context(&capture, |_| {});
+        capture.start();
+        for (vk, scan) in [(VK_CONTROL, SCAN_CTRL), (VK_SHIFT, 0x2A), (VK_SPACE, 0x39)] {
+            assert!(window.on_message(&window_message(vk, scan, false, true)));
+            assert!(
+                capture.is_active(),
+                "누르는 동안에는 입력을 확정하지 않아야 합니다"
+            );
+        }
+        assert_eq!(capture.preview().as_deref(), Some("Ctrl+Shift+Space"));
+        for (vk, scan) in [(VK_CONTROL, SCAN_CTRL), (VK_SHIFT, 0x2A)] {
+            assert!(window.on_message(&window_message(vk, scan, false, false)));
+            assert!(capture.is_active(), "모든 키를 뗄 때까지 기다려야 합니다");
+        }
+        assert!(window.on_message(&window_message(VK_SPACE, 0x39, false, false)));
+        assert_eq!(
+            capture.take_result(),
+            Some(super::super::Captured::Key("Ctrl+Shift+Space".into()))
+        );
+        assert!(!capture.is_active());
+
+        // 확정 뒤의 보통 입력은 화면으로 전달합니다.
+        assert!(!window.on_message(&window_message(VK_SPACE, 0x39, false, true)));
+        assert!(!window.on_message(&window_message(VK_SPACE, 0x39, false, false)));
+
+        capture.start();
+        assert!(window.on_message(&window_message(VK_CONTROL, SCAN_CTRL, true, true)));
+        assert_eq!(capture.preview().as_deref(), Some("RightCtrl"));
+        assert!(window.on_message(&window_message(VK_CONTROL, SCAN_CTRL, true, false)));
+        assert_eq!(
+            capture.take_result(),
+            Some(super::super::Captured::Key("RightCtrl".into()))
+        );
+    }
+
+    #[test]
+    fn window_messages_cancel_on_escape_without_changing_the_hotkey() {
+        let capture = KeyCapture::default();
+        let (mut window, _context) = window_context(&capture, |_| {});
+        capture.start();
+        assert!(window.on_message(&window_message(VK_ESCAPE, 1, false, true)));
+        assert!(window.on_message(&window_message(VK_ESCAPE, 1, false, false)));
+        assert_eq!(
+            capture.take_result(),
+            Some(super::super::Captured::Cancelled)
+        );
+    }
+
+    #[test]
+    fn window_hotkey_reaches_the_dictation_sink_in_both_modes() {
+        use sulsul_core::config::HotkeyMode;
+
+        for mode in [HotkeyMode::Toggle, HotkeyMode::PushToTalk] {
+            let capture = KeyCapture::default();
+            let (tx, rx) = mpsc::channel();
+            let (mut window, context) = window_context(&capture, move |event| {
+                tx.send(event).expect("녹음 알림을 받아야 합니다");
+            });
+            lock(&context.machine).set_binding(Some(Binding {
+                spec: super::super::HotkeySpec::parse("Ctrl+Shift+Space").expect("올바른 조합"),
+                mode,
+            }));
+            for down in [true, false] {
+                for (vk, scan) in [(VK_CONTROL, SCAN_CTRL), (VK_SHIFT, 0x2A), (VK_SPACE, 0x39)] {
+                    window.on_message(&window_message(vk, scan, false, down));
+                }
+            }
+            let expected = match mode {
+                HotkeyMode::Toggle => vec![HotkeyEvent::Toggle],
+                HotkeyMode::PushToTalk => vec![HotkeyEvent::Press, HotkeyEvent::Release],
+            };
+            assert_eq!(rx.try_iter().collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn hook_and_window_do_not_deliver_a_modifier_hotkey_twice() {
+        let capture = KeyCapture::default();
+        let (tx, rx) = mpsc::channel();
+        let (mut window, context) = window_context(&capture, move |event| {
+            tx.send(event).expect("녹음 알림을 받아야 합니다");
+        });
+        lock(&context.machine).set_binding(Some(Binding {
+            spec: super::super::HotkeySpec::parse("RightCtrl").expect("올바른 키"),
+            mode: sulsul_core::config::HotkeyMode::Toggle,
+        }));
+        for (message, down) in [(WM_KEYDOWN, true), (WM_KEYUP, false)] {
+            context.on_key_with_probe(
+                message,
+                &info(VK_RCONTROL, SCAN_CTRL, true),
+                &WindowKeyState,
+            );
+            window.on_message(&window_message(VK_CONTROL, SCAN_CTRL, true, down));
+        }
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![HotkeyEvent::Toggle]);
+    }
 
     fn info(vk: u16, scan: u32, extended: bool) -> KBDLLHOOKSTRUCT {
         KBDLLHOOKSTRUCT {

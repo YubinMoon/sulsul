@@ -120,6 +120,8 @@ enum Trigger {
 /// 단축키 입력받기 중 지금까지 누른 키
 #[derive(Debug, Default)]
 struct Gesture {
+    /// 누른 키를 모두 뗄 때 확정할 조합
+    pending: Option<String>,
     /// 모두 뗄 때까지 누른 수정 키
     modifiers: Vec<Key>,
     /// 입력받기 중 눌러서 아직 누르고 있는 수정 키
@@ -162,6 +164,9 @@ impl Machine {
 
         if self.capture.is_some() {
             let mut verdict = self.capture_key(input, fresh);
+            if matches!(verdict.capture, Some(CaptureUpdate::Finish(_))) {
+                self.capture = None;
+            }
             verdict.swallow |= swallow_up;
             return verdict;
         }
@@ -379,7 +384,7 @@ impl Machine {
         }
     }
 
-    /// 단축키 입력받기 중: 모든 키를 막고, 수정 키 하나를 눌렀다 떼거나 다른 키를 누르면 결과를 냅니다.
+    /// 단축키 입력받기 중: 모든 키를 막고, 누른 키를 모두 떼면 결과를 냅니다.
     fn capture_key(&mut self, input: KeyInput, fresh: bool) -> Verdict {
         let key = input.key;
         if input.down {
@@ -410,7 +415,10 @@ impl Machine {
                 gesture.other = true;
             }
             return match captured_spec(&held_modifiers, key) {
-                Some(spec) => capture_verdict(CaptureUpdate::Finish(Captured::Key(spec))),
+                Some(spec) => {
+                    gesture.pending = Some(spec.clone());
+                    capture_verdict(CaptureUpdate::Preview(Some(spec)))
+                }
                 // 쓸 수 없는 키(수정 키 없는 글자 등)는 무시하고 계속 입력받습니다.
                 None => Verdict::swallowed(),
             };
@@ -419,6 +427,15 @@ impl Machine {
         let Some(gesture) = self.capture.as_mut() else {
             return Verdict::default();
         };
+        if gesture.pending.is_some() {
+            remove(&mut gesture.down, key);
+            if self.held.is_empty() {
+                return capture_verdict(CaptureUpdate::Finish(Captured::Key(
+                    gesture.pending.take().unwrap_or_default(),
+                )));
+            }
+            return Verdict::swallowed();
+        }
         if !key.is_modifier() || !remove(&mut gesture.down, key) {
             return Verdict::default();
         }
@@ -826,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_combination_on_key_press() {
+    fn capture_combination_after_all_keys_are_released() {
         let mut m = Machine::default();
         capture_down(&mut m, Key::LeftCtrl);
         let preview = capture_down(&mut m, Key::RightShift);
@@ -834,7 +851,18 @@ mod tests {
             preview.capture,
             Some(CaptureUpdate::Preview(Some("Ctrl+Shift".into())))
         );
-        let done = capture_down(&mut m, Key::Space);
+        let pressed = capture_down(&mut m, Key::Space);
+        assert!(pressed.swallow);
+        assert_eq!(
+            pressed.capture,
+            Some(CaptureUpdate::Preview(Some("Ctrl+Shift+Space".into())))
+        );
+        for key in [Key::Space, Key::RightShift] {
+            let released = capture_up(&mut m, key);
+            assert!(released.swallow);
+            assert!(!matches!(released.capture, Some(CaptureUpdate::Finish(_))));
+        }
+        let done = capture_up(&mut m, Key::LeftCtrl);
         assert!(done.swallow);
         assert_eq!(
             done.capture,
@@ -842,11 +870,14 @@ mod tests {
                 "Ctrl+Shift+Space".into()
             )))
         );
-        // 입력받기가 끝난 뒤에도 그동안 누른 키의 뗌은 막습니다.
-        assert!(up(&mut m, Key::Space).swallow);
-        assert!(up(&mut m, Key::RightShift).swallow);
-        assert!(up(&mut m, Key::LeftCtrl).swallow);
         assert!(!up(&mut m, Key::LeftCtrl).swallow, "한 번만");
+
+        // 다음 입력받기에 지난 조합의 수정 키가 남지 않습니다.
+        capture_down(&mut m, Key::RightCtrl);
+        assert_eq!(
+            capture_up(&mut m, Key::RightCtrl).capture,
+            Some(CaptureUpdate::Finish(Captured::Key("RightCtrl".into())))
+        );
     }
 
     #[test]
@@ -872,6 +903,10 @@ mod tests {
 
         assert_eq!(
             capture_down(&mut m, Key::Function(13)).capture,
+            Some(CaptureUpdate::Preview(Some("F13".into())))
+        );
+        assert_eq!(
+            capture_up(&mut m, Key::Function(13)).capture,
             Some(CaptureUpdate::Finish(Captured::Key("F13".into())))
         );
         let mut m = Machine::default();
