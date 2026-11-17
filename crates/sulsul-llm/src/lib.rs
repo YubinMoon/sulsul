@@ -2,13 +2,15 @@
 //!
 //! - [`catalog`]: 이 PC에 내려받아 쓰는 로컬 LLM(GGUF) 목록
 //! - [`presets`]: OpenAI 호환 `/chat/completions`를 제공하는 외부 제공자 프리셋
-//! - [`client`]: 외부 제공자 연결 테스트
+//! - [`client`]: 외부 제공자 요청 (연결 테스트, 다듬기)
 //! - [`entries`]: "사용 가능 모델" 목록과 고르기·지우기 규칙
+//! - [`chat`]: 다듬기 요청의 모양(로컬 모델 채팅 형식)과 응답 정리
 //!
 //! 화면 문구는 갖지 않습니다. 이름·설명은 번역 키(`*_key`)로 내보내고, 로그와 오류 메시지는 영어입니다.
 //! 받아쓰기 결과를 실제로 다듬는 실행(로컬 추론, 후처리기 등록)은 아직 여기에 없습니다.
 
 pub mod catalog;
+pub mod chat;
 pub mod client;
 pub mod entries;
 pub mod presets;

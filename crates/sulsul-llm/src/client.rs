@@ -1,7 +1,9 @@
-//! 외부 제공자 연결 테스트 (OpenAI 호환 `POST /chat/completions`).
+//! 외부 제공자 요청 (OpenAI 호환 `POST /chat/completions`): 연결 테스트와 글 다듬기.
 //!
-//! 아주 짧은 요청 하나로 주소·API 키·모델 이름이 맞는지 확인합니다. 비용이 거의 들지 않게 짧은
-//! 질문 하나만 보내고, 제공자·모델마다 거부하는 매개변수(`max_tokens`, `temperature` 등)는 넣지 않습니다.
+//! 연결 테스트([`test_connection`])는 아주 짧은 요청 하나로 주소·API 키·모델 이름이 맞는지 확인합니다.
+//! 비용이 거의 들지 않게 짧은 질문 하나만 보냅니다. 글 다듬기([`chat`])는 지시문을 system 메시지로,
+//! 받아쓴 글을 user 메시지로 보냅니다. 두 요청 모두 제공자·모델마다 거부하는 매개변수(`max_tokens`,
+//! `temperature` 등)는 넣지 않습니다.
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -36,7 +38,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// 오류 본문을 메시지에 옮길 때의 최대 글자 수
 const MAX_ERROR_CHARS: usize = 300;
 
-/// 연결 테스트 응답
+/// 제공자 응답 (연결 테스트와 글 다듬기 공용)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionReply {
     /// 응답 본문 텍스트 (생각만 하고 끝난 모델 등은 비어 있을 수 있음)
@@ -46,6 +48,9 @@ pub struct ConnectionReply {
     /// 응답에 적힌 모델 이름
     pub model: Option<String>,
 }
+
+/// 글 다듬기 응답 ([`ConnectionReply`]와 같음)
+pub type ChatReply = ConnectionReply;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LlmError {
@@ -107,11 +112,43 @@ pub fn test_connection(
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<ConnectionReply, LlmError> {
+    let messages = json!([{ "role": "user", "content": TEST_PROMPT }]);
+    send(profile, messages, || "OK".to_owned(), timeout, cancel)
+}
+
+/// 받아쓴 글을 지시문에 따라 다듬어 달라고 요청합니다. 블로킹 함수입니다.
+///
+/// `instructions`는 system 메시지로, `text`는 user 메시지로 보냅니다. 응답 텍스트는 손대지 않고
+/// 돌려주므로 생각 블록 등은 [`crate::chat::clean_output`]으로 정리해 씁니다.
+/// 가짜 제공자는 받은 글 앞에 `[mock] `을 붙여 돌려줍니다.
+pub fn chat(
+    profile: &ApiProfile,
+    instructions: &str,
+    text: &str,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<ChatReply, LlmError> {
+    let messages = json!([
+        { "role": "system", "content": instructions.trim() },
+        { "role": "user", "content": text.trim() },
+    ]);
+    let mock_text = format!("[mock] {}", text.trim());
+    send(profile, messages, move || mock_text, timeout, cancel)
+}
+
+/// `messages`로 채팅 요청을 보냅니다. 가짜 제공자는 네트워크 없이 `mock_text`로 답합니다.
+fn send(
+    profile: &ApiProfile,
+    messages: Value,
+    mock_text: impl FnOnce() -> String,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<ConnectionReply, LlmError> {
     if cancel.is_cancelled() {
         return Err(LlmError::Cancelled);
     }
     if profile.provider == MOCK_PROVIDER_ID {
-        return mock_reply(profile, cancel);
+        return mock_reply(profile, mock_text, cancel);
     }
 
     let url = chat_completions_url(&profile.endpoint).map_err(LlmError::InvalidEndpoint)?;
@@ -121,14 +158,14 @@ pub fn test_connection(
     }
     let body = json!({
         "model": profile.model.trim(),
-        "messages": [{ "role": "user", "content": TEST_PROMPT }],
+        "messages": messages,
     })
     .to_string();
     tracing::debug!(
         provider = %profile.provider,
         model = %profile.model.trim(),
         %url,
-        "testing LLM provider connection"
+        "sending LLM chat request"
     );
 
     let started = Instant::now();
@@ -154,7 +191,7 @@ pub fn test_connection(
                         elapsed,
                         model,
                     })
-                    .inspect_err(|e| tracing::debug!("LLM connection test failed: {e}"));
+                    .inspect_err(|e| tracing::debug!("LLM chat request failed: {e}"));
             }
             Err(RecvTimeoutError::Timeout) if started.elapsed() >= timeout => {
                 return Err(timeout_error(timeout));
@@ -176,8 +213,12 @@ fn timeout_error(timeout: Duration) -> LlmError {
     ))
 }
 
-/// 가짜 제공자: 네트워크 없이 잠깐 기다린 뒤 답합니다.
-fn mock_reply(profile: &ApiProfile, cancel: &CancelToken) -> Result<ConnectionReply, LlmError> {
+/// 가짜 제공자: 네트워크 없이 잠깐 기다린 뒤 `text`로 답합니다.
+fn mock_reply(
+    profile: &ApiProfile,
+    text: impl FnOnce() -> String,
+    cancel: &CancelToken,
+) -> Result<ConnectionReply, LlmError> {
     let started = Instant::now();
     while started.elapsed() < MOCK_DELAY {
         if cancel.is_cancelled() {
@@ -195,7 +236,7 @@ fn mock_reply(profile: &ApiProfile, cancel: &CancelToken) -> Result<ConnectionRe
         });
     }
     Ok(ConnectionReply {
-        text: "OK".into(),
+        text: text(),
         elapsed: started.elapsed(),
         model: Some(profile.model.clone()),
     })
@@ -580,6 +621,46 @@ mod tests {
 
         assert_eq!(reply.text, "OK");
         assert_eq!(reply.model.as_deref(), Some("gpt-6-luna-2026"));
+    }
+
+    #[test]
+    fn chat_sends_instructions_as_system_and_text_as_user() {
+        let (endpoint, server) = serve_once(
+            "200 OK",
+            r#"{"model":"gpt-6-luna","choices":[{"message":{"content":"안녕하세요."}}]}"#,
+        );
+        let reply = chat(
+            &profile("openai", &endpoint, "sk-test", "gpt-6-luna"),
+            "  맞춤법을 고쳐 주세요.\n",
+            " 안녕 하세요 ",
+            quick(),
+            &CancelToken::new(),
+        )
+        .unwrap();
+        let raw = server.join().unwrap();
+        let body: Value = serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let mut fields: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+        fields.sort();
+        assert_eq!(
+            fields,
+            ["messages", "model"],
+            "모델이 거부할 수 있는 매개변수를 넣으면 안 됩니다"
+        );
+        assert_eq!(
+            body["messages"],
+            serde_json::json!([
+                { "role": "system", "content": "맞춤법을 고쳐 주세요." },
+                { "role": "user", "content": "안녕 하세요" },
+            ])
+        );
+        assert_eq!(reply.text, "안녕하세요.");
+    }
+
+    #[test]
+    fn mock_provider_echoes_the_text_for_chat() {
+        let mock = profile_from_preset(MOCK_PROVIDER_ID, "m".into(), "가짜".into());
+        let reply = chat(&mock, "지시", " 받아쓴 글 ", quick(), &CancelToken::new()).unwrap();
+        assert_eq!(reply.text, "[mock] 받아쓴 글");
     }
 
     #[test]
