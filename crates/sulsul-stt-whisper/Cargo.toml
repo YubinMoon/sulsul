@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [features]
 # 라이브러리 자체의 기본은 CPU 전용입니다. GPU 백엔드는 실행 파일(sulsul-app, sulsul-cli)이

@@ -82,3 +82,13 @@ cargo run -p sulsul-cli -- devices
 # 5초 녹음해서 16kHz 모노 WAV로 저장 (--native-rate: 장치 샘플레이트 그대로)
 cargo run -p sulsul-cli -- record -s 5 -o test.wav
 ```
+
+## 라이선스
+
+술술의 소스 코드는 [MIT 라이선스](LICENSE)를 따릅니다.
+
+함께 쓰는 라이브러리와 리소스는 각자의 라이선스를 따릅니다.
+
+- 화면 글꼴 Pretendard는 SIL Open Font License 1.1입니다([라이선스 전문](crates/sulsul-app/assets/fonts/Pretendard-LICENSE.txt)).
+- 음성 인식·글 다듬기 모델은 저장소에 들어 있지 않고, 사용자가 앱에서 고를 때 각 배포처에서 내려받습니다.
+  모델마다 라이선스가 다르며, 특히 EXAONE 3.5는 상업적 사용이 금지된 라이선스(EXAONE AI Model License Agreement 1.1 - NC)입니다.

@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [features]
 # llama.cpp GPU 가속. 기본은 Vulkan이고, 빌드할 때 Vulkan SDK(`VULKAN_SDK`)가 필요합니다.
