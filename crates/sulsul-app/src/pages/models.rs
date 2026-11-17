@@ -34,6 +34,7 @@ use sulsul_core::stt::EngineContext;
 // 번역 파일 검사(`i18n` 테스트)에서 단계 이름 키를 확인할 때 씁니다.
 #[cfg(test)]
 pub(crate) use self::download::axis_name_key;
+pub(crate) use self::llm::issue_text as llm_issue_text;
 
 use self::available::PendingConfirm;
 use self::download::Picker;

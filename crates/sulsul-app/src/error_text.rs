@@ -3,18 +3,23 @@
 //! 코어 크레이트의 오류 메시지는 로그용 영어라서, 화면에는 변형마다 번역한 문구를 씁니다.
 
 use rust_i18n::t;
+use sulsul_core::AppPaths;
 use sulsul_core::audio::AudioError;
+use sulsul_core::config::PostProcessConfig;
 use sulsul_core::config::{ConfigError, ConfigIssue, ConfigProblem};
 use sulsul_core::download::DownloadError;
 use sulsul_core::settings::{SettingIssue, SettingProblem};
 use sulsul_core::stt::{SttError, SttRegistry};
 use sulsul_llm::client::LlmError;
+use sulsul_llm::refine::RefineError;
+use sulsul_llm::runner::{Failure, LocalError};
 
 use crate::autostart::AutostartError;
 use crate::dictation::DictationError;
 use crate::dictation::paste::ClipboardError;
 use crate::hotkey::HotkeyError;
 use crate::i18n::{microphone_settings_hint, tr};
+use crate::pages::models::llm_issue_text;
 
 pub fn audio(error: &AudioError) -> String {
     match error {
@@ -193,6 +198,60 @@ pub fn llm(error: &LlmError) -> String {
     }
 }
 
+/// 글 다듬기에 실패한 이유 (`dictation.refine_failed`·`dictation.refine_failed_clipboard`의 `message` 자리)
+///
+/// `paths`·`config`는 고른 모델·제공자의 이름을 찾는 데 씁니다.
+pub fn refine(error: &RefineError, paths: &AppPaths, config: &PostProcessConfig) -> String {
+    match error {
+        RefineError::NoModel => t!("models.llm.issue.no_model").into_owned(),
+        RefineError::Selection(issue) => llm_issue_text(paths, config, issue),
+        RefineError::NoPrompt { id } if id.is_empty() => t!("error.refine.no_prompts").into_owned(),
+        RefineError::NoPrompt { id } => t!("error.refine.missing_prompt", id = id).into_owned(),
+        RefineError::EmptyPrompt { name } => {
+            t!("error.refine.empty_prompt", name = name).into_owned()
+        }
+        RefineError::Cloud(error) => llm(error),
+        RefineError::Local(error) => local_llm(error),
+        RefineError::EmptyOutput => t!("error.refine.empty_output").into_owned(),
+    }
+}
+
+/// 로컬 모델 실행기로 다듬다 난 오류
+fn local_llm(error: &LocalError) -> String {
+    match error {
+        LocalError::RunnerMissing(path) => {
+            t!("error.refine.runner_missing", path = path.display()).into_owned()
+        }
+        LocalError::Spawn(message) => {
+            t!("error.refine.runner_spawn", message = message).into_owned()
+        }
+        LocalError::Crashed(message) => {
+            t!("error.refine.runner_crashed", message = message).into_owned()
+        }
+        LocalError::Timeout(timeout) => t!(
+            "error.refine.runner_timeout",
+            seconds = timeout.as_secs().max(1)
+        )
+        .into_owned(),
+        LocalError::Failed(failure) => match failure {
+            Failure::ModelMissing(path) => {
+                t!("error.refine.model_missing", path = path).into_owned()
+            }
+            Failure::Load(message) => t!("error.refine.model_load", message = message).into_owned(),
+            Failure::PromptTooLong(tokens) => {
+                t!("error.refine.prompt_too_long", tokens = tokens).into_owned()
+            }
+            Failure::Generate(message) => {
+                t!("error.refine.generate", message = message).into_owned()
+            }
+            Failure::BadRequest(message) => {
+                t!("error.refine.bad_request", message = message).into_owned()
+            }
+        },
+        LocalError::Cancelled => t!("error.llm.cancelled").into_owned(),
+    }
+}
+
 /// 전역 단축키를 쓸 수 없는 이유
 pub fn hotkey(error: &HotkeyError) -> String {
     match error {
@@ -270,5 +329,63 @@ mod tests {
             "이유가 없으면 상태 코드만 보여 줍니다: {}",
             texts[3]
         );
+    }
+
+    #[test]
+    fn refine_errors_have_their_own_wording() {
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        use sulsul_llm::entries::SelectionIssue;
+
+        rust_i18n::set_locale("ko");
+        let paths = AppPaths::under("unused");
+        let config = PostProcessConfig::default();
+        let errors = [
+            RefineError::NoModel,
+            RefineError::Selection(SelectionIssue::NoProvider),
+            RefineError::NoPrompt { id: String::new() },
+            RefineError::NoPrompt { id: "gone".into() },
+            RefineError::EmptyPrompt {
+                name: "빈 지시문".into(),
+            },
+            RefineError::Cloud(LlmError::MissingApiKey),
+            RefineError::Local(LocalError::RunnerMissing(PathBuf::from("runner.exe"))),
+            RefineError::Local(LocalError::Spawn("denied".into())),
+            RefineError::Local(LocalError::Crashed("exit code: 1".into())),
+            RefineError::Local(LocalError::Timeout(Duration::from_secs(240))),
+            RefineError::Local(LocalError::Failed(Failure::ModelMissing("a.gguf".into()))),
+            RefineError::Local(LocalError::Failed(Failure::Load("bad".into()))),
+            RefineError::Local(LocalError::Failed(Failure::PromptTooLong(9000))),
+            RefineError::Local(LocalError::Failed(Failure::Generate("decode".into()))),
+            RefineError::Local(LocalError::Failed(Failure::BadRequest("json".into()))),
+            RefineError::EmptyOutput,
+        ];
+        let texts: Vec<String> = errors
+            .iter()
+            .map(|error| refine(error, &paths, &config))
+            .collect();
+        for (error, text) in errors.iter().zip(&texts) {
+            assert!(
+                !text.starts_with("error.") && !text.starts_with("models.") && !text.contains("%{"),
+                "{error:?}: 번역이 빠졌거나 자리 표시가 남았습니다 ({text})"
+            );
+        }
+        let mut unique = texts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "{texts:#?}");
+        assert!(texts[9].contains("240"), "{}", texts[9]);
+    }
+
+    #[test]
+    fn refine_failure_clipboard_text_cannot_pass_for_a_result() {
+        rust_i18n::set_locale("ko");
+        let text = t!("dictation.refine_failed_clipboard", message = "원인 설명");
+        assert!(
+            text.starts_with("[술술 오류]"),
+            "다듬은 결과로 착각하지 않게 첫머리에 오류임을 밝혀야 합니다: {text}"
+        );
+        assert!(text.contains("원인 설명"), "{text}");
     }
 }

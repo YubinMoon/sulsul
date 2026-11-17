@@ -424,6 +424,8 @@ impl eframe::App for SulsulApp {
     fn on_exit(&mut self) {
         // 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌리고, 키보드 후크와 트레이를 뗍니다.
         self.desktop.shutdown();
+        // 글 다듬기 로컬 모델 실행기를 띄워 두었으면 끝냅니다.
+        self.shared.refiner.shutdown();
         // 저장을 기다리던 변경이 있으면 끝내기 전에 씁니다.
         if self.sync.has_pending_save() && !self.sync.locked() {
             self.sync.save_now();

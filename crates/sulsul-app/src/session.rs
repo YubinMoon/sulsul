@@ -10,6 +10,7 @@ use sulsul_core::stt::SttRegistry;
 
 use crate::hotkey::KeyCapture;
 use crate::pages::Page;
+use crate::refiner::SharedRefiner;
 use crate::transcriber::SharedTranscriber;
 use crate::widgets::banner::Tone;
 
@@ -35,6 +36,8 @@ pub struct Shared {
     pub navigate: Option<Page>,
     /// 받아쓰기 테스트 화면과 단축키 받아쓰기가 함께 쓰는 엔진 보관소
     pub transcriber: SharedTranscriber,
+    /// 단축키 받아쓰기가 쓰는 글 다듬기 보관소 (로컬 모델 실행기를 띄워 둠)
+    pub refiner: SharedRefiner,
     /// 설정 화면에서 새 단축키를 입력받는 창구
     pub key_capture: KeyCapture,
     /// 단축키 받아쓰기 상태 (화면 표시용)
@@ -45,6 +48,7 @@ impl Shared {
     pub fn new(paths: AppPaths, registry: SttRegistry) -> Self {
         Self {
             transcriber: SharedTranscriber::new(registry.clone(), paths.clone()),
+            refiner: SharedRefiner::new(paths.clone()),
             paths,
             registry,
             devices: DeviceList::load(),

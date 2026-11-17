@@ -93,6 +93,7 @@ impl Desktop {
         let dictation = match Dictation::start(
             DictationSettings::from_config(config),
             shared.transcriber.clone(),
+            shared.refiner.clone(),
             move || wake_ctx.request_repaint(),
         ) {
             Ok(dictation) => Some(dictation),
@@ -184,12 +185,13 @@ impl Desktop {
     ) {
         self.apply_settings(config);
         self.apply_binding(config);
-        self.collect_status(shared);
+        self.collect_status(shared, config);
         self.handle_window(ctx, shared, page);
         if !locked {
             self.apply_autostart(shared, config.general.launch_at_startup);
         }
         shared.transcriber.release_idle(&config.stt, ctx);
+        shared.refiner.release_idle(ctx);
     }
 
     /// 앱을 끝낼 때 부릅니다. 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌리고, 후크·오버레이·트레이를 뗍니다.
@@ -245,7 +247,7 @@ impl Desktop {
     }
 
     /// 받아쓰기 상태와 알림을 화면·트레이·오버레이로 옮깁니다.
-    fn collect_status(&mut self, shared: &mut Shared) {
+    fn collect_status(&mut self, shared: &mut Shared, config: &Config) {
         let state = self
             .dictation
             .as_ref()
@@ -269,7 +271,7 @@ impl Desktop {
 
         if let Some(dictation) = &self.dictation {
             for notice in dictation.take_notices() {
-                show_notice(shared, notice);
+                show_notice(shared, config, notice);
             }
         }
         if let Some(tray) = &mut self.tray {
@@ -425,12 +427,20 @@ impl DictationSettings {
             && self.max_record_seconds == config.audio.max_record_seconds
             && self.feedback_sounds == config.audio.feedback_sounds
             && self.stt == config.stt
+            && self.postprocess == config.postprocess
     }
 }
 
-fn show_notice(shared: &mut Shared, notice: Notice) {
+fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
     match notice {
-        Notice::Copied => shared.toasts.info(t!("dictation.copied")),
+        Notice::Copied { refined: false } => shared.toasts.info(t!("dictation.copied")),
+        Notice::Copied { refined: true } => shared.toasts.info(t!("dictation.refined_copied")),
+        Notice::RefineFailed(error) => {
+            let message = error_text::refine(&error, &shared.paths, &config.postprocess);
+            shared
+                .toasts
+                .error(t!("dictation.refine_failed", message = message));
+        }
         Notice::Empty => shared.toasts.warning(t!("dictation.empty")),
         Notice::Busy => shared.toasts.warning(t!("dictation.busy")),
         Notice::RecordFailed(error) => shared.toasts.error(t!(

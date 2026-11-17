@@ -122,9 +122,9 @@ impl LlmPane {
             });
         ui.add_space(SECTION_GAP);
 
-        // 다듬기 자체는 아직 동작하지 않습니다. 고른 모델이 바로 쓰이지 않는다는 것을 먼저 알립니다.
+        // 다듬지 못했을 때 클립보드에 무엇이 들어가는지 먼저 알립니다.
         Banner::new(Tone::Info)
-            .line(t!("models.llm.preview_note"))
+            .line(t!("models.llm.failure_note"))
             .show(ui);
         ui.add_space(10.0);
 
@@ -712,7 +712,11 @@ fn model_card_link(ui: &mut Ui, family: &LlmFamily) {
 }
 
 /// 지금 설정이 가리키는 것을 쓸 수 없는 이유를 화면 문구로 바꿉니다.
-fn issue_text(paths: &AppPaths, config: &PostProcessConfig, issue: &SelectionIssue) -> String {
+pub(crate) fn issue_text(
+    paths: &AppPaths,
+    config: &PostProcessConfig,
+    issue: &SelectionIssue,
+) -> String {
     match issue {
         SelectionIssue::NotInstalled { variant_id } => {
             let model = find_variant(paths, variant_id).map_or_else(

@@ -59,10 +59,9 @@ impl PromptsPage {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
         header(ui, &t!("prompts.title"), &t!("prompts.subtitle"));
 
-        // 지시문이 어디에 쓰이는지, 그리고 글 다듬기 자체는 아직 동작하지 않는다는 것을 먼저 알립니다.
+        // 지시문이 어디에 쓰이는지 먼저 알립니다.
         Banner::new(Tone::Info)
             .line(t!("prompts.usage_note"))
-            .line(t!("prompts.preview_note"))
             .show(ui);
         if !cx.config.postprocess.enabled {
             ui.add_space(8.0);

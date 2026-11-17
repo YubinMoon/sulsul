@@ -1,9 +1,13 @@
-//! 단축키 받아쓰기: 녹음 → 인식 → 클립보드.
+//! 단축키 받아쓰기: 녹음 → 인식 → 글 다듬기(켰을 때) → 클립보드.
 //!
 //! 전용 스레드(`sulsul-dictation`)에서 돌아 창이 트레이에 숨겨져 있어도 동작합니다.
 //! 키보드 후크가 보낸 [`HotkeyEvent`]로 녹음을 시작·끝내고, 인식은 작업 스레드에서
-//! 받아쓰기 테스트 화면과 함께 쓰는 [`SharedTranscriber`]로 합니다. 받아쓴 글은 [`PasteGuard`]가
+//! 받아쓰기 테스트 화면과 함께 쓰는 [`SharedTranscriber`]로 합니다. 글 다듬기를 켰으면 같은 작업
+//! 스레드에서 이어서 [`SharedRefiner`]로 다듬습니다. 받아쓴(다듬은) 글은 [`PasteGuard`]가
 //! 클립보드에 넣고, 사용자가 붙여넣으면 원래 내용으로 되돌립니다.
+//!
+//! 글 다듬기에 실패하면 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다. 그 글은
+//! 다듬은 결과로 착각하지 않게 `[술술 오류]`로 시작합니다(`dictation.refine_failed_clipboard`).
 //!
 //! 화면은 매 프레임 [`Dictation::state`]와 [`Dictation::take_notices`]로 상태와 알림을 가져갑니다.
 //!
@@ -19,14 +23,18 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use rust_i18n::t;
 use sulsul_core::CancelToken;
 use sulsul_core::audio::{AudioClip, AudioError, Recording, RecordingOptions};
-use sulsul_core::config::{Config, SttConfig};
+use sulsul_core::config::{Config, PostProcessConfig, SttConfig};
 use sulsul_core::stt::{SttError, TranscribeError, TranscribeJob};
+use sulsul_llm::refine::RefineError;
 
 use self::paste::{Clipboard, ClipboardError, PasteGuard};
 use crate::clipboard::SystemClipboard;
+use crate::error_text;
 use crate::hotkey::HotkeyEvent;
+use crate::refiner::SharedRefiner;
 use crate::session::DictationState;
 use crate::sound::{self, Cue};
 use crate::transcriber::SharedTranscriber;
@@ -45,6 +53,8 @@ pub struct DictationSettings {
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
     pub stt: SttConfig,
+    /// 글 다듬기 설정 (`enabled`가 꺼져 있으면 다듬지 않음)
+    pub postprocess: PostProcessConfig,
 }
 
 impl DictationSettings {
@@ -54,6 +64,7 @@ impl DictationSettings {
             max_record_seconds: config.audio.max_record_seconds,
             feedback_sounds: config.audio.feedback_sounds,
             stt: config.stt.clone(),
+            postprocess: config.postprocess.clone(),
         }
     }
 }
@@ -61,8 +72,12 @@ impl DictationSettings {
 /// 화면에 알릴 일
 #[derive(Debug)]
 pub enum Notice {
-    /// 받아쓴 글을 클립보드에 넣음
-    Copied,
+    /// 받아쓴 글을 클립보드에 넣음 (`refined`: 글 다듬기를 거쳤는지)
+    Copied {
+        refined: bool,
+    },
+    /// 글 다듬기에 실패해 받아쓴 원문 대신 실패 원인을 클립보드에 넣음
+    RefineFailed(RefineError),
     /// 인식된 말이 없음
     Empty,
     /// 앞의 받아쓰기를 아직 처리하는 중
@@ -130,8 +145,17 @@ impl ActiveRecording for Recording {
 enum Msg {
     Hotkey(HotkeyEvent),
     Settings(Box<DictationSettings>),
-    Transcribed(Result<String, DictationError>),
+    Transcribed(Result<Outcome, DictationError>),
     Shutdown,
+}
+
+/// 인식(과 다듬기)을 마친 결과
+#[derive(Debug)]
+enum Outcome {
+    /// 클립보드에 넣을 글. 인식된 말이 없으면 비어 있습니다.
+    Text { text: String, refined: bool },
+    /// 받아쓰기는 됐지만 다듬지 못했습니다.
+    RefineFailed(RefineError),
 }
 
 /// 화면이 가져가는 상태
@@ -154,11 +178,13 @@ impl Dictation {
     pub fn start(
         settings: DictationSettings,
         transcriber: SharedTranscriber,
+        refiner: SharedRefiner,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self> {
         Self::start_with(
             settings,
             transcriber,
+            refiner,
             || (SystemMicrophone, SystemClipboard),
             sound::play,
             wake,
@@ -169,6 +195,7 @@ impl Dictation {
     fn start_with<M, C>(
         settings: DictationSettings,
         transcriber: SharedTranscriber,
+        refiner: SharedRefiner,
         devices: impl FnOnce() -> (M, C) + Send + 'static,
         play: impl Fn(Cue) + Send + 'static,
         wake: impl Fn() + Send + 'static,
@@ -190,6 +217,7 @@ impl Dictation {
                     tx: service_tx,
                     settings,
                     transcriber,
+                    refiner,
                     microphone,
                     paste: PasteGuard::new(clipboard),
                     state: State::Idle,
@@ -288,6 +316,7 @@ struct Service<M: Microphone, C: Clipboard> {
     tx: Sender<Msg>,
     settings: DictationSettings,
     transcriber: SharedTranscriber,
+    refiner: SharedRefiner,
     microphone: M,
     paste: PasteGuard<C>,
     state: State<M::Recording>,
@@ -444,18 +473,25 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         }
     }
 
-    /// 녹음이 확정됐습니다: 시작음을 내고, 녹음하는 동안 모델을 미리 읽어 둡니다.
+    /// 녹음이 확정됐습니다: 시작음을 내고, 녹음하는 동안 인식 모델과 (켰으면) 다듬기 모델을 미리 읽어 둡니다.
     fn on_confirmed(&mut self) {
         tracing::info!("dictation recording started");
         self.cue(Cue::Start);
         let transcriber = self.transcriber.clone();
         let stt = self.settings.stt.clone();
+        let refiner = self.refiner.clone();
+        let post = self.settings.postprocess.clone();
         let spawned = std::thread::Builder::new()
             .name("sulsul-dictation-prepare".into())
             .spawn(move || {
-                // 실패하면 인식할 때 다시 시도하고 그때 알립니다.
+                // 실패하면 인식·다듬기를 할 때 다시 시도하고 그때 알립니다.
                 if let Err(error) = transcriber.lock().prepare(&stt, &stt.engine) {
                     tracing::debug!("could not prepare the engine while recording: {error}");
+                }
+                if let Err(error) = refiner.lock().prepare(&post, &CancelToken::new()) {
+                    tracing::debug!(
+                        "could not prepare the refinement model while recording: {error}"
+                    );
                 }
             });
         if let Err(error) = spawned {
@@ -493,7 +529,9 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
 
         let cancel = CancelToken::new();
         let transcriber = self.transcriber.clone();
+        let refiner = self.refiner.clone();
         let stt = self.settings.stt.clone();
+        let post = self.settings.postprocess.clone();
         let tx = self.tx.clone();
         let job_cancel = cancel.clone();
         let spawned = std::thread::Builder::new()
@@ -504,14 +542,15 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
                         stt: &stt,
                         engine_id: &stt.engine,
                         language: None,
-                        cancel: job_cancel,
+                        cancel: job_cancel.clone(),
                     };
                     // 받아쓰기 테스트 화면이 엔진을 쓰고 있으면 끝날 때까지 기다립니다.
-                    transcriber
+                    let text = transcriber
                         .lock()
                         .transcribe(&clip, &job)
                         .map(|done| done.transcript.text)
-                        .map_err(DictationError::from)
+                        .map_err(DictationError::from)?;
+                    Ok(refine(&refiner, &post, text, &job_cancel))
                 }))
                 .unwrap_or(Err(DictationError::Crashed));
                 let _ = tx.send(Msg::Transcribed(result));
@@ -528,13 +567,17 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         }
     }
 
-    fn on_transcribed(&mut self, result: Result<String, DictationError>) {
+    fn on_transcribed(&mut self, result: Result<Outcome, DictationError>) {
         if !matches!(self.state, State::Transcribing { .. }) {
             return;
         }
         self.state = State::Idle;
-        let text = match result {
-            Ok(text) => text,
+        let (text, refined) = match result {
+            Ok(Outcome::Text { text, refined }) => (text, refined),
+            Ok(Outcome::RefineFailed(error)) => {
+                self.deliver_refine_failure(error);
+                return;
+            }
             Err(DictationError::Stt(SttError::Cancelled)) => return,
             Err(error) => {
                 tracing::warn!("dictation transcription failed: {error:?}");
@@ -553,14 +596,30 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             Ok(()) => {
                 tracing::info!(
                     chars = text.chars().count(),
+                    refined,
                     "dictation copied to the clipboard"
                 );
-                self.notices.push(Notice::Copied);
+                self.notices.push(Notice::Copied { refined });
                 self.cue(Cue::Done);
             }
             Err(error) => {
                 tracing::warn!("could not copy dictation to the clipboard: {error}");
                 self.fail(Notice::ClipboardFailed(error));
+            }
+        }
+    }
+
+    /// 다듬지 못했습니다: 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다.
+    /// 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
+    fn deliver_refine_failure(&mut self, error: RefineError) {
+        tracing::warn!("dictation refinement failed: {error}");
+        let reason = error_text::refine(&error, self.refiner.paths(), &self.settings.postprocess);
+        let notice = t!("dictation.refine_failed_clipboard", message = reason);
+        match self.paste.deliver(&notice) {
+            Ok(()) => self.fail(Notice::RefineFailed(error)),
+            Err(clipboard) => {
+                tracing::warn!("could not copy the refinement error to the clipboard: {clipboard}");
+                self.fail(Notice::ClipboardFailed(clipboard));
             }
         }
     }
@@ -662,6 +721,39 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
     }
 }
 
+/// 글 다듬기를 켰으면 받아쓴 글을 다듬습니다. 인식된 말이 없으면 다듬지 않습니다.
+fn refine(
+    refiner: &SharedRefiner,
+    post: &PostProcessConfig,
+    text: String,
+    cancel: &CancelToken,
+) -> Outcome {
+    if !post.enabled || text.trim().is_empty() {
+        return Outcome::Text {
+            text,
+            refined: false,
+        };
+    }
+    match refiner.lock().refine(post, text.trim(), cancel) {
+        Ok(refined) => {
+            tracing::info!(
+                seconds = refined.elapsed.as_secs_f32(),
+                "dictation text refined"
+            );
+            Outcome::Text {
+                text: refined.text,
+                refined: true,
+            }
+        }
+        // 앱을 끝내느라 취소했습니다. 받아쓰기 스레드는 이 결과를 버립니다.
+        Err(error) if error.is_cancelled() => Outcome::Text {
+            text,
+            refined: false,
+        },
+        Err(error) => Outcome::RefineFailed(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::paste::fake::FakeClipboard;
@@ -670,6 +762,9 @@ mod tests {
     use sulsul_core::stt::SttRegistry;
     use sulsul_core::stt::mock::{MOCK_ENGINE_ID, MockEngineFactory};
     use sulsul_core::toml::Value;
+    use sulsul_llm::CLOUD_PROCESSOR_ID;
+    use sulsul_llm::client::LlmError;
+    use sulsul_llm::presets::{MOCK_PROVIDER_ID, profile_from_preset};
 
     /// 시험용 마이크: 늘 1초짜리 소리를 돌려줍니다.
     struct FakeMicrophone {
@@ -714,6 +809,22 @@ mod tests {
             max_record_seconds: 60,
             feedback_sounds: true,
             stt,
+            postprocess: PostProcessConfig::default(),
+        }
+    }
+
+    /// 가짜 외부 제공자로 다듬는 설정. API 키가 `fail`이면 제공자가 인증 실패로 답합니다.
+    fn refining_settings(text: &str, api_key: &str) -> DictationSettings {
+        let mut profile = profile_from_preset(MOCK_PROVIDER_ID, "m".into(), "가짜".into());
+        profile.api_key = api_key.into();
+        DictationSettings {
+            postprocess: PostProcessConfig {
+                enabled: true,
+                processor: CLOUD_PROCESSOR_ID.into(),
+                api_profiles: vec![profile],
+                ..PostProcessConfig::default()
+            },
+            ..settings(text)
         }
     }
 
@@ -726,6 +837,10 @@ mod tests {
 
     impl Harness {
         fn new(text: &str, microphone_fails: bool) -> Self {
+            Self::with(settings(text), microphone_fails)
+        }
+
+        fn with(settings: DictationSettings, microphone_fails: bool) -> Self {
             let mut registry = SttRegistry::new();
             registry.register(Arc::new(MockEngineFactory::new()));
             let transcriber = SharedTranscriber::new(registry, AppPaths::under("unused"));
@@ -734,8 +849,9 @@ mod tests {
             let service_clipboard = clipboard.clone();
             let service_cues = Arc::clone(&cues);
             let dictation = Dictation::start_with(
-                settings(text),
+                settings,
                 transcriber,
+                SharedRefiner::new(AppPaths::under("unused")),
                 move || {
                     (
                         FakeMicrophone {
@@ -795,7 +911,10 @@ mod tests {
         h.wait_until("클립보드에 복사", |h| {
             h.dictation.state() == DictationState::WaitingPaste
         });
-        assert!(matches!(h.notices.as_slice(), [Notice::Copied]));
+        assert!(matches!(
+            h.notices.as_slice(),
+            [Notice::Copied { refined: false }]
+        ));
         assert_eq!(
             h.clipboard.content(),
             ["text:안녕하세요"],
@@ -888,5 +1007,68 @@ mod tests {
         h.send(HotkeyEvent::Toggle);
         h.wait_until("복사", |h| h.clipboard.content() == ["text:조용히"]);
         assert!(h.cues().is_empty());
+    }
+    #[test]
+    fn refined_text_is_copied_instead_of_the_transcript() {
+        let mut h = Harness::with(refining_settings(" 안녕 하세요 ", ""), false);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("다듬은 글 복사", |h| !h.notices.is_empty());
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::Copied { refined: true }]),
+            "{:?}",
+            h.notices
+        );
+        assert_eq!(h.clipboard.content(), ["text:[mock] 안녕 하세요"]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+    }
+
+    #[test]
+    fn refinement_failure_puts_the_reason_on_the_clipboard() {
+        rust_i18n::set_locale("ko");
+        let mut h = Harness::with(refining_settings("고양이가 좋아요", "fail"), false);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("오류 안내 복사", |h| !h.notices.is_empty());
+        assert!(
+            matches!(
+                h.notices.as_slice(),
+                [Notice::RefineFailed(RefineError::Cloud(LlmError::Http {
+                    status: 401,
+                    ..
+                }))]
+            ),
+            "{:?}",
+            h.notices
+        );
+        let content = h.clipboard.content();
+        assert_eq!(content.len(), 1, "{content:?}");
+        let copied = content[0].strip_prefix("text:").unwrap();
+        assert!(
+            copied.starts_with("[술술 오류]"),
+            "받아쓴 글로 착각하지 않게 오류 안내임을 밝혀야 합니다: {copied}"
+        );
+        assert!(
+            copied.contains("401"),
+            "실패 원인이 들어 있어야 합니다: {copied}"
+        );
+        assert!(!copied.contains("고양이"), "원문은 넣지 않습니다: {copied}");
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
+
+        // 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
+        h.send(HotkeyEvent::Paste);
+        h.wait_until("원래 내용으로 되돌림", |h| {
+            h.clipboard.content() == ["원래 내용"]
+        });
+    }
+
+    #[test]
+    fn empty_transcript_is_not_sent_for_refinement() {
+        let mut h = Harness::with(refining_settings("   ", "fail"), false);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("인식 결과", |h| !h.notices.is_empty());
+        assert!(matches!(h.notices.as_slice(), [Notice::Empty]));
+        assert_eq!(h.clipboard.content(), ["원래 내용"]);
     }
 }

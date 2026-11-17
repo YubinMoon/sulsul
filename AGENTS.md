@@ -18,7 +18,8 @@ M5 VAD·환각 필터·오버레이 → M6 배포. 지금 어디까지 왔는지
 | `sulsul-stt-whisper-onnx` | 로컬 Whisper ONNX(sherpa-onnx 내보내기, `ort`) 엔진, Windows는 인코더만 DirectML 가속 |
 | `sulsul-stt-sensevoice` | 로컬 SenseVoice(ONNX, `ort`) 엔진, Windows는 DirectML 가속 |
 | `sulsul-stt-cloud` | OpenAI 호환 `/audio/transcriptions` 클라우드 엔진 |
-| `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·연결 테스트, 모델 선택 규칙 |
+| `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·요청, 모델 선택 규칙, 다듬기 실행(`Refiner`)과 로컬 실행기 프로토콜 |
+| `sulsul-llm-runner` | 글 다듬기 로컬 모델 실행기(llama.cpp, `llama-cpp-2`). 앱이 띄우고 표준 입출력 JSON으로 주고받는 별도 실행 파일 |
 | `sulsul-app` | 데스크톱 앱(eframe/egui), 실행 파일 이름은 `sulsul` |
 | `sulsul-cli` | 개발용 명령줄 도구 (`devices`, `record`, `transcribe`, `models`) |
 | `locales/` | 화면 문구 번역 파일 (`ko.yml`이 기본) |
@@ -34,6 +35,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 
 cargo run -p sulsul-app                  # 앱 (개발 빌드에는 가짜 엔진 "mock"이 들어감)
+cargo build -p sulsul-llm-runner         # 글 다듬기 로컬 모델 실행기 (cargo run -p sulsul-app은 빌드하지 않음)
 cargo run -p sulsul-cli -- devices       # 입력 장치 목록
 cargo run -p sulsul-cli -- transcribe test.wav --engine whisper_local
 ```
@@ -67,7 +69,11 @@ cargo run -p sulsul-cli -- transcribe test.wav --engine whisper_local
   CPU 전용은 `--no-default-features`입니다. 엔진 라이브러리 크레이트의 `default`는 비워 둡니다
   (여기서 켜면 실행 파일에서 끌 수 없음). 실행 중에 쓸 수 있는 GPU가 없으면 반드시 CPU로 동작해야 합니다.
 - SenseVoice는 Windows에서 기능 플래그 없이 항상 DirectML을 넣고, 장치가 없으면 CPU로 돌립니다.
-- LLM 다듬기(후처리)는 확장 지점만 있고 아직 구현하지 않습니다.
+- 글 다듬기(LLM 후처리)는 `[postprocess] enabled`를 켜면 단축키 받아쓰기 결과를 고른 프롬프트(system)와
+  받아쓴 글(user)로 고른 모델에 보내, 다듬은 글을 클립보드에 넣습니다. 다듬지 못하면 받아쓴 원문 대신
+  `[술술 오류]`로 시작하는 실패 원인 안내를 클립보드에 넣습니다.
+- llama.cpp와 whisper.cpp는 각자 ggml을 정적 링크해 한 실행 파일에 넣으면 기호가 겹칩니다. 그래서 로컬 LLM은
+  앱이 아닌 `sulsul-llm-runner` 실행 파일에서 돌리고, `sulsul-app`·`sulsul-llm`에는 `llama-cpp-2`를 넣지 않습니다.
 
 ## 코드 규칙
 
