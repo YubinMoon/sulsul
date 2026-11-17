@@ -39,6 +39,8 @@ hound = "3"
 
 # 음성 인식
 whisper-rs = "0.16"
+# 글 다듬기 로컬 모델 (sulsul-llm-runner에서만 씀. whisper-rs와 ggml 기호가 겹쳐 한 실행 파일에 넣지 않음)
+llama-cpp-2 = { version = "0.1.161", default-features = false }
 ort = "2.0.0-rc.15"
 ndarray = "0.17"
 rustfft = "6"

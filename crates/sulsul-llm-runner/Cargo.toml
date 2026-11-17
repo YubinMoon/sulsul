@@ -1,0 +1,29 @@
+[package]
+name = "sulsul-llm-runner"
+description = "술술 글 다듬기 로컬 모델 실행기 (llama.cpp). 앱이 띄우고 표준 입출력으로 주고받습니다."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[features]
+# llama.cpp GPU 가속. 기본은 Vulkan이고, 빌드할 때 Vulkan SDK(`VULKAN_SDK`)가 필요합니다.
+# 실행 중에 쓸 수 있는 GPU가 없거나 모델을 GPU에 올리지 못하면 CPU로 돌립니다.
+# - CPU 전용: cargo build -p sulsul-llm-runner --no-default-features
+# - CUDA만: cargo build -p sulsul-llm-runner --no-default-features --features cuda
+default = ["vulkan"]
+cuda = ["llama-cpp-2/cuda"]
+vulkan = ["llama-cpp-2/vulkan"]
+
+[dependencies]
+sulsul-llm.workspace = true
+llama-cpp-2.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+sulsul-core.workspace = true
+
+[lints]
+workspace = true
