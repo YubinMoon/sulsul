@@ -19,8 +19,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_HANGUL, VK_HANJA, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN,
     VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0, VK_NUMPAD9, VK_OEM_1, VK_OEM_2,
     VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
-    VK_OEM_PLUS, VK_PAUSE, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
+    VK_OEM_PLUS, VK_PACKET, VK_PAUSE, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG,
@@ -299,6 +299,7 @@ impl Context {
             down: matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN),
             remapped,
             raw: info.vkCode,
+            scan: place_of(info),
         };
         let capturing = self.capture.is_active();
         let verdict = lock(&self.machine).handle(input, capturing, probe);
@@ -397,6 +398,19 @@ fn keyboard_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
                 dwExtraInfo: SIGNATURE,
             },
         },
+    }
+}
+
+/// 키보드에서 키의 자리 ([`KeyInput::scan`]). 모르면 0.
+/// 글자를 바로 넣는 가짜 키(`VK_PACKET`)는 스캔 코드 자리에 글자가 들어 있으므로 쓰지 않습니다.
+fn place_of(info: &KBDLLHOOKSTRUCT) -> u32 {
+    if info.vkCode == u32::from(VK_PACKET) || info.scanCode == 0 {
+        return 0;
+    }
+    if info.flags & LLKHF_EXTENDED != 0 {
+        0xE000 | info.scanCode
+    } else {
+        info.scanCode
     }
 }
 
@@ -615,6 +629,57 @@ mod tests {
             window.on_message(&window_message(VK_CONTROL, SCAN_CTRL, true, down));
         }
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![HotkeyEvent::Toggle]);
+    }
+
+    /// 한국어 키보드 종류 3(`kbd101c.dll`)에서 Shift를 먼저 떼며 Shift+Space로 한/영을 바꾼 뒤의 OS 상태:
+    /// 한/영 키 뗌이 오지 않아 `GetAsyncKeyState(VK_HANGUL)`이 계속 눌림을 답합니다.
+    struct HangulStuck;
+
+    impl KeyProbe for HangulStuck {
+        fn is_down(&self, raw: u32) -> bool {
+            raw == u32::from(VK_HANGUL)
+        }
+    }
+
+    /// 저수준 후크가 실제로 받은 순서 그대로입니다 (Shift 누름 → 한/영 누름 → Shift 뗌 → Space 뗌).
+    #[test]
+    fn right_ctrl_still_works_after_switching_language_with_shift_space() {
+        let capture = KeyCapture::default();
+        let (tx, rx) = mpsc::channel();
+        let (_window, context) = window_context(&capture, move |event| {
+            tx.send(event).expect("녹음 알림을 받아야 합니다");
+        });
+        lock(&context.machine).set_binding(Some(Binding {
+            spec: super::super::HotkeySpec::parse("RightCtrl").expect("올바른 키"),
+            mode: sulsul_core::config::HotkeyMode::Toggle,
+        }));
+        for (message, vk, scan) in [
+            (WM_KEYDOWN, VK_LSHIFT, 0x2A),
+            (WM_KEYDOWN, VK_HANGUL, 0x39),
+            (WM_KEYUP, VK_LSHIFT, 0x2A),
+            (WM_KEYUP, VK_SPACE, 0x39),
+        ] {
+            assert!(
+                !context.on_key_with_probe(message, &info(vk, scan, false), &HangulStuck),
+                "한/영 전환은 막지 않아야 합니다"
+            );
+        }
+        for message in [WM_KEYDOWN, WM_KEYUP] {
+            context.on_key_with_probe(message, &info(VK_RCONTROL, SCAN_CTRL, true), &HangulStuck);
+        }
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![HotkeyEvent::Toggle]);
+    }
+
+    #[test]
+    fn place_keeps_extended_keys_apart_and_ignores_packets() {
+        assert_eq!(place_of(&info(VK_LCONTROL, SCAN_CTRL, false)), 0x1D);
+        assert_eq!(place_of(&info(VK_RCONTROL, SCAN_CTRL, true)), 0xE01D);
+        assert_eq!(
+            place_of(&info(VK_PACKET, 0x39, false)),
+            0,
+            "글자 값은 자리가 아님"
+        );
+        assert_eq!(place_of(&info(0x41, 0, false)), 0);
     }
 
     fn info(vk: u16, scan: u32, extended: bool) -> KBDLLHOOKSTRUCT {

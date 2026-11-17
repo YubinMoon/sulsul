@@ -42,6 +42,9 @@ pub struct KeyInput {
     pub remapped: bool,
     /// OS의 키 코드. 놓친 키 뗌을 가려내는 데 씁니다([`KeyProbe`]).
     pub raw: u32,
+    /// 키보드에서 이 키의 자리(스캔 코드, 확장 키면 `0xE000`을 더함). 모르면 0.
+    /// 같은 자리의 누름과 뗌이 서로 다른 키로 들어올 때 짝을 맞추는 데 씁니다.
+    pub scan: u32,
 }
 
 /// OS에 지금 키가 눌려 있는지 묻습니다. 잠금 화면 등으로 키 뗌을 받지 못해 눌린 채로 남은 키를 지우는 데 씁니다.
@@ -100,6 +103,7 @@ struct Held {
     key: Key,
     raw: u32,
     remapped: bool,
+    scan: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -153,14 +157,15 @@ impl Machine {
     pub fn handle(&mut self, input: KeyInput, capturing: bool, probe: &dyn KeyProbe) -> Verdict {
         self.sync_capture(capturing);
 
-        let key = input.key;
-        let fresh = if input.down {
-            self.press(input, probe)
+        let (input, fresh, swallow_up) = if input.down {
+            let fresh = self.press(input, probe);
+            (input, fresh, false)
         } else {
-            self.held.retain(|held| held.key != key);
-            false
+            let input = self.paired_release(input);
+            let swallow_up = self.release(input);
+            (input, false, swallow_up)
         };
-        let swallow_up = !input.down && remove(&mut self.swallowed, key);
+        let key = input.key;
 
         if self.capture.is_some() {
             let mut verdict = self.capture_key(input, fresh);
@@ -220,9 +225,47 @@ impl Machine {
                 key: input.key,
                 raw: input.raw,
                 remapped: input.remapped,
+                scan: input.scan,
             });
         }
         fresh
+    }
+
+    /// 뗌을 같은 자리의 누름으로 기록한 키로 맞춥니다.
+    ///
+    /// 한국어 키보드 종류 3은 Shift·Ctrl을 누른 채 누른 Space를 한/영·한자 키로 알리지만, Shift·Ctrl을 먼저
+    /// 떼면 Space 뗌은 Space로 알립니다. 이때 OS도 한/영·한자 키가 눌린 채라고 보므로, 짝을 맞추지 않으면
+    /// 그 키가 계속 눌린 것으로 남아 수정 키 하나로 된 단축키(`RightCtrl`)가 다시는 동작하지 않습니다.
+    fn paired_release(&self, input: KeyInput) -> KeyInput {
+        if input.scan == 0 || self.is_held(input.key) {
+            return input;
+        }
+        match self.held.iter().find(|held| held.scan == input.scan) {
+            Some(held) => KeyInput {
+                key: held.key,
+                remapped: held.remapped,
+                raw: held.raw,
+                ..input
+            },
+            None => input,
+        }
+    }
+
+    /// 뗀 키를 지웁니다. 같은 자리의 누름이 다른 키로도 기록돼 있으면 함께 지웁니다.
+    /// 누름을 막았던 키면 `true` (뗌도 막습니다).
+    fn release(&mut self, input: KeyInput) -> bool {
+        let swallowed = &mut self.swallowed;
+        self.held.retain(|held| {
+            if held.key == input.key {
+                return false;
+            }
+            let same_place = input.scan != 0 && held.scan == input.scan;
+            if same_place {
+                remove(swallowed, held.key);
+            }
+            !same_place
+        });
+        remove(&mut self.swallowed, input.key)
     }
 
     fn is_held(&self, key: Key) -> bool {
@@ -553,6 +596,15 @@ mod tests {
             down,
             remapped: false,
             raw: 0,
+            scan: 0,
+        }
+    }
+
+    /// 자리(스캔 코드)를 아는 키
+    fn placed(key: Key, scan: u32, down: bool) -> KeyInput {
+        KeyInput {
+            scan,
+            ..input(key, down)
         }
     }
 
@@ -672,6 +724,7 @@ mod tests {
             down: true,
             remapped: true,
             raw: 0x19,
+            scan: 0xE01D,
         };
         let pressed = m.handle(hanja, false, &AllDown);
         assert!(pressed.swallow, "한자 변환이 일어나지 않게 막음");
@@ -794,6 +847,7 @@ mod tests {
             down: true,
             remapped: true,
             raw: 0x19,
+            scan: 0xE01D,
         };
         let mut plain = Machine::default();
         plain.handle(hanja, false, &AllDown);
@@ -812,6 +866,45 @@ mod tests {
             Some(HotkeyEvent::Toggle),
             "눌린 채 남은 Win 때문에 단축키가 막히면 안 됨"
         );
+    }
+
+    /// 한국어 키보드 종류 3: Shift+Space는 한/영, Ctrl+Space는 한자 키로 들어오는데, Shift·Ctrl을 먼저 떼면
+    /// Space 뗌은 Space로 들어옵니다. OS도 한/영·한자 키가 눌린 채라고 답하므로(`AllDown`) 자리로 짝을 맞춰야 합니다.
+    #[test]
+    fn release_reported_as_another_key_is_paired_by_place() {
+        const SPACE: u32 = 0x39;
+        for (modifier, scan, converted) in [
+            (Key::LeftShift, 0x2A, Key::HangulMode),
+            (Key::LeftCtrl, 0x1D, Key::Hanja),
+        ] {
+            let mut m = machine("RightCtrl", HotkeyMode::Toggle);
+            m.handle(placed(modifier, scan, true), false, &AllDown);
+            m.handle(placed(converted, SPACE, true), false, &AllDown);
+            m.handle(placed(modifier, scan, false), false, &AllDown);
+            m.handle(placed(Key::Space, SPACE, false), false, &AllDown);
+            assert!(m.held.is_empty(), "{converted:?}가 눌린 채로 남음");
+
+            m.handle(placed(Key::RightCtrl, 0xE01D, true), false, &AllDown);
+            assert_eq!(
+                m.handle(placed(Key::RightCtrl, 0xE01D, false), false, &AllDown)
+                    .event,
+                Some(HotkeyEvent::Toggle),
+                "{converted:?} 전환 뒤에도 오른쪽 Ctrl이 동작해야 함"
+            );
+        }
+    }
+
+    /// 다른 키로 들어온 뗌도 누름을 막았던 키의 뗌이면 막습니다.
+    #[test]
+    fn paired_release_of_a_swallowed_key_is_swallowed() {
+        let mut m = Machine::default();
+        capture_down(&mut m, Key::LeftShift);
+        m.handle(placed(Key::HangulMode, 0x39, true), true, &AllDown);
+        capture_up(&mut m, Key::LeftShift);
+        let released = m.handle(placed(Key::Space, 0x39, false), true, &AllDown);
+        assert!(released.swallow, "누름을 막았으니 뗌도 막아야 함");
+        assert!(m.held.is_empty());
+        assert!(m.swallowed.is_empty(), "막은 키 목록에 남으면 안 됨");
     }
 
     #[test]
