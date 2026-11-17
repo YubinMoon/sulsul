@@ -21,7 +21,7 @@ use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
 use crate::widgets::confirm::{Answer, Confirm};
 use crate::widgets::controls::{self, ComboItem};
-use crate::widgets::device_combo::device_combo;
+use crate::widgets::device_combo::{device_combo, device_details, device_problem};
 use crate::widgets::hotkey_field::hotkey_field;
 use crate::widgets::row::{self, CONTROL_WIDTH, Row};
 use crate::widgets::text;
@@ -233,18 +233,39 @@ fn hotkey_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
 fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
     Section::new(Icon::Mic, &t!("settings.audio.title")).show(ui, |ui| {
         let audio = &mut cx.config.audio;
+        let devices = &cx.shared.devices;
 
+        // 도움말 아래에 고른 장치의 형식(시스템 기본이면 지금 어떤 장치인지)을 붙이고,
+        // 쓸 수 없는 장치면 그 이유를 경고로 보여 줍니다.
+        let mut help = t!("settings.audio.input_device_help").into_owned();
+        if let Some(details) = device_details(devices, &audio.input_device) {
+            help = format!("{help}\n{details}");
+        }
+        let problem = device_problem(devices, &audio.input_device);
+        let mut refresh = false;
         Row::new(&t!("settings.audio.input_device"))
-            .help(&t!("settings.audio.input_device_help"))
+            .help(&help)
+            .warning_opt(problem.as_deref())
             .show(ui, |ui| {
-                device_combo(
-                    ui,
-                    "settings_device",
-                    CONTROL_WIDTH,
-                    &mut audio.input_device,
-                    &cx.shared.devices,
-                );
+                // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+                let width = CONTROL_WIDTH.min(ui.available_width());
+                row::left_to_right(ui, width, |ui| {
+                    let gap = ui.spacing().item_spacing.x;
+                    let combo_width = (width - controls::ICON_BUTTON_SIZE - gap).max(0.0);
+                    device_combo(
+                        ui,
+                        "settings_device",
+                        combo_width,
+                        &mut audio.input_device,
+                        devices,
+                    );
+                    refresh =
+                        controls::icon_button(ui, Icon::RefreshCw, &t!("device.refresh")).clicked();
+                });
             });
+        if refresh {
+            cx.shared.devices.refresh();
+        }
         row::separator(ui);
 
         let (min, max) = MAX_RECORD_SECONDS;

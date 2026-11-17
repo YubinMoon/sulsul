@@ -1,4 +1,6 @@
 //! 녹음 화면: 마이크 입력이 제대로 들어오는지 확인합니다.
+//!
+//! 녹음에 쓸 입력 장치는 설정 화면에서 고르고, 여기서는 지금 고른 장치를 알려 주기만 합니다.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -23,7 +25,7 @@ use crate::system;
 use crate::theme::{self, Palette, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
-use crate::widgets::device_combo::device_combo;
+use crate::widgets::device_combo::device_problem;
 use crate::widgets::hotkey_field::keycaps;
 use crate::widgets::level_meter::{MeterState, level_meter};
 use crate::widgets::stat::{Stat, stats};
@@ -135,8 +137,6 @@ impl RecordPage {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
         header(ui, &t!("record.title"), &t!("record.subtitle"));
 
-        self.device_card(ui, cx);
-        ui.add_space(SECTION_GAP);
         self.recorder_card(ui, cx);
 
         if let Some(problem) = &self.problem {
@@ -161,66 +161,6 @@ impl RecordPage {
                 ui.scroll_to_rect(card.expand(REVEAL_MARGIN), Some(egui::Align::Max));
             }
         }
-    }
-
-    fn device_card(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        Section::new(Icon::Mic, &t!("record.device.title")).show(ui, |ui| {
-            let editable = !self.is_recording() && !cx.locked;
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(editable, |ui| {
-                    let width = (ui.available_width() - 44.0).clamp(160.0, 440.0);
-                    device_combo(
-                        ui,
-                        "record_device",
-                        width,
-                        &mut cx.config.audio.input_device,
-                        &cx.shared.devices,
-                    );
-                    if controls::icon_button(ui, Icon::RefreshCw, &t!("record.device.refresh"))
-                        .clicked()
-                    {
-                        cx.shared.devices.refresh();
-                    }
-                });
-            });
-
-            let selector = cx.config.audio.input_device.as_str();
-            if let Some(error) = &cx.shared.devices.error {
-                ui.label(
-                    text::caption(ui, error_text::audio(error)).color(Palette::of(ui).danger_text),
-                );
-            } else if let Some(device) = cx.shared.devices.find(selector) {
-                let format = match (device.sample_rate, device.channels) {
-                    (Some(rate), Some(channels)) => t!(
-                        "record.device.format",
-                        rate = hertz_text(rate),
-                        channels = channels
-                    )
-                    .into_owned(),
-                    _ => t!("record.device.format_unknown").into_owned(),
-                };
-                let line = if selector.trim().is_empty() {
-                    t!(
-                        "record.device.using_default",
-                        name = device.name,
-                        format = format
-                    )
-                    .into_owned()
-                } else {
-                    format
-                };
-                ui.label(text::caption(ui, line));
-            } else if cx.shared.devices.devices.is_empty() {
-                ui.label(
-                    text::caption(ui, t!("record.device.none")).color(Palette::of(ui).warning_text),
-                );
-            } else {
-                ui.label(
-                    text::caption(ui, t!("record.device.not_connected"))
-                        .color(Palette::of(ui).warning_text),
-                );
-            }
-        });
     }
 
     fn recorder_card(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
@@ -280,6 +220,7 @@ impl RecordPage {
 
             row::separator(ui);
             hotkey_hint(ui, cx.config, &cx.shared.dictation);
+            device_hint(ui, cx.shared, cx.config);
         });
     }
 
@@ -440,6 +381,36 @@ fn hotkey_hint(ui: &mut Ui, config: &Config, dictation: &DictationStatus) {
     });
     if let Some(error) = &dictation.hotkey_error {
         ui.label(text::caption(ui, error).color(palette.warning_text));
+    }
+}
+
+/// 입력 장치 안내: 녹음에 쓸 장치와 그 장치를 바꾸는 설정 화면으로 가는 링크.
+/// 장치를 쓸 수 없으면 그 이유를 아래에 경고로 보여 줍니다.
+fn device_hint(ui: &mut Ui, shared: &mut Shared, config: &Config) {
+    let palette = Palette::of(ui);
+    let selector = config.audio.input_device.trim();
+    let name = match shared.devices.find(selector) {
+        Some(device) => device.name.clone(),
+        None if selector.is_empty() => t!("device.system_default").into_owned(),
+        None => selector.to_owned(),
+    };
+    let mut open_settings = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
+        ui.label(
+            icons::text(Icon::Mic)
+                .size(size::BODY)
+                .color(palette.text_muted),
+        );
+        ui.label(text::caption(ui, t!("record.device.label", name = name)));
+        let change = RichText::new(t!("record.device.change")).size(size::CAPTION);
+        open_settings = ui.link(change).clicked();
+    });
+    if let Some(problem) = device_problem(&shared.devices, selector) {
+        ui.label(text::caption(ui, problem).color(palette.warning_text));
+    }
+    if open_settings {
+        shared.navigate = Some(Page::Settings);
     }
 }
 

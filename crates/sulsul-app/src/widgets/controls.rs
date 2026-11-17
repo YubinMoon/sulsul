@@ -262,10 +262,13 @@ fn name_without_icon(response: &Response, text: &str) {
         .accesskit_node_builder(response.id, |node| node.set_label(text.to_owned()));
 }
 
+/// [`icon_button`]의 너비이자 높이
+pub const ICON_BUTTON_SIZE: f32 = 30.0;
+
 /// 아이콘만 있는 작은 버튼. `label`은 툴팁이자 화면 낭독기용 이름입니다.
 pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
     let palette = Palette::of(ui);
-    let size = vec2(30.0, 30.0);
+    let size = vec2(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let enabled = ui.is_enabled();
     response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
