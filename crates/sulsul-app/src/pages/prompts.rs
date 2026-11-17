@@ -59,17 +59,12 @@ impl PromptsPage {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
         header(ui, &t!("prompts.title"), &t!("prompts.subtitle"));
 
-        // 지시문이 어디에 쓰이는지 먼저 알립니다.
-        Banner::new(Tone::Info)
-            .line(t!("prompts.usage_note"))
-            .show(ui);
         if !cx.config.postprocess.enabled {
-            ui.add_space(8.0);
             Banner::new(Tone::Info)
                 .line(t!("prompts.disabled_note"))
                 .show(ui);
+            ui.add_space(SECTION_GAP);
         }
-        ui.add_space(SECTION_GAP);
 
         let locked = cx.locked;
         let post = &mut cx.config.postprocess;
