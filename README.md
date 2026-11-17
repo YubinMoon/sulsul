@@ -15,7 +15,7 @@ crates/
   sulsul-stt-whisper/   로컬 Whisper 엔진
   sulsul-llm/           글 다듬기(LLM) 모델 카탈로그, 외부 제공자 요청, 다듬기 실행(Refiner)
   sulsul-llm-runner/    글 다듬기 로컬 모델 실행기(llama.cpp). 앱이 띄우는 별도 실행 파일
-  sulsul-app/           데스크톱 앱(eframe): 녹음·받아쓰기 테스트, 설정 화면
+  sulsul-app/           데스크톱 앱(eframe): 녹음·받아쓰기 테스트 화면, 설정 화면
   sulsul-cli/           개발용 명령줄 도구 (장치 확인, 녹음 테스트)
 locales/                화면 문구 번역 파일 (ko.yml이 기본)
 ```

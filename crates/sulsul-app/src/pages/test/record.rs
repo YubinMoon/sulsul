@@ -1,4 +1,4 @@
-//! 녹음 화면: 마이크 입력이 제대로 들어오는지 확인합니다.
+//! 녹음 테스트: 마이크 입력이 제대로 들어오는지 확인합니다.
 //!
 //! 녹음에 쓸 입력 장치는 설정 화면에서 고르고, 여기서는 지금 고른 장치를 알려 주기만 합니다.
 
@@ -9,17 +9,17 @@ use std::time::{Duration, Instant};
 use egui::{Align2, Color32, Response, RichText, Role, Sense, Stroke, Ui, WidgetInfo, vec2};
 use rust_i18n::t;
 use sulsul_core::audio::{self, AudioClip, AudioError, Recording, RecordingOptions};
-use sulsul_core::config::{Config, HotkeyMode, MAX_RECORD_SECONDS};
+use sulsul_core::config::{Config, MAX_RECORD_SECONDS};
 use sulsul_core::stt::WHISPER_SAMPLE_RATE;
 
-use super::{Page, SECTION_GAP, header};
 use crate::error_text;
 use crate::format::{
     SILENCE_DBFS, clock_text, clock_text_short, dbfs, dbfs_text, hertz_text, percent_text,
     seconds_text,
 };
-use crate::i18n::microphone_settings_hint;
+use crate::i18n::{hotkey_mode_name, microphone_settings_hint};
 use crate::icons::{self, Icon};
+use crate::pages::{Page, SECTION_GAP};
 use crate::session::{DictationState, DictationStatus, PageContext, Recorded, Shared};
 use crate::system;
 use crate::theme::{self, Palette, size};
@@ -38,11 +38,13 @@ const REVEAL_MARGIN: f32 = 16.0;
 const STALL_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
-pub struct RecordPage {
+pub struct RecordTest {
     active: Option<Active>,
     problem: Option<Problem>,
     /// 방금 끝난 녹음의 결과가 보이도록 화면을 내려야 하는지
     reveal_result: bool,
+    /// 새 녹음이 생겼는데 아직 [`Self::take_new_recording`]으로 알리지 않았는지
+    new_recording: bool,
 }
 
 struct Active {
@@ -58,9 +60,14 @@ enum Problem {
     Empty,
 }
 
-impl RecordPage {
+impl RecordTest {
     pub fn is_recording(&self) -> bool {
         self.active.is_some()
+    }
+
+    /// 지난번에 부른 뒤로 새 녹음이 생겼으면 `true`를 돌려줍니다.
+    pub fn take_new_recording(&mut self) -> bool {
+        std::mem::take(&mut self.new_recording)
     }
 
     /// 매 프레임 부릅니다(화면이 보이지 않아도). 최대 길이에 닿으면 녹음을 끝냅니다.
@@ -126,6 +133,7 @@ impl RecordPage {
                     auto_stopped,
                 }));
                 self.reveal_result = true;
+                self.new_recording = true;
             }
             Err(error) => {
                 tracing::warn!("recording failed: {error}");
@@ -135,8 +143,6 @@ impl RecordPage {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        header(ui, &t!("record.title"), &t!("record.subtitle"));
-
         self.recorder_card(ui, cx);
 
         if let Some(problem) = &self.problem {
@@ -414,14 +420,6 @@ fn device_hint(ui: &mut Ui, shared: &mut Shared, config: &Config) {
     }
 }
 
-pub fn hotkey_mode_name(mode: HotkeyMode) -> String {
-    match mode {
-        HotkeyMode::Toggle => t!("hotkey.mode.toggle"),
-        HotkeyMode::PushToTalk => t!("hotkey.mode.push_to_talk"),
-    }
-    .into_owned()
-}
-
 fn result_card(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
     Section::new(Icon::FileAudio, &t!("record.result.title")).show(ui, |ui| {
         let clip = &recorded.clip;
@@ -478,11 +476,6 @@ fn result_card(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
                 cx.shared
                     .toasts
                     .error(t!("common.open_failed", message = message));
-            }
-            if controls::icon_text_button(ui, Icon::ArrowRight, t!("record.result.to_transcribe"))
-                .clicked()
-            {
-                cx.shared.navigate = Some(Page::Transcribe);
             }
         });
     });

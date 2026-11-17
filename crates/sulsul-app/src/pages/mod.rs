@@ -3,9 +3,8 @@
 pub mod about;
 pub mod models;
 pub mod prompts;
-pub mod record;
 pub mod settings;
-pub mod transcribe;
+pub mod test;
 
 use egui::Ui;
 use rust_i18n::t;
@@ -15,8 +14,7 @@ use crate::widgets::text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Record,
-    Transcribe,
+    Test,
     Models,
     Prompts,
     Settings,
@@ -24,9 +22,8 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 6] = [
-        Self::Record,
-        Self::Transcribe,
+    pub const ALL: [Self; 5] = [
+        Self::Test,
         Self::Models,
         Self::Prompts,
         Self::Settings,
@@ -35,8 +32,7 @@ impl Page {
 
     pub fn title(self) -> String {
         match self {
-            Self::Record => t!("nav.record"),
-            Self::Transcribe => t!("nav.transcribe"),
+            Self::Test => t!("nav.test"),
             Self::Models => t!("nav.models"),
             Self::Prompts => t!("nav.prompts"),
             Self::Settings => t!("nav.settings"),
@@ -47,8 +43,7 @@ impl Page {
 
     pub fn icon(self) -> Icon {
         match self {
-            Self::Record => Icon::Mic,
-            Self::Transcribe => Icon::AudioLines,
+            Self::Test => Icon::FlaskConical,
             Self::Models => Icon::Boxes,
             Self::Prompts => Icon::MessageSquareText,
             Self::Settings => Icon::Settings,

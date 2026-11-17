@@ -20,8 +20,7 @@ language:
   en: English
 
 nav:
-  record: 녹음
-  transcribe: 받아쓰기 테스트
+  test: 테스트
   models: 모델 관리
   prompts: 프롬프트
   settings: 설정
@@ -339,9 +338,12 @@ stt:
     label: 모델 메모리 유지 시간(분)
     help: 받아쓰기가 끝난 뒤 이 시간 동안 쓰지 않으면 모델을 메모리에서 내려놓습니다. 0이면 바로 내려놓고, 다음 받아쓰기 때 다시 불러옵니다.
 
+# 테스트 화면: 위쪽은 녹음 테스트(record.*), 아래쪽은 받아쓰기 테스트(transcribe.*)
+test:
+  title: 테스트
+  subtitle: 마이크 소리가 제대로 들어오는지, 받아쓰기가 잘 되는지 확인합니다.
+
 record:
-  title: 녹음
-  subtitle: 마이크 소리가 제대로 들어오는지 확인합니다.
   start: 녹음 시작
   stop: 녹음 정지
   error_title: 녹음하지 못했습니다
@@ -379,29 +381,25 @@ record:
     save_dialog_title: 녹음을 WAV 파일로 저장
     saved: "저장했습니다: %{path}"
     open_folder: 녹음 폴더 열기
-    to_transcribe: 받아쓰기 테스트로
 
 transcribe:
-  title: 받아쓰기 테스트
-  subtitle: 녹음한 오디오나 WAV 파일을 음성 인식 엔진에 넣어 결과와 속도를 확인합니다.
   follow_settings: "설정 값 사용 (%{value})"
   temporary_help: 여기서 바꾼 엔진과 언어는 이 화면에서만 쓰이고 설정 파일에는 저장되지 않습니다.
   run: 받아쓰기
   running: "인식 중… %{elapsed}"
   need_audio: 먼저 받아쓰기할 오디오를 준비하세요.
   source:
-    title: 오디오
+    title: 받아쓸 오디오
     recording: 방금 녹음한 오디오
     file: WAV 파일
     summary: "길이 %{duration} · %{rate}"
-    no_recording: 아직 녹음한 오디오가 없습니다.
-    go_record: 녹음 화면으로
+    no_recording: 아직 녹음한 오디오가 없습니다. 위의 녹음 테스트에서 녹음해 보세요.
     open_wav: WAV 파일 열기
     open_dialog_title: 받아쓰기할 WAV 파일 선택
     no_file: 선택한 파일이 없습니다.
     empty_file: 이 WAV 파일에는 오디오가 들어 있지 않습니다.
   engine:
-    title: 엔진
+    title: 받아쓰기 엔진
   model:
     label: 모델 · API
     found: 사용 가능
@@ -414,7 +412,7 @@ transcribe:
     cloud_missing: 선택된 API 프로필이 없습니다. 모델 관리에서 프로필을 추가·활성화하세요.
     expected_device: "예상 장치: %{device}"
   result:
-    title: 결과
+    title: 받아쓰기 결과
     empty: (인식된 내용이 없습니다)
     copy: 복사
     copied: 결과를 클립보드에 복사했습니다.

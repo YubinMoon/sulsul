@@ -2,7 +2,7 @@
 //!
 //! 전용 스레드(`sulsul-dictation`)에서 돌아 창이 트레이에 숨겨져 있어도 동작합니다.
 //! 키보드 후크가 보낸 [`HotkeyEvent`]로 녹음을 시작·끝내고, 인식은 작업 스레드에서
-//! 받아쓰기 테스트 화면과 함께 쓰는 [`SharedTranscriber`]로 합니다. 글 다듬기를 켰으면 같은 작업
+//! 테스트 화면의 받아쓰기 테스트와 함께 쓰는 [`SharedTranscriber`]로 합니다. 글 다듬기를 켰으면 같은 작업
 //! 스레드에서 이어서 [`SharedRefiner`]로 다듬습니다. 받아쓴(다듬은) 글은 [`PasteGuard`]가
 //! 클립보드에 넣고, 사용자가 붙여넣으면 원래 내용으로 되돌립니다.
 //!
@@ -544,7 +544,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
                         language: None,
                         cancel: job_cancel.clone(),
                     };
-                    // 받아쓰기 테스트 화면이 엔진을 쓰고 있으면 끝날 때까지 기다립니다.
+                    // 테스트 화면의 받아쓰기 테스트가 엔진을 쓰고 있으면 끝날 때까지 기다립니다.
                     let text = transcriber
                         .lock()
                         .transcribe(&clip, &job)

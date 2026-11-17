@@ -3,6 +3,7 @@
 //! 화면 문구는 모두 `locales/*.yml`에 있고, 코드에서는 키로만 참조합니다.
 
 use rust_i18n::t;
+use sulsul_core::config::HotkeyMode;
 
 /// 실행 중에 정해지는 키(엔진 설명자의 `name_key` 등)를 번역합니다.
 /// 번역이 없으면 키를 그대로 돌려줍니다.
@@ -40,6 +41,15 @@ pub fn hotkey_key_parts(key: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| tr_opt(&format!("hotkey.keys.{part}")).unwrap_or_else(|| part.to_owned()))
         .collect()
+}
+
+/// 단축키 동작 방식의 이름 (토글, 누르는 동안)
+pub fn hotkey_mode_name(mode: HotkeyMode) -> String {
+    match mode {
+        HotkeyMode::Toggle => t!("hotkey.mode.toggle"),
+        HotkeyMode::PushToTalk => t!("hotkey.mode.push_to_talk"),
+    }
+    .into_owned()
 }
 
 /// 설정의 화면 언어를 적용합니다. 번역 파일이 없는 언어면 기본 언어로 표시됩니다.

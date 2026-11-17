@@ -1,4 +1,4 @@
-//! 받아쓰기 테스트 화면: 녹음한 오디오나 WAV 파일을 엔진에 넣어 결과를 확인합니다.
+//! 받아쓰기 테스트: 위에서 녹음한 오디오나 WAV 파일을 엔진에 넣어 결과를 확인합니다.
 
 mod job;
 
@@ -17,12 +17,12 @@ use sulsul_core::stt::{
 };
 
 use self::job::{Failure, JobAudio, JobInput, JobOutput, Success};
-use super::{Page, SECTION_GAP, header};
 use crate::accel::{self, AccelEnv, EngineAccel};
 use crate::error_text::{self, engine_name};
 use crate::format::{elapsed_text, hertz_text, seconds_text};
 use crate::i18n::tr;
 use crate::icons::Icon;
+use crate::pages::{Page, SECTION_GAP};
 use crate::session::{PageContext, Shared};
 use crate::system;
 use crate::theme::{Palette, radius};
@@ -43,7 +43,7 @@ const REVEAL_MARGIN: f32 = 16.0;
 /// 기록 목록에 보여 줄 결과 앞부분의 최대 글자 수 (칸이 좁으면 더 줄여서 보여 줍니다)
 const PREVIEW_CHARS: usize = 80;
 
-pub struct TranscribePage {
+pub struct TranscribeTest {
     source: Source,
     file: Option<LoadedFile>,
     file_error: Option<String>,
@@ -105,7 +105,7 @@ impl Attempt {
     }
 }
 
-impl Default for TranscribePage {
+impl Default for TranscribeTest {
     fn default() -> Self {
         Self {
             source: Source::Recording,
@@ -121,7 +121,12 @@ impl Default for TranscribePage {
     }
 }
 
-impl TranscribePage {
+impl TranscribeTest {
+    /// 받아쓸 오디오로 방금 녹음한 오디오를 고릅니다.
+    pub fn use_recording(&mut self) {
+        self.source = Source::Recording;
+    }
+
     /// 매 프레임 부릅니다(다른 화면을 보고 있어도). 작업 스레드가 끝났으면 결과를 기록합니다.
     /// 쉬는 엔진을 내려놓는 일은 단축키 받아쓰기와 함께 쓰는 보관소라서 앱이 맡습니다
     /// ([`SharedTranscriber::release_idle`](crate::transcriber::SharedTranscriber::release_idle)).
@@ -245,8 +250,6 @@ impl TranscribePage {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        header(ui, &t!("transcribe.title"), &t!("transcribe.subtitle"));
-
         self.source_card(ui, cx);
         ui.add_space(SECTION_GAP);
         self.engine_card(ui, cx);
@@ -289,15 +292,6 @@ impl TranscribePage {
                     }
                     None => {
                         ui.label(text::muted(ui, t!("transcribe.source.no_recording")));
-                        if controls::icon_text_button(
-                            ui,
-                            Icon::Mic,
-                            t!("transcribe.source.go_record"),
-                        )
-                        .clicked()
-                        {
-                            cx.shared.navigate = Some(Page::Record);
-                        }
                     }
                 },
                 Source::File => {

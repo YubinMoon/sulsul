@@ -34,7 +34,7 @@ pub struct Shared {
     pub toasts: Toasts,
     /// 다음 프레임에 이동할 화면
     pub navigate: Option<Page>,
-    /// 받아쓰기 테스트 화면과 단축키 받아쓰기가 함께 쓰는 엔진 보관소
+    /// 테스트 화면의 받아쓰기 테스트와 단축키 받아쓰기가 함께 쓰는 엔진 보관소
     pub transcriber: SharedTranscriber,
     /// 단축키 받아쓰기가 쓰는 글 다듬기 보관소 (로컬 모델 실행기를 띄워 둠)
     pub refiner: SharedRefiner,

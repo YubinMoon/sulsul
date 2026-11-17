@@ -10,10 +10,9 @@ use sulsul_core::settings;
 use sulsul_core::stt::SttRegistry;
 
 use super::prompts::prompt_display_name;
-use super::record::hotkey_mode_name;
 use super::{Page, SECTION_GAP, header};
 use crate::error_text;
-use crate::i18n;
+use crate::i18n::{self, hotkey_mode_name};
 use crate::icons::Icon;
 use crate::session::PageContext;
 use crate::system;

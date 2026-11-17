@@ -19,9 +19,8 @@ use crate::i18n;
 use crate::icons::{self, Icon};
 use crate::pages::models::ModelsPage;
 use crate::pages::prompts::PromptsPage;
-use crate::pages::record::RecordPage;
 use crate::pages::settings::SettingsPage;
-use crate::pages::transcribe::TranscribePage;
+use crate::pages::test::TestPage;
 use crate::pages::{self, Page};
 use crate::session::{PageContext, Shared};
 use crate::system;
@@ -37,8 +36,7 @@ pub struct SulsulApp {
     shared: Shared,
     sync: ConfigSync,
     page: Page,
-    record: RecordPage,
-    transcribe: TranscribePage,
+    test: TestPage,
     models: ModelsPage,
     prompts: PromptsPage,
     settings: SettingsPage,
@@ -82,9 +80,8 @@ impl SulsulApp {
             applied_locale: sync.config.general.ui_language.clone(),
             applied_theme: sync.config.general.theme,
             sync,
-            page: Page::Record,
-            record: RecordPage::default(),
-            transcribe: TranscribePage::default(),
+            page: Page::Test,
+            test: TestPage::default(),
             models: ModelsPage::default(),
             prompts: PromptsPage::default(),
             settings: SettingsPage::default(),
@@ -165,7 +162,7 @@ impl SulsulApp {
                 ui.add_space(18.0);
 
                 for page in Page::ALL {
-                    let dot = (page == Page::Record && self.record.is_recording())
+                    let dot = (page == Page::Test && self.test.is_recording())
                         || (page == Page::Models && self.models.is_busy());
                     let selected = self.page == page;
                     if nav_item(ui, page.icon(), &page.title(), selected, dot).clicked() {
@@ -255,8 +252,7 @@ impl SulsulApp {
             frame,
         };
         match self.page {
-            Page::Record => self.record.ui(ui, &mut cx),
-            Page::Transcribe => self.transcribe.ui(ui, &mut cx),
+            Page::Test => self.test.ui(ui, &mut cx),
             Page::Models => self.models.ui(ui, &mut cx),
             Page::Prompts => self.prompts.ui(ui, &mut cx),
             Page::Settings => self.settings.ui(ui, &mut cx, &issues),
@@ -394,8 +390,7 @@ impl eframe::App for SulsulApp {
         if let Some(remaining) = self.sync.save_due_in() {
             ctx.request_repaint_after(remaining + Duration::from_millis(10));
         }
-        self.record.tick(&mut self.shared, ctx);
-        self.transcribe.tick(&self.shared);
+        self.test.tick(&mut self.shared, ctx);
         self.models.tick(&mut self.shared, ctx);
         self.desktop.tick(
             ctx,
