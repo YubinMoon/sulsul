@@ -15,6 +15,7 @@ crates/
   sulsul-stt-whisper/   로컬 Whisper 엔진
   sulsul-llm/           글 다듬기(LLM) 모델 카탈로그, 외부 제공자 요청, 다듬기 실행(Refiner)
   sulsul-llm-runner/    글 다듬기 로컬 모델 실행기(llama.cpp). 앱이 띄우는 별도 실행 파일
+  sulsul-vad/           말소리 찾기(Silero VAD): 녹음 앞뒤 무음 자르기, 말소리 없는 녹음 가려내기
   sulsul-app/           데스크톱 앱(eframe): 녹음·받아쓰기 테스트 화면, 설정 화면
   sulsul-cli/           개발용 명령줄 도구 (장치 확인, 녹음 테스트)
 locales/                화면 문구 번역 파일 (ko.yml이 기본)
@@ -90,5 +91,6 @@ cargo run -p sulsul-cli -- record -s 5 -o test.wav
 함께 쓰는 라이브러리와 리소스는 각자의 라이선스를 따릅니다.
 
 - 화면 글꼴 Pretendard는 SIL Open Font License 1.1입니다([라이선스 전문](crates/sulsul-app/assets/fonts/Pretendard-LICENSE.txt)).
+- 말소리 찾기 모델 Silero VAD(v5.1.2)는 MIT 라이선스이고, 실행 파일에 들어갑니다([라이선스 전문](crates/sulsul-vad/model/silero_vad-LICENSE.txt)).
 - 음성 인식·글 다듬기 모델은 저장소에 들어 있지 않고, 사용자가 앱에서 고를 때 각 배포처에서 내려받습니다.
   모델마다 라이선스가 다르며, 특히 EXAONE 3.5는 상업적 사용이 금지된 라이선스(EXAONE AI Model License Agreement 1.1 - NC)입니다.

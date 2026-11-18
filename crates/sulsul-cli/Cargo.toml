@@ -22,6 +22,7 @@ sulsul-stt-whisper.workspace = true
 sulsul-stt-whisper-onnx.workspace = true
 sulsul-stt-sensevoice.workspace = true
 sulsul-stt-cloud.workspace = true
+sulsul-vad.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tracing.workspace = true

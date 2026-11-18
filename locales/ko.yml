@@ -377,6 +377,9 @@ record:
     auto_stopped: 최대 녹음 길이에 닿아 자동으로 멈췄습니다.
     silent_title: 소리가 거의 들어오지 않았습니다
     silent_body: "마이크가 음소거되어 있지 않은지, 올바른 입력 장치를 골랐는지 확인하세요. %{hint}"
+    no_speech_title: 말소리를 찾지 못했습니다
+    no_speech_body: 단축키로 받아쓸 때 이런 녹음은 받아쓰지 않고 끝냅니다. 마이크에 조금 더 가까이 대고 말해 보세요.
+    trimmed: "앞뒤의 조용한 부분 %{seconds}를 잘라 냈습니다."
     save_wav: WAV로 저장
     save_dialog_title: 녹음을 WAV 파일로 저장
     saved: "저장했습니다: %{path}"
@@ -513,6 +516,8 @@ settings:
     input_device_help: 녹음에 쓸 마이크입니다.
     auto_gain: 자동 음량 조절
     auto_gain_help: 마이크 소리가 작게 들어오면 녹음이 끝난 뒤 말소리를 알맞은 크기로 키워서 받아씁니다. 소음만 있는 녹음은 키우지 않습니다.
+    trim_silence: 앞뒤 조용한 부분 자르기
+    trim_silence_help: 녹음 앞뒤의 말소리가 없는 부분을 잘라 내고 받아씁니다. 숨소리나 키보드 소리처럼 말소리가 아닌 소리만 있는 녹음은 받아쓰지 않고 끝내며, 클립보드도 건드리지 않습니다. 말소리를 판정하는 작은 모델(Silero VAD)이 앱에 들어 있어 따로 내려받지 않아도 됩니다. 말한 내용이 잘려 나가는 일이 잦으면 꺼 주세요.
     max_record_seconds: 최대 녹음 길이
     max_record_seconds_help: "이 시간을 넘으면 녹음을 자동으로 끝냅니다. (%{min} ~ %{max}초)"
     feedback_sounds: 효과음
@@ -1112,6 +1117,7 @@ dictation:
     원인: %{message}
     받아쓴 원문은 클립보드에 넣지 않았습니다. 모델 관리 > 글 다듬기에서 모델과 제공자를 확인하거나, 다듬지 않은 글을 받으려면 글 다듬기 '사용'을 끄세요.
   empty: 인식된 말이 없습니다.
+  no_speech: 말소리가 들리지 않아 받아쓰지 않았습니다. 마이크가 음소거되어 있지 않은지 확인해 보세요.
   busy: 아직 이전 받아쓰기를 처리하고 있습니다.
   record_failed: "녹음을 시작하지 못했습니다: %{message}"
   failed: "받아쓰지 못했습니다: %{message}"

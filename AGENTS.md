@@ -20,8 +20,9 @@ M5 VAD·환각 필터·오버레이 → M6 배포. 지금 어디까지 왔는지
 | `sulsul-stt-cloud` | OpenAI 호환 `/audio/transcriptions` 클라우드 엔진 |
 | `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·요청, 모델 선택 규칙, 다듬기 실행(`Refiner`)과 로컬 실행기 프로토콜 |
 | `sulsul-llm-runner` | 글 다듬기 로컬 모델 실행기(llama.cpp, `llama-cpp-2`). 앱이 띄우고 표준 입출력 JSON으로 주고받는 별도 실행 파일 |
+| `sulsul-vad` | 말소리 찾기(Silero VAD, `ort`). 녹음 앞뒤 무음 자르기와 말소리 없는 녹음 가려내기. 모델은 실행 파일에 넣음 |
 | `sulsul-app` | 데스크톱 앱(eframe/egui), 실행 파일 이름은 `sulsul` |
-| `sulsul-cli` | 개발용 명령줄 도구 (`devices`, `record`, `transcribe`, `models`) |
+| `sulsul-cli` | 개발용 명령줄 도구 (`devices`, `record`, `transcribe`, `speech`, `models`) |
 | `locales/` | 화면 문구 번역 파일 (`ko.yml`이 기본) |
 
 ## 빌드와 테스트
@@ -91,6 +92,7 @@ cargo run -p sulsul-cli -- transcribe test.wav --engine whisper_local
 - 엔진별 설정은 `SettingField` 스키마로 선언하면 설정 화면이 자동으로 그려지고 값은 `[stt.engines.<ID>]`에 저장됩니다.
   새 엔진을 추가하는 절차는 `sulsul-core/src/stt/mod.rs` 머리 주석에 있습니다.
 - 모델 파일은 크기·SHA-256·리비전을 고정한 URL로 기록하고, 내려받기는 `sulsul_core::download`를 씁니다.
+  예외: 말소리 찾기 모델(Silero VAD, 2.3MB)은 기본으로 켜진 기능에 쓰여 `sulsul-vad/model/`에 넣어 둡니다.
 - 가짜 엔진(`mock`)은 화면 흐름 확인용이라 개발 빌드(`debug_assertions`)에만 등록합니다.
 - 테스트에서 실제 설정·데이터 폴더를 쓰지 않습니다. `AppPaths::under(임시 폴더)`나 `tempfile`을 씁니다.
 

@@ -17,6 +17,7 @@ sulsul-stt-sensevoice = { path = "crates/sulsul-stt-sensevoice" }
 sulsul-stt-whisper-onnx = { path = "crates/sulsul-stt-whisper-onnx" }
 sulsul-stt-cloud = { path = "crates/sulsul-stt-cloud" }
 sulsul-llm = { path = "crates/sulsul-llm" }
+sulsul-vad = { path = "crates/sulsul-vad" }
 
 # 공통
 anyhow = "1"

@@ -20,7 +20,7 @@ use crate::format::{
 use crate::i18n::{hotkey_mode_name, microphone_settings_hint};
 use crate::icons::{self, Icon};
 use crate::pages::{Page, SECTION_GAP};
-use crate::session::{DictationState, DictationStatus, PageContext, Recorded, Shared};
+use crate::session::{DictationState, DictationStatus, PageContext, Recorded, Shared, SilenceTrim};
 use crate::system;
 use crate::theme::{self, Palette, size};
 use crate::widgets::banner::{Banner, Tone};
@@ -54,6 +54,8 @@ struct Active {
     started: Instant,
     /// 녹음을 시작할 때의 자동 음량 조절 설정
     auto_gain: bool,
+    /// 녹음을 시작할 때의 앞뒤 조용한 부분 자르기 설정
+    trim_silence: bool,
 }
 
 enum Problem {
@@ -108,6 +110,7 @@ impl RecordTest {
                     max,
                     started: Instant::now(),
                     auto_gain: config.audio.auto_gain,
+                    trim_silence: config.audio.trim_silence,
                 });
             }
             Err(error) => {
@@ -125,10 +128,30 @@ impl RecordTest {
         match active.recording.stop() {
             Ok(clip) if clip.is_empty() => self.problem = Some(Problem::Empty),
             Ok(mut clip) => {
-                // 받아쓰기 단축키와 같은 소리로 테스트하도록 똑같이 키웁니다.
+                // 받아쓰기 단축키와 같은 소리로 테스트하도록 똑같이 키우고 자릅니다.
+                // 말소리가 없어도 무엇이 녹음됐는지 들어 볼 수 있게 녹음은 남깁니다.
+                let speech = if active.trim_silence {
+                    sulsul_vad::find_speech(&clip)
+                        .inspect_err(|error| {
+                            tracing::warn!(
+                                "could not check the test recording for speech: {error}"
+                            );
+                        })
+                        .ok()
+                } else {
+                    None
+                };
                 if active.auto_gain {
                     clip.auto_gain();
                 }
+                let trim = speech.map(|speech| match speech {
+                    Some(speech) => {
+                        let before = clip.duration();
+                        clip.keep_range(speech.range);
+                        SilenceTrim::Trimmed(before.saturating_sub(clip.duration()))
+                    }
+                    None => SilenceTrim::NoSpeech,
+                });
                 tracing::info!(
                     seconds = clip.duration().as_secs_f64(),
                     sample_rate = clip.sample_rate,
@@ -138,6 +161,7 @@ impl RecordTest {
                     clip,
                     device_name,
                     auto_stopped,
+                    trim,
                 }));
                 self.reveal_result = true;
                 self.new_recording = true;
@@ -442,6 +466,12 @@ fn result_card(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
                 ))
                 .show(ui);
             ui.add_space(8.0);
+        } else if recorded.trim == Some(SilenceTrim::NoSpeech) {
+            Banner::new(Tone::Warning)
+                .title(&t!("record.result.no_speech_title"))
+                .line(t!("record.result.no_speech_body"))
+                .show(ui);
+            ui.add_space(8.0);
         }
 
         ui.add_space(2.0);
@@ -463,6 +493,14 @@ fn result_card(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
             ui,
             t!("record.result.device", device = recorded.device_name),
         ));
+        if let Some(SilenceTrim::Trimmed(cut)) = recorded.trim
+            && !cut.is_zero()
+        {
+            ui.label(text::caption(
+                ui,
+                t!("record.result.trimmed", seconds = seconds_text(cut)),
+            ));
+        }
 
         if recorded.auto_stopped {
             ui.add_space(6.0);

@@ -9,6 +9,10 @@
 //! 글 다듬기에 실패하면 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다. 그 글은
 //! 다듬은 결과로 착각하지 않게 `[술술 오류]`로 시작합니다(`dictation.refine_failed_clipboard`).
 //!
+//! 녹음을 끝내면 앞뒤의 말소리가 없는 부분을 잘라 내고(`[audio] trim_silence`, [`sulsul_vad`]), 말소리가
+//! 없으면 인식하지 않고 끝냅니다. 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고,
+//! 클립보드는 그대로 둡니다. 말소리를 판정하지 못하면(모델을 불러오지 못하는 등) 자르지 않고 받아씁니다.
+//!
 //! 화면은 매 프레임 [`Dictation::state`]와 [`Dictation::take_notices`]로 상태와 알림을 가져갑니다.
 //!
 //! 누르는 동안 모드에서는 단축키를 누르자마자 녹음을 시작하지만(앞 소리를 놓치지 않게),
@@ -52,6 +56,8 @@ pub struct DictationSettings {
     pub input_device: String,
     /// 녹음이 끝나면 작은 말소리를 키울지
     pub auto_gain: bool,
+    /// 녹음 앞뒤의 조용한 부분을 잘라 내고, 말소리가 없으면 받아쓰지 않을지
+    pub trim_silence: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
     pub stt: SttConfig,
@@ -64,6 +70,7 @@ impl DictationSettings {
         Self {
             input_device: config.audio.input_device.clone(),
             auto_gain: config.audio.auto_gain,
+            trim_silence: config.audio.trim_silence,
             max_record_seconds: config.audio.max_record_seconds,
             feedback_sounds: config.audio.feedback_sounds,
             stt: config.stt.clone(),
@@ -83,6 +90,8 @@ pub enum Notice {
     RefineFailed(RefineError),
     /// 인식된 말이 없음
     Empty,
+    /// 녹음에 말소리가 없어 받아쓰지 않음
+    NoSpeech,
     /// 앞의 받아쓰기를 아직 처리하는 중
     Busy,
     RecordFailed(AudioError),
@@ -333,6 +342,12 @@ struct Service<M: Microphone, C: Clipboard> {
 impl<M: Microphone, C: Clipboard> Service<M, C> {
     fn run(mut self) {
         tracing::info!("dictation service started");
+        if self.settings.trim_silence {
+            // 첫 받아쓰기가 모델을 불러오느라 늦어지지 않게 미리 불러 둡니다.
+            if let Err(error) = sulsul_vad::preload() {
+                tracing::warn!("could not load the speech detector: {error}");
+            }
+        }
         loop {
             let message = match self.next_wake() {
                 Some(timeout) => match self.rx.recv_timeout(timeout) {
@@ -529,6 +544,25 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             seconds = clip.duration().as_secs_f32(),
             "dictation recording finished"
         );
+        // 말소리가 없으면 모델을 돌리지 않고 여기서 끝냅니다 (조용한 녹음은 환각을 만들기 쉬움).
+        let speech = if self.settings.trim_silence {
+            match sulsul_vad::find_speech(&clip) {
+                Ok(Some(speech)) => Some(speech.range),
+                Ok(None) => {
+                    tracing::info!("dictation skipped: no speech in the recording");
+                    self.fail(Notice::NoSpeech);
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "could not check the recording for speech, keeping all of it: {error}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         let cancel = CancelToken::new();
         let transcriber = self.transcriber.clone();
@@ -543,8 +577,12 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             .name("sulsul-dictation-stt".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    // 배경 소음을 잘 재도록 자르기 전의 녹음 전체로 음량을 맞춥니다.
                     if auto_gain {
                         clip.auto_gain();
+                    }
+                    if let Some(range) = speech {
+                        clip.keep_range(range);
                     }
                     let job = TranscribeJob {
                         stt: &stt,
@@ -774,20 +812,27 @@ mod tests {
     use sulsul_llm::client::LlmError;
     use sulsul_llm::presets::{MOCK_PROVIDER_ID, profile_from_preset};
 
-    /// 시험용 마이크: 늘 1초짜리 소리를 돌려줍니다.
-    struct FakeMicrophone {
-        fail: bool,
+    /// 시험용 마이크가 돌려줄 녹음
+    #[derive(Debug, Clone, Copy)]
+    enum Mic {
+        /// 1초 무음, 말소리(약 3.4초), 1초 무음
+        Speech,
+        /// 1초 동안 아무 소리도 들어오지 않음
+        Silent,
+        /// 녹음을 시작하지 못함
+        Broken,
     }
 
-    struct FakeRecording;
+    struct FakeMicrophone(Mic);
+
+    struct FakeRecording(Mic);
 
     impl Microphone for FakeMicrophone {
         type Recording = FakeRecording;
         fn start(&mut self, _options: &RecordingOptions) -> Result<FakeRecording, AudioError> {
-            if self.fail {
-                Err(AudioError::NoInputDevice)
-            } else {
-                Ok(FakeRecording)
+            match self.0 {
+                Mic::Broken => Err(AudioError::NoInputDevice),
+                mic => Ok(FakeRecording(mic)),
             }
         }
     }
@@ -800,7 +845,18 @@ mod tests {
             None
         }
         fn stop(self) -> Result<AudioClip, AudioError> {
-            Ok(AudioClip::new(vec![0.1; 16_000], 16_000))
+            Ok(match self.0 {
+                Mic::Silent => AudioClip::new(vec![0.0; 16_000], 16_000),
+                Mic::Speech | Mic::Broken => {
+                    // 말소리 감지 모델이 말로 알아듣도록 Windows 음성 합성으로 만든 말을 씁니다.
+                    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../sulsul-vad/testdata/hello_ko.wav");
+                    let speech = sulsul_core::audio::read_wav(&path)?;
+                    let quiet = std::iter::repeat_n(0.0, speech.sample_rate as usize);
+                    let samples = quiet.clone().chain(speech.samples).chain(quiet).collect();
+                    AudioClip::new(samples, speech.sample_rate)
+                }
+            })
         }
     }
 
@@ -815,6 +871,7 @@ mod tests {
         DictationSettings {
             input_device: String::new(),
             auto_gain: true,
+            trim_silence: true,
             max_record_seconds: 60,
             feedback_sounds: true,
             stt,
@@ -845,11 +902,11 @@ mod tests {
     }
 
     impl Harness {
-        fn new(text: &str, microphone_fails: bool) -> Self {
-            Self::with(settings(text), microphone_fails)
+        fn new(text: &str, mic: Mic) -> Self {
+            Self::with(settings(text), mic)
         }
 
-        fn with(settings: DictationSettings, microphone_fails: bool) -> Self {
+        fn with(settings: DictationSettings, mic: Mic) -> Self {
             let mut registry = SttRegistry::new();
             registry.register(Arc::new(MockEngineFactory::new()));
             let transcriber = SharedTranscriber::new(registry, AppPaths::under("unused"));
@@ -861,14 +918,7 @@ mod tests {
                 settings,
                 transcriber,
                 SharedRefiner::new(AppPaths::under("unused")),
-                move || {
-                    (
-                        FakeMicrophone {
-                            fail: microphone_fails,
-                        },
-                        service_clipboard,
-                    )
-                },
+                move || (FakeMicrophone(mic), service_clipboard),
                 move |cue| service_cues.lock().unwrap().push(cue),
                 || {},
             )
@@ -909,7 +959,7 @@ mod tests {
 
     #[test]
     fn toggle_dictation_copies_and_restores_after_paste() {
-        let mut h = Harness::new("  안녕하세요  ", false);
+        let mut h = Harness::new("  안녕하세요  ", Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("녹음 시작", |h| {
             h.dictation.state() == DictationState::Recording
@@ -942,7 +992,7 @@ mod tests {
 
     #[test]
     fn empty_result_leaves_the_clipboard_alone() {
-        let mut h = Harness::new("   ", false);
+        let mut h = Harness::new("   ", Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("인식 결과", |h| !h.notices.is_empty());
@@ -953,8 +1003,60 @@ mod tests {
     }
 
     #[test]
+    fn speech_is_trimmed_before_transcribing() {
+        // 가짜 엔진은 글을 정하지 않으면 받은 오디오의 길이를 돌려줍니다.
+        let mut h = Harness::new("", Mic::Speech);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("복사", |h| !h.notices.is_empty());
+        let content = h.clipboard.content();
+        let seconds: f64 = content[0]
+            .split("s of audio")
+            .next()
+            .and_then(|head| head.rsplit(' ').next())
+            .and_then(|seconds| seconds.parse().ok())
+            .unwrap_or_else(|| panic!("받은 오디오 길이가 있어야 합니다: {content:?}"));
+        // 녹음은 5.4초(앞뒤 1초 무음 + 말 3.4초)이고, 무음은 여유(앞 0.3초, 뒤 0.5초)만 남깁니다.
+        assert!(
+            (3.0..4.0).contains(&seconds),
+            "앞뒤 무음을 잘라 내야 합니다: {content:?}"
+        );
+    }
+
+    #[test]
+    fn recording_without_speech_is_not_transcribed() {
+        let mut h = Harness::new("들리지 않은 말", Mic::Silent);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("말소리 없음", |h| !h.notices.is_empty());
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::NoSpeech]),
+            "{:?}",
+            h.notices
+        );
+        assert_eq!(
+            h.clipboard.content(),
+            ["원래 내용"],
+            "클립보드는 건드리지 않음"
+        );
+        assert_eq!(h.cues(), [Cue::Start, Cue::Fail], "인식을 시작하지 않음");
+        assert_eq!(h.dictation.state(), DictationState::Idle);
+    }
+
+    #[test]
+    fn silence_check_can_be_turned_off() {
+        let mut untouched = settings("그대로");
+        untouched.trim_silence = false;
+        let mut h = Harness::with(untouched, Mic::Silent);
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("복사", |h| h.clipboard.content() == ["text:그대로"]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+    }
+
+    #[test]
     fn short_push_to_talk_press_is_ignored() {
-        let mut h = Harness::new("글", false);
+        let mut h = Harness::new("글", Mic::Speech);
         h.send(HotkeyEvent::Press);
         h.send(HotkeyEvent::Release);
         // 다른 키와 함께 누른 경우도 마찬가지입니다.
@@ -971,7 +1073,7 @@ mod tests {
 
     #[test]
     fn held_push_to_talk_records_until_release() {
-        let mut h = Harness::new("누르는 동안", false);
+        let mut h = Harness::new("누르는 동안", Mic::Speech);
         h.send(HotkeyEvent::Press);
         h.wait_until("녹음 확정", |h| {
             h.dictation.state() == DictationState::Recording
@@ -986,7 +1088,7 @@ mod tests {
 
     #[test]
     fn microphone_failure_is_reported() {
-        let mut h = Harness::new("글", true);
+        let mut h = Harness::new("글", Mic::Broken);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("녹음 실패", |h| !h.notices.is_empty());
         assert!(matches!(
@@ -1008,7 +1110,7 @@ mod tests {
 
     #[test]
     fn sounds_can_be_turned_off() {
-        let mut h = Harness::new("조용히", false);
+        let mut h = Harness::new("조용히", Mic::Speech);
         let mut quiet = settings("조용히");
         quiet.feedback_sounds = false;
         h.dictation.update_settings(quiet);
@@ -1019,7 +1121,7 @@ mod tests {
     }
     #[test]
     fn refined_text_is_copied_instead_of_the_transcript() {
-        let mut h = Harness::with(refining_settings(" 안녕 하세요 ", ""), false);
+        let mut h = Harness::with(refining_settings(" 안녕 하세요 ", ""), Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("다듬은 글 복사", |h| !h.notices.is_empty());
@@ -1035,7 +1137,7 @@ mod tests {
     #[test]
     fn refinement_failure_puts_the_reason_on_the_clipboard() {
         rust_i18n::set_locale("ko");
-        let mut h = Harness::with(refining_settings("고양이가 좋아요", "fail"), false);
+        let mut h = Harness::with(refining_settings("고양이가 좋아요", "fail"), Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("오류 안내 복사", |h| !h.notices.is_empty());
@@ -1073,7 +1175,7 @@ mod tests {
 
     #[test]
     fn empty_transcript_is_not_sent_for_refinement() {
-        let mut h = Harness::with(refining_settings("   ", "fail"), false);
+        let mut h = Harness::with(refining_settings("   ", "fail"), Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
         h.wait_until("인식 결과", |h| !h.notices.is_empty());

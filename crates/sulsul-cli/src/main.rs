@@ -45,6 +45,12 @@ enum Command {
     },
     /// WAV 파일을 받아쓰고 걸린 시간을 보여 줍니다
     Transcribe(transcribe::Args),
+    /// WAV 파일에서 받아쓰기가 남길 말소리 범위를 찾아 보여 줍니다 (앞뒤 조용한 부분 자르기 확인용)
+    Speech {
+        /// 살펴볼 WAV 파일들
+        #[arg(required = true)]
+        wavs: Vec<PathBuf>,
+    },
     /// 엔진이 쓰는 모델 파일을 확인하고 내려받습니다
     Models {
         #[command(subcommand)]
@@ -69,6 +75,7 @@ fn main() -> Result<()> {
             native_rate,
         } => record(seconds, output, device, native_rate),
         Command::Transcribe(args) => transcribe::run(args),
+        Command::Speech { wavs } => speech(&wavs),
         Command::Models { command } => models::run(command),
     }
 }
@@ -130,6 +137,12 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
     println!();
 
     let mut clip = recording.stop()?;
+    // 앱의 받아쓰기와 같은 순서: 자르기 전의 녹음 전체로 말소리를 찾고 음량을 맞춘 뒤 자릅니다.
+    let speech = if audio_config.trim_silence {
+        Some(sulsul_vad::find_speech(&clip).context("말소리를 찾지 못했습니다")?)
+    } else {
+        None
+    };
     if audio_config.auto_gain {
         let gain = clip.auto_gain();
         if gain.applied() {
@@ -143,6 +156,22 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
                 gain.speech_dbfs, gain.noise_dbfs
             );
         }
+    }
+    match speech {
+        Some(Some(speech)) => {
+            let before = clip.duration();
+            println!("말소리 구간: {}", segments_text(&speech, clip.sample_rate));
+            clip.keep_range(speech.range.clone());
+            println!(
+                "앞뒤 조용한 부분 자르기: {} 남김 ({:.2}초 잘라 냄)",
+                seconds_text(&speech.range, clip.sample_rate),
+                before.saturating_sub(clip.duration()).as_secs_f64(),
+            );
+        }
+        Some(None) => println!(
+            "말소리를 찾지 못했습니다. 받아쓰기 단축키는 이런 녹음을 받아쓰지 않습니다 (녹음은 자르지 않고 저장)."
+        ),
+        None => {}
     }
     let clip = if native_rate {
         clip
@@ -165,6 +194,46 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
         );
     }
     Ok(())
+}
+
+fn speech(wavs: &[PathBuf]) -> Result<()> {
+    for path in wavs {
+        let clip = audio::read_wav(path)
+            .with_context(|| format!("{}을(를) 읽지 못했습니다", path.display()))?;
+        let seconds = clip.duration().as_secs_f64();
+        match sulsul_vad::find_speech(&clip).context("말소리를 찾지 못했습니다")? {
+            Some(span) => println!(
+                "{}: {seconds:.2}초 중 {} 남김 (말소리 구간: {})",
+                path.display(),
+                seconds_text(&span.range, clip.sample_rate),
+                segments_text(&span, clip.sample_rate),
+            ),
+            None => println!(
+                "{}: {seconds:.2}초, 말소리 없음 (받아쓰기 단축키라면 받아쓰지 않음)",
+                path.display()
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// 샘플 범위를 "1.20~3.40초"로
+fn seconds_text(range: &std::ops::Range<usize>, sample_rate: u32) -> String {
+    let rate = f64::from(sample_rate);
+    format!(
+        "{:.2}~{:.2}초",
+        range.start as f64 / rate,
+        range.end as f64 / rate
+    )
+}
+
+/// 말로 본 구간들을 "0.30~1.20초, 2.00~3.10초"로
+fn segments_text(span: &sulsul_vad::SpeechSpan, sample_rate: u32) -> String {
+    span.segments
+        .iter()
+        .map(|segment| seconds_text(segment, sample_rate))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// 설정 파일이 있으면 그 오디오 설정, 없으면 기본값

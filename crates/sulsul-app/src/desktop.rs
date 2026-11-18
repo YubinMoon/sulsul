@@ -425,6 +425,7 @@ impl DictationSettings {
     pub fn matches(&self, config: &Config) -> bool {
         self.input_device == config.audio.input_device
             && self.auto_gain == config.audio.auto_gain
+            && self.trim_silence == config.audio.trim_silence
             && self.max_record_seconds == config.audio.max_record_seconds
             && self.feedback_sounds == config.audio.feedback_sounds
             && self.stt == config.stt
@@ -443,6 +444,7 @@ fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
                 .error(t!("dictation.refine_failed", message = message));
         }
         Notice::Empty => shared.toasts.warning(t!("dictation.empty")),
+        Notice::NoSpeech => shared.toasts.warning(t!("dictation.no_speech")),
         Notice::Busy => shared.toasts.warning(t!("dictation.busy")),
         Notice::RecordFailed(error) => shared.toasts.error(t!(
             "dictation.record_failed",

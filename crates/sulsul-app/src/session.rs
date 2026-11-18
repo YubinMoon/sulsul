@@ -86,6 +86,17 @@ pub struct Recorded {
     pub device_name: String,
     /// 최대 녹음 길이에 닿아 자동으로 끝났는지
     pub auto_stopped: bool,
+    /// 앞뒤 조용한 부분을 자른 결과 (설정에서 껐으면 `None`)
+    pub trim: Option<SilenceTrim>,
+}
+
+/// 녹음 앞뒤의 조용한 부분을 자른 결과
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SilenceTrim {
+    /// 이만큼 잘라 냈습니다 (0일 수도 있음)
+    Trimmed(Duration),
+    /// 말소리를 찾지 못해 자르지 않았습니다. 단축키 받아쓰기라면 받아쓰지 않았을 녹음입니다.
+    NoSpeech,
 }
 
 /// 입력 장치 목록. 장치를 훑는 데 시간이 걸릴 수 있어 필요할 때만 다시 읽습니다.

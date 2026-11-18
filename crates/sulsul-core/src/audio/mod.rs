@@ -2,7 +2,8 @@
 //!
 //! 녹음은 장치의 기본 형식(샘플레이트·채널)으로 받아 모노로 합친 뒤 [`AudioClip`]으로
 //! 돌려줍니다. 엔진이 원하는 샘플레이트로는 [`AudioClip::resampled`]로 바꿉니다.
-//! 말소리가 작으면 [`AudioClip::auto_gain`]으로 키웁니다.
+//! 말소리가 작으면 [`AudioClip::auto_gain`]으로 키웁니다. 앞뒤의 말소리가 없는 부분은 `sulsul-vad`로
+//! 찾아 [`AudioClip::keep_range`]로 잘라 냅니다.
 
 mod clip;
 mod device;

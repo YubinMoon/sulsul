@@ -22,6 +22,8 @@ mode = "toggle"
 input_device = ""
 # 녹음이 끝나면 작은 말소리를 알맞은 크기로 키운 뒤 받아씁니다 (소음만 있으면 키우지 않음)
 auto_gain = true
+# 녹음 앞뒤의 말소리가 없는 부분을 잘라 낸 뒤 받아씁니다 (Silero VAD). 말소리가 없으면 받아쓰지 않고 클립보드도 그대로 둡니다
+trim_silence = true
 max_record_seconds = 120
 feedback_sounds = true
 

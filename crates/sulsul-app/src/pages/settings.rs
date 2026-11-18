@@ -273,6 +273,14 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
             .show(ui, |ui| controls::toggle(ui, &mut audio.auto_gain, &label));
         row::separator(ui);
 
+        let label = t!("settings.audio.trim_silence");
+        Row::new(&label)
+            .help(&t!("settings.audio.trim_silence_help"))
+            .show(ui, |ui| {
+                controls::toggle(ui, &mut audio.trim_silence, &label)
+            });
+        row::separator(ui);
+
         let (min, max) = MAX_RECORD_SECONDS;
         Row::new(&t!("settings.audio.max_record_seconds"))
             .help(&t!(

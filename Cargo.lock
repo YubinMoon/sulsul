@@ -4488,6 +4488,7 @@ dependencies = [
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
  "sulsul-stt-whisper-onnx",
+ "sulsul-vad",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
@@ -4509,6 +4510,7 @@ dependencies = [
  "sulsul-stt-sensevoice",
  "sulsul-stt-whisper",
  "sulsul-stt-whisper-onnx",
+ "sulsul-vad",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4602,6 +4604,18 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "sulsul-vad"
+version = "0.1.0"
+dependencies = [
+ "ndarray",
+ "ort",
+ "sulsul-core",
+ "sulsul-stt-sensevoice",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

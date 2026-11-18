@@ -125,6 +125,8 @@ pub struct AudioConfig {
     pub input_device: String,
     /// 녹음이 끝나면 작은 말소리를 알맞은 크기로 키움
     pub auto_gain: bool,
+    /// 녹음 앞뒤의 말소리가 없는 부분을 잘라 내고, 말소리가 없으면 받아쓰지 않음 (`sulsul-vad`)
+    pub trim_silence: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
 }
@@ -134,6 +136,7 @@ impl Default for AudioConfig {
         Self {
             input_device: String::new(),
             auto_gain: true,
+            trim_silence: true,
             max_record_seconds: 120,
             feedback_sounds: true,
         }
