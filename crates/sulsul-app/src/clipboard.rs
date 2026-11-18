@@ -30,7 +30,7 @@ impl Clipboard for SystemClipboard {
         Err(ClipboardError::Unsupported)
     }
 
-    fn set_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+    fn set_text(&mut self, _text: &str, _keep_in_history: bool) -> Result<(), ClipboardError> {
         Err(ClipboardError::Unsupported)
     }
 }
@@ -62,7 +62,8 @@ mod windows {
     const OPEN_ATTEMPTS: u32 = 10;
     const OPEN_RETRY: Duration = Duration::from_millis(20);
     /// 이 형식을 함께 넣으면 Windows 클립보드 기록과 클립보드 관리 앱이 그 내용을 새 복사로 기록하지 않습니다.
-    /// 원래 내용을 되돌릴 때 기록에 같은 항목이 하나 더 생기지 않게 씁니다.
+    /// 원래 내용을 되돌릴 때 기록에 같은 항목이 하나 더 생기지 않게, 커서 위치에 넣으려고 잠깐 넣은 글이
+    /// 기록에 남지 않게 씁니다.
     const EXCLUDE_FROM_HISTORY: &str = "ExcludeClipboardContentFromMonitorProcessing";
 
     /// 떠 둔 클립보드 내용 (넣었던 순서대로)
@@ -248,15 +249,12 @@ mod windows {
                 }
             }
             if !snapshot.items.is_empty() {
-                let exclude = registered_format(EXCLUDE_FROM_HISTORY);
-                if exclude != 0 {
-                    let _ = open.put_memory(exclude, &0u32.to_ne_bytes());
-                }
+                exclude_from_history(&open);
             }
             Ok(())
         }
 
-        fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        fn set_text(&mut self, text: &str, keep_in_history: bool) -> Result<(), ClipboardError> {
             // Windows의 글 형식은 줄바꿈이 CRLF입니다.
             let text = text.replace("\r\n", "\n").replace('\n', "\r\n");
             let bytes: Vec<u8> = text
@@ -266,7 +264,21 @@ mod windows {
                 .collect();
             let open = Open::new()?;
             open.empty()?;
-            open.put_memory(u32::from(CF_UNICODETEXT), &bytes)
+            open.put_memory(u32::from(CF_UNICODETEXT), &bytes)?;
+            if !keep_in_history {
+                exclude_from_history(&open);
+            }
+            Ok(())
+        }
+    }
+
+    /// 열어 둔 클립보드의 지금 내용을 클립보드 기록·동기화에서 뺍니다. 실패해도 내용은 그대로 둡니다.
+    fn exclude_from_history(open: &Open) {
+        let exclude = registered_format(EXCLUDE_FROM_HISTORY);
+        if exclude != 0
+            && let Err(error) = open.put_memory(exclude, &0u32.to_ne_bytes())
+        {
+            tracing::debug!("could not exclude the clipboard content from history: {error}");
         }
     }
 }

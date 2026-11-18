@@ -1,17 +1,23 @@
-//! 단축키 받아쓰기: 녹음 → 인식 → 글 다듬기(켰을 때) → 클립보드.
+//! 단축키 받아쓰기: 녹음 → 인식 → 글 다듬기(켰을 때) → 클립보드나 커서 위치.
 //!
 //! 전용 스레드(`sulsul-dictation`)에서 돌아 창이 트레이에 숨겨져 있어도 동작합니다.
 //! 키보드 후크가 보낸 [`HotkeyEvent`]로 녹음을 시작·끝내고, 인식은 작업 스레드에서
 //! 테스트 화면의 받아쓰기 테스트와 함께 쓰는 [`SharedTranscriber`]로 합니다. 글 다듬기를 켰으면 같은 작업
-//! 스레드에서 이어서 [`SharedRefiner`]로 다듬습니다. 받아쓴(다듬은) 글은 [`PasteGuard`]가
-//! 클립보드에 넣고, 사용자가 붙여넣으면 원래 내용으로 되돌립니다.
+//! 스레드에서 이어서 [`SharedRefiner`]로 다듬습니다.
 //!
-//! 글 다듬기에 실패하면 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다. 그 글은
+//! 받아쓴(다듬은) 글은 설정(`[output] target`)에 따라 보냅니다.
+//! - `clipboard`: [`PasteGuard`]가 클립보드에 넣고, 되돌리기(`restore_clipboard`)를 켰으면 사용자가 붙여넣은 뒤
+//!   원래 내용으로 되돌립니다.
+//! - `cursor`: 입력 중인 커서가 있으면([`Cursor::is_typing`]) 클립보드를 잠깐 빌려 그 자리에 붙여넣고 원래 내용으로
+//!   되돌립니다([`cursor`]). 입력할 곳이 없으면 기록에만 남기고 알립니다.
+//! - `auto`: 입력 중인 커서가 있으면 `cursor`처럼, 없으면(또는 넣지 못하면) `clipboard`처럼 합니다.
+//!
+//! 글 다듬기에 실패하면 받아쓴 원문 대신 실패 원인을 알리는 글을 같은 곳으로 보냅니다. 그 글은
 //! 다듬은 결과로 착각하지 않게 `[술술 오류]`로 시작합니다(`dictation.refine_failed_clipboard`).
 //!
 //! 녹음을 끝내면 작은 말소리를 알맞은 크기로 키우고([`AudioClip::auto_gain`]) 앞뒤의 말소리가 없는 부분을
 //! 잘라 냅니다([`sulsul_vad`]). 끌 이유가 없어 설정 없이 늘 합니다. 말소리가 없으면 인식하지 않고 끝냅니다.
-//! 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고, 클립보드는 그대로 둡니다.
+//! 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고, 클립보드·커서에는 아무것도 넣지 않습니다.
 //! 말소리를 판정하지 못하면(모델을 불러오지 못하는 등) 자르지 않고 받아씁니다.
 //!
 //! 글을 만들어 낼 때마다(다듬기에 실패해도) 받아쓴 원문과 다듬은 글을 기록([`Entry`])으로 남깁니다.
@@ -24,6 +30,7 @@
 //! [`PUSH_TO_TALK_CONFIRM`]만큼 누르고 있어야 시작음을 내고 녹음 중으로 보입니다. 그 전에 떼거나
 //! 다른 키를 누르면(`RightCtrl+C` 등) 아무 일도 없었던 것처럼 버립니다.
 
+pub mod cursor;
 pub mod paste;
 
 use std::panic::AssertUnwindSafe;
@@ -35,12 +42,14 @@ use std::time::{Duration, Instant, SystemTime};
 use rust_i18n::t;
 use sulsul_core::CancelToken;
 use sulsul_core::audio::{AudioClip, AudioError, Recording, RecordingOptions};
-use sulsul_core::config::{Config, PostProcessConfig, SttConfig};
+use sulsul_core::config::{Config, OutputConfig, OutputTarget, PostProcessConfig, SttConfig};
 use sulsul_core::stt::{SttError, TranscribeError, TranscribeJob};
 use sulsul_llm::refine::RefineError;
 
-use self::paste::{Clipboard, PasteGuard};
+use self::cursor::{Cursor, CursorError};
+use self::paste::{Clipboard, ClipboardError, PasteGuard};
 use crate::clipboard::SystemClipboard;
+use crate::cursor::SystemCursor;
 use crate::error_text;
 use crate::history::{Entry, Refinement};
 use crate::hotkey::HotkeyEvent;
@@ -65,6 +74,8 @@ pub struct DictationSettings {
     pub stt: SttConfig,
     /// 글 다듬기 설정 (`enabled`가 꺼져 있으면 다듬지 않음)
     pub postprocess: PostProcessConfig,
+    /// 받아쓴 글을 보내는 방법
+    pub output: OutputConfig,
 }
 
 impl DictationSettings {
@@ -75,17 +86,18 @@ impl DictationSettings {
             feedback_sounds: config.audio.feedback_sounds,
             stt: config.stt.clone(),
             postprocess: config.postprocess.clone(),
+            output: config.output,
         }
     }
 }
 
 /// 화면에 알릴 일. 사용자가 알아야 할 실패만 알립니다.
 ///
-/// 받아쓴 글을 클립보드에 넣었을 때는 완료음과 오버레이로, 앞의 받아쓰기를 처리하는 중에 다시 눌렀을 때는
-/// 실패음과 오버레이(인식 중 표시)로 알 수 있어 알림을 내지 않습니다.
+/// 받아쓴 글을 클립보드나 커서 위치에 넣었을 때는 완료음과 오버레이로, 앞의 받아쓰기를 처리하는 중에 다시
+/// 눌렀을 때는 실패음과 오버레이(인식 중 표시)로 알 수 있어 알림을 내지 않습니다.
 #[derive(Debug)]
 pub enum Notice {
-    /// 글 다듬기에 실패해 받아쓴 원문 대신 실패 원인을 클립보드에 넣음
+    /// 글 다듬기에 실패해 받아쓴 원문 대신 실패 원인을 클립보드나 커서 위치에 넣음
     RefineFailed(RefineError),
     /// 인식된 말이 없음
     Empty,
@@ -95,6 +107,38 @@ pub enum Notice {
     Failed(DictationError),
     /// 클립보드에 넣지 못함 (원인은 로그에 남김). 받아쓴 글은 기록에 남아 있습니다.
     ClipboardFailed,
+    /// 커서 위치에 넣지 못함 (원인은 로그에 남김). 받아쓴 글은 기록에 남아 있습니다.
+    TypeFailed,
+    /// 커서 위치에 넣기로 했는데 입력 중인 곳이 없어 기록에만 남김
+    NoCursor,
+}
+
+/// 받아쓴 글을 보낸 곳
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Copied,
+    Typed,
+    /// 커서 위치에 넣기로 했는데 입력 중인 곳이 없어 아무 데도 보내지 않음 (기록에만 남음)
+    NoCursor,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum DeliveryError {
+    #[error("could not copy to the clipboard: {0}")]
+    Copy(ClipboardError),
+    #[error("could not put the text on the clipboard for pasting at the cursor: {0}")]
+    Lend(ClipboardError),
+    #[error(transparent)]
+    Keys(CursorError),
+}
+
+impl DeliveryError {
+    fn notice(&self) -> Notice {
+        match self {
+            Self::Copy(_) => Notice::ClipboardFailed,
+            Self::Lend(_) | Self::Keys(_) => Notice::TypeFailed,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -198,7 +242,7 @@ pub struct Dictation {
 }
 
 impl Dictation {
-    /// 시스템 마이크·클립보드·효과음으로 받아쓰기 스레드를 시작합니다.
+    /// 시스템 마이크·클립보드·커서·효과음으로 받아쓰기 스레드를 시작합니다.
     /// `wake`는 상태가 바뀌면 불립니다(화면을 다시 그리게 합니다).
     pub fn start(
         settings: DictationSettings,
@@ -210,24 +254,25 @@ impl Dictation {
             settings,
             transcriber,
             refiner,
-            || (SystemMicrophone, SystemClipboard),
+            || (SystemMicrophone, SystemClipboard, SystemCursor::default()),
             sound::play,
             wake,
         )
     }
 
-    /// 마이크·클립보드·효과음을 골라 시작합니다. `devices`는 받아쓰기 스레드 안에서 불립니다.
-    fn start_with<M, C>(
+    /// 마이크·클립보드·커서·효과음을 골라 시작합니다. `devices`는 받아쓰기 스레드 안에서 불립니다.
+    fn start_with<M, C, K>(
         settings: DictationSettings,
         transcriber: SharedTranscriber,
         refiner: SharedRefiner,
-        devices: impl FnOnce() -> (M, C) + Send + 'static,
+        devices: impl FnOnce() -> (M, C, K) + Send + 'static,
         play: impl Fn(Cue) + Send + 'static,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self>
     where
         M: Microphone,
         C: Clipboard,
+        K: Cursor,
     {
         let (tx, rx) = mpsc::channel();
         let published = Arc::new(Mutex::new(Published::default()));
@@ -236,7 +281,7 @@ impl Dictation {
         let thread = std::thread::Builder::new()
             .name("sulsul-dictation".into())
             .spawn(move || {
-                let (microphone, clipboard) = devices();
+                let (microphone, clipboard, cursor) = devices();
                 Service {
                     rx,
                     tx: service_tx,
@@ -245,6 +290,7 @@ impl Dictation {
                     refiner,
                     microphone,
                     paste: PasteGuard::new(clipboard),
+                    cursor,
                     state: State::Idle,
                     published: service_published,
                     notices: Vec::new(),
@@ -344,7 +390,7 @@ enum Tick {
     ReportStartFailure,
 }
 
-struct Service<M: Microphone, C: Clipboard> {
+struct Service<M: Microphone, C: Clipboard, K: Cursor> {
     rx: Receiver<Msg>,
     tx: Sender<Msg>,
     settings: DictationSettings,
@@ -352,6 +398,7 @@ struct Service<M: Microphone, C: Clipboard> {
     refiner: SharedRefiner,
     microphone: M,
     paste: PasteGuard<C>,
+    cursor: K,
     state: State<M::Recording>,
     published: Arc<Mutex<Published>>,
     /// 아직 화면에 넘기지 않은 알림
@@ -362,7 +409,7 @@ struct Service<M: Microphone, C: Clipboard> {
     wake: Box<dyn Fn() + Send>,
 }
 
-impl<M: Microphone, C: Clipboard> Service<M, C> {
+impl<M: Microphone, C: Clipboard, K: Cursor> Service<M, C, K> {
     fn run(mut self) {
         tracing::info!("dictation service started");
         // 첫 받아쓰기가 말소리 감지 모델을 불러오느라 늦어지지 않게 미리 불러 둡니다.
@@ -513,9 +560,13 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
     }
 
     /// 녹음이 확정됐습니다: 시작음을 내고, 녹음하는 동안 인식 모델과 (켰으면) 다듬기 모델을 미리 읽어 둡니다.
+    /// 커서 위치에 넣을 수도 있으면 입력란을 알아보는 준비도 해 둡니다.
     fn on_confirmed(&mut self) {
         tracing::info!("dictation recording started");
         self.cue(Cue::Start);
+        if self.settings.output.target != OutputTarget::Clipboard {
+            self.cursor.prepare();
+        }
         let transcriber = self.transcriber.clone();
         let stt = self.settings.stt.clone();
         let refiner = self.refiner.clone();
@@ -669,28 +720,68 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             None => (transcript.to_owned(), Refinement::None),
         };
         let refined = !refine.is_none();
-        // 클립보드에 넣지 못해도 기록에서 다시 복사할 수 있게 먼저 남깁니다.
+        // 클립보드·커서에 넣지 못해도 기록에서 다시 복사할 수 있게 먼저 남깁니다.
         self.record(at, transcript, refine);
         if text.is_empty() {
-            // 다듬은 글이 비었습니다. 클립보드는 건드리지 않습니다.
+            // 다듬은 글이 비었습니다. 클립보드·커서에는 아무것도 넣지 않습니다.
             tracing::info!("refinement produced no text");
             self.fail(Notice::Empty);
             return;
         }
-        match self.paste.deliver(&text) {
-            Ok(()) => {
+        match self.deliver(&text) {
+            Ok(Delivery::NoCursor) => {
+                tracing::info!("no text field to type into; the dictation is only in the history");
+                self.fail(Notice::NoCursor);
+            }
+            Ok(delivery) => {
                 tracing::info!(
                     chars = text.chars().count(),
                     refined,
-                    "dictation copied to the clipboard"
+                    ?delivery,
+                    "dictation delivered"
                 );
                 self.cue(Cue::Done);
             }
             Err(error) => {
-                tracing::warn!("could not copy dictation to the clipboard: {error}");
-                self.fail(Notice::ClipboardFailed);
+                tracing::warn!("could not deliver dictation: {error}");
+                self.fail(error.notice());
             }
         }
+    }
+
+    /// 받아쓴 글을 설정한 곳(클립보드, 커서 위치)으로 보냅니다.
+    fn deliver(&mut self, text: &str) -> Result<Delivery, DeliveryError> {
+        let output = self.settings.output;
+        let typing = match output.target {
+            OutputTarget::Clipboard => false,
+            OutputTarget::Cursor | OutputTarget::Auto => self.cursor.is_typing(),
+        };
+        if typing {
+            match self.type_at_cursor(text) {
+                Ok(()) => return Ok(Delivery::Typed),
+                Err(error) if output.target == OutputTarget::Auto => {
+                    tracing::warn!("{error}; copying to the clipboard instead");
+                }
+                Err(error) => return Err(error),
+            }
+        } else if output.target == OutputTarget::Cursor {
+            return Ok(Delivery::NoCursor);
+        }
+        self.paste
+            .copy(text, output.restore_clipboard)
+            .map(|()| Delivery::Copied)
+            .map_err(DeliveryError::Copy)
+    }
+
+    /// 클립보드를 잠깐 빌려 커서 위치에 붙여넣습니다. 붙여넣는 앱이 다 읽으면 원래 내용으로 되돌립니다.
+    fn type_at_cursor(&mut self, text: &str) -> Result<(), DeliveryError> {
+        self.paste.lend(text).map_err(DeliveryError::Lend)?;
+        if let Err(error) = self.cursor.send_paste() {
+            self.paste.restore_now();
+            return Err(DeliveryError::Keys(error));
+        }
+        self.paste.pasted(Instant::now());
+        Ok(())
     }
 
     /// 받아쓰기 기록을 남깁니다. 원문이 비어 있으면 남기지 않습니다.
@@ -701,8 +792,8 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         }
     }
 
-    /// 다듬지 못했습니다: 받아쓴 원문은 기록에만 남기고, 클립보드에는 원문 대신 실패 원인을 알리는 글을
-    /// 넣습니다. 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
+    /// 다듬지 못했습니다: 받아쓴 원문은 기록에만 남기고, 받아쓴 글을 보낼 곳(클립보드, 커서 위치)에는 원문 대신
+    /// 실패 원인을 알리는 글을 넣습니다. 클립보드는 받아쓴 글과 같은 규칙으로 되돌립니다.
     fn deliver_refine_failure(
         &mut self,
         at: SystemTime,
@@ -721,11 +812,12 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             },
         );
         let notice = t!("dictation.refine_failed_clipboard", message = reason);
-        match self.paste.deliver(&notice) {
-            Ok(()) => self.fail(Notice::RefineFailed(error)),
-            Err(clipboard) => {
-                tracing::warn!("could not copy the refinement error to the clipboard: {clipboard}");
-                self.fail(Notice::ClipboardFailed);
+        // 입력할 곳이 없어 안내 글을 넣지 못했어도, 알릴 것은 다듬기에 실패했다는 것입니다.
+        match self.deliver(&notice) {
+            Ok(_) => self.fail(Notice::RefineFailed(error)),
+            Err(delivery) => {
+                tracing::warn!("could not deliver the refinement error: {delivery}");
+                self.fail(delivery.notice());
             }
         }
     }
@@ -825,7 +917,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             cancel.cancel();
         }
         self.state = State::Idle;
-        self.paste.finish();
+        self.paste.restore_now();
     }
 }
 
@@ -876,6 +968,8 @@ fn refine(
 
 #[cfg(test)]
 mod tests {
+    use super::cursor::fake::FakeCursor;
+    use super::paste::RESTORE_DELAY;
     use super::paste::fake::FakeClipboard;
     use super::*;
     use sulsul_core::AppPaths;
@@ -948,6 +1042,22 @@ mod tests {
             feedback_sounds: true,
             stt,
             postprocess: PostProcessConfig::default(),
+            output: OutputConfig::default(),
+        }
+    }
+
+    /// 받아쓴 글을 `target`으로 보내는 설정
+    fn output_settings(
+        text: &str,
+        target: OutputTarget,
+        restore_clipboard: bool,
+    ) -> DictationSettings {
+        DictationSettings {
+            output: OutputConfig {
+                target,
+                restore_clipboard,
+            },
+            ..settings(text)
         }
     }
 
@@ -969,6 +1079,7 @@ mod tests {
     struct Harness {
         dictation: Dictation,
         clipboard: FakeClipboard,
+        cursor: FakeCursor,
         cues: Arc<Mutex<Vec<Cue>>>,
         notices: Vec<Notice>,
         entries: Vec<Entry>,
@@ -979,19 +1090,27 @@ mod tests {
             Self::with(settings(text), mic)
         }
 
+        /// 입력 중인 곳이 없는 상태로 시작합니다.
         fn with(settings: DictationSettings, mic: Mic) -> Self {
+            Self::typing(settings, mic, false)
+        }
+
+        /// `typing`이면 입력 중인 곳이 있는 상태로 시작합니다.
+        fn typing(settings: DictationSettings, mic: Mic, typing: bool) -> Self {
             let mut registry = SttRegistry::new();
             registry.register(Arc::new(MockEngineFactory::new()));
             let transcriber = SharedTranscriber::new(registry, AppPaths::under("unused"));
             let clipboard = FakeClipboard::with(&["원래 내용"]);
+            let cursor = FakeCursor::new(clipboard.clone(), typing);
             let cues = Arc::new(Mutex::new(Vec::new()));
             let service_clipboard = clipboard.clone();
+            let service_cursor = cursor.clone();
             let service_cues = Arc::clone(&cues);
             let dictation = Dictation::start_with(
                 settings,
                 transcriber,
                 SharedRefiner::new(AppPaths::under("unused")),
-                move || (FakeMicrophone(mic), service_clipboard),
+                move || (FakeMicrophone(mic), service_clipboard, service_cursor),
                 move |cue| service_cues.lock().unwrap().push(cue),
                 || {},
             )
@@ -999,10 +1118,31 @@ mod tests {
             Self {
                 dictation,
                 clipboard,
+                cursor,
                 cues,
                 notices: Vec::new(),
                 entries: Vec::new(),
             }
+        }
+
+        /// 한 번 눌러 녹음하고 다시 눌러 끝낸 뒤, 결과(완료음 또는 실패음)가 나오고 알림까지 넘어올 때까지 기다립니다.
+        fn dictate(&mut self) {
+            self.send(HotkeyEvent::Toggle);
+            self.send(HotkeyEvent::Toggle);
+            self.wait_until("받아쓰기 결과", |h| {
+                let cues = h.cues();
+                let finished = cues.len() >= 3 || cues.last() == Some(&Cue::Fail);
+                finished
+                    && !matches!(
+                        h.dictation.state(),
+                        DictationState::Recording | DictationState::Transcribing
+                    )
+            });
+            // 상태와 함께 넘어온 알림·기록을 마저 가져갑니다.
+            let notices = self.dictation.take_notices();
+            self.notices.extend(notices);
+            let entries = self.dictation.take_entries();
+            self.entries.extend(entries);
         }
 
         fn send(&self, event: HotkeyEvent) {
@@ -1296,5 +1436,191 @@ mod tests {
         // 기록에서 다시 복사할 수 있게 남깁니다.
         assert_eq!(h.entries.len(), 1);
         assert_eq!(h.entries[0].transcript, "복사 못 한 글");
+    }
+
+    #[test]
+    fn clipboard_without_restore_keeps_the_text_after_paste() {
+        let mut h = Harness::with(
+            output_settings("남겨 둘 글", OutputTarget::Clipboard, false),
+            Mic::Speech,
+        );
+        h.dictate();
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
+        assert_eq!(h.clipboard.content(), ["text:남겨 둘 글"]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(
+            h.dictation.state(),
+            DictationState::Idle,
+            "되돌리지 않으므로 붙여넣기를 기다리지 않음"
+        );
+
+        h.send(HotkeyEvent::Paste);
+        std::thread::sleep(RESTORE_DELAY + Duration::from_millis(100));
+        h.dictation.shutdown();
+        assert_eq!(
+            h.clipboard.content(),
+            ["text:남겨 둘 글"],
+            "붙여넣어도, 앱을 끝내도 그대로"
+        );
+    }
+
+    /// 커서 위치에 넣을 때는 클립보드를 잠깐 빌려 쓰기만 하므로 되돌리기 설정이 꺼져 있어도 되돌립니다.
+    #[test]
+    fn cursor_types_at_the_cursor_and_gives_the_clipboard_back() {
+        let mut h = Harness::typing(
+            output_settings("  커서에 넣을 글  ", OutputTarget::Cursor, false),
+            Mic::Speech,
+            true,
+        );
+        h.dictate();
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
+        assert_eq!(h.cursor.pasted(), [vec!["text:커서에 넣을 글".to_owned()]]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(h.entries.len(), 1, "커서에 넣어도 기록에 남김");
+        assert_eq!(h.entries[0].transcript, "커서에 넣을 글");
+
+        h.wait_until("원래 내용으로 되돌림", |h| {
+            h.clipboard.content() == ["원래 내용"]
+        });
+        h.wait_until("기다리기 끝", |h| {
+            h.dictation.state() == DictationState::Idle
+        });
+        assert!(
+            h.clipboard.history().is_empty(),
+            "빌려 넣은 글은 클립보드 기록에 남기지 않음: {:?}",
+            h.clipboard.history()
+        );
+    }
+
+    #[test]
+    fn cursor_without_a_text_field_only_keeps_the_entry() {
+        let mut h = Harness::with(
+            output_settings("기록에만 남을 글", OutputTarget::Cursor, true),
+            Mic::Speech,
+        );
+        h.dictate();
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::NoCursor]),
+            "{:?}",
+            h.notices
+        );
+        assert!(h.cursor.pasted().is_empty());
+        assert_eq!(
+            h.clipboard.content(),
+            ["원래 내용"],
+            "클립보드는 건드리지 않음"
+        );
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0].transcript, "기록에만 남을 글");
+        assert_eq!(h.dictation.state(), DictationState::Idle);
+    }
+
+    #[test]
+    fn cursor_reports_a_failed_paste_and_gives_the_clipboard_back() {
+        let mut h = Harness::typing(
+            output_settings("못 넣은 글", OutputTarget::Cursor, true),
+            Mic::Speech,
+            true,
+        );
+        h.cursor.state.lock().unwrap().fail = true;
+        h.dictate();
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::TypeFailed]),
+            "{:?}",
+            h.notices
+        );
+        assert_eq!(
+            h.clipboard.content(),
+            ["원래 내용"],
+            "빌린 클립보드는 바로 되돌림"
+        );
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
+        assert_eq!(h.entries.len(), 1, "기록에서 다시 복사할 수 있게 남김");
+    }
+
+    #[test]
+    fn auto_types_when_a_text_field_is_focused() {
+        let mut h = Harness::typing(
+            output_settings("자동 입력", OutputTarget::Auto, true),
+            Mic::Speech,
+            true,
+        );
+        h.dictate();
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
+        assert_eq!(h.cursor.pasted(), [vec!["text:자동 입력".to_owned()]]);
+        h.wait_until("원래 내용으로 되돌림", |h| {
+            h.clipboard.content() == ["원래 내용"]
+        });
+    }
+
+    #[test]
+    fn auto_copies_when_nothing_is_focused() {
+        let mut h = Harness::with(
+            output_settings("자동 복사", OutputTarget::Auto, true),
+            Mic::Speech,
+        );
+        h.dictate();
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
+        assert!(h.cursor.pasted().is_empty());
+        assert_eq!(h.clipboard.content(), ["text:자동 복사"]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(h.dictation.state(), DictationState::WaitingPaste);
+
+        // 클립보드에 복사했을 때는 되돌리기 설정을 따릅니다.
+        h.send(HotkeyEvent::Paste);
+        h.wait_until("원래 내용으로 되돌림", |h| {
+            h.clipboard.content() == ["원래 내용"]
+        });
+    }
+
+    #[test]
+    fn auto_copies_when_typing_fails() {
+        let mut h = Harness::typing(
+            output_settings("대신 복사", OutputTarget::Auto, false),
+            Mic::Speech,
+            true,
+        );
+        h.cursor.state.lock().unwrap().fail = true;
+        h.dictate();
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
+        assert_eq!(h.clipboard.content(), ["text:대신 복사"]);
+        assert_eq!(h.clipboard.history(), ["대신 복사"]);
+        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(
+            h.dictation.state(),
+            DictationState::Idle,
+            "되돌리기를 껐으므로 기다리지 않음"
+        );
+    }
+
+    #[test]
+    fn refinement_failure_is_typed_at_the_cursor() {
+        rust_i18n::set_locale("ko");
+        let settings = DictationSettings {
+            output: OutputConfig {
+                target: OutputTarget::Cursor,
+                restore_clipboard: true,
+            },
+            ..refining_settings("고양이가 좋아요", "fail")
+        };
+        let mut h = Harness::typing(settings, Mic::Speech, true);
+        h.dictate();
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::RefineFailed(_)]),
+            "{:?}",
+            h.notices
+        );
+        let pasted = h.cursor.pasted();
+        assert_eq!(pasted.len(), 1, "{pasted:?}");
+        let typed = pasted[0][0].strip_prefix("text:").unwrap();
+        assert!(
+            typed.starts_with("[술술 오류]"),
+            "받아쓴 글로 착각하지 않게 오류 안내임을 밝혀야 합니다: {typed}"
+        );
+        assert!(!typed.contains("고양이"), "원문은 넣지 않습니다: {typed}");
+        h.wait_until("원래 내용으로 되돌림", |h| {
+            h.clipboard.content() == ["원래 내용"]
+        });
     }
 }

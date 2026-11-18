@@ -516,7 +516,7 @@ settings:
     input_device: 입력 장치
     max_record_seconds: 최대 녹음 길이
     feedback_sounds: 효과음
-    feedback_sounds_help: 녹음과 복사를 소리로 알려 줍니다.
+    feedback_sounds_help: 녹음과 복사·입력을 소리로 알려 줍니다.
   # 엔진·후처리기 설정 항목(스키마로 자동 생성되는 입력란)에 함께 쓰는 문구
   field:
     browse: 찾아보기
@@ -1068,7 +1068,7 @@ tray:
 # 단축키 받아쓰기 (녹음 → 인식 → 클립보드). 복사했을 때와 처리 중에 다시 눌렀을 때는 소리와 오버레이로만 알립니다.
 dictation:
   refine_failed: "글을 다듬지 못했습니다: %{message}"
-  # 글 다듬기에 실패했을 때 받아쓴 글 대신 클립보드에 넣는 글. 다듬은 결과로 착각하지 않게 첫머리에서 분명히 밝힙니다.
+  # 글 다듬기에 실패했을 때 받아쓴 글 대신 클립보드나 커서 위치에 넣는 글. 다듬은 결과로 착각하지 않게 첫머리에서 분명히 밝힙니다.
   refine_failed_clipboard: |-
     [술술 오류] 글을 다듬지 못했습니다: %{message}
     받아쓴 글은 술술의 기록 화면에 있습니다.
@@ -1077,6 +1077,9 @@ dictation:
   record_failed: "녹음하지 못했습니다: %{message}"
   failed: "받아쓰지 못했습니다: %{message}"
   clipboard_failed: 클립보드에 복사하지 못했습니다. 기록 화면에서 다시 복사하세요.
+  type_failed: 커서 위치에 넣지 못했습니다. 기록 화면에서 복사하세요.
+  # 받아쓰기 결과가 "커서 위치에 붙여넣기"인데 입력 중인 곳이 없을 때
+  no_cursor: 입력할 곳이 없어 기록에만 남겼습니다.
   hotkey_unavailable: 단축키를 쓸 수 없습니다.
   hotkey_unsupported: 이 운영체제는 단축키를 지원하지 않습니다.
   invalid_hotkey: "'%{key}'은(는) 쓸 수 없는 키입니다. 다른 키를 지정하세요."

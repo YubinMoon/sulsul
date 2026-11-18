@@ -386,7 +386,9 @@ fn send_mask(release: Option<&KBDLLHOOKSTRUCT>) {
     }
 }
 
-fn keyboard_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+/// 이 앱이 넣는 키 입력 하나. 표시([`SIGNATURE`])를 붙여 단축키 후크가 다시 판단하지 않게 합니다
+/// (커서 위치에 넣으려고 보내는 Ctrl+V를 사용자의 붙여넣기로 보지 않음).
+pub(crate) fn keyboard_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {

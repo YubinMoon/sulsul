@@ -24,6 +24,8 @@ pub use machine::HotkeyEvent;
 pub use spec::HotkeySpec;
 #[cfg(windows)]
 pub use windows::install_window_capture;
+#[cfg(windows)]
+pub(crate) use windows::keyboard_input as injected_key;
 
 /// 단축키 입력받기 결과
 #[derive(Debug, Clone, PartialEq, Eq)]

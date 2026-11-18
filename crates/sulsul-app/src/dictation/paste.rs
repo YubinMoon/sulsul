@@ -1,10 +1,17 @@
-//! 받아쓴 글을 클립보드에 넣고, 사용자가 붙여넣으면 원래 내용으로 되돌리기.
+//! 받아쓴 글을 클립보드에 넣고, 붙여넣은 뒤 원래 내용으로 되돌리기.
 //!
+//! 클립보드에 복사할 때([`PasteGuard::copy`]) 되돌리기를 켰으면
 //! 1. 받아쓴 글을 넣기 전에 지금 클립보드 내용을 통째로 떠 둡니다([`Clipboard::snapshot`]).
 //! 2. 붙여넣기 단축키를 감지하면([`PasteGuard::pasted`]) 붙여넣는 앱이 클립보드를 다 읽을 때까지
 //!    잠깐([`RESTORE_DELAY`]) 기다린 뒤 떠 둔 내용으로 되돌립니다.
 //! 3. 그 사이 사용자가 다른 것을 복사했으면(클립보드 번호가 바뀜) 되돌리지 않습니다.
-//! 4. 앱을 끝낼 때 아직 붙여넣지 않았으면 원래 내용으로 되돌립니다([`PasteGuard::finish`]).
+//! 4. 앱을 끝낼 때 아직 붙여넣지 않았으면 원래 내용으로 되돌립니다([`PasteGuard::restore_now`]).
+//!
+//! 되돌리기를 껐으면 글만 넣고 원래 내용은 떠 두지 않습니다.
+//!
+//! 커서 위치에 넣을 때는 클립보드를 잠깐 빌립니다([`PasteGuard::lend`]). 원래 내용을 떠 두고 글을 넣은 뒤,
+//! 부르는 쪽이 붙여넣기 키를 보내고 [`PasteGuard::pasted`]를 부르면 위와 같이 되돌립니다. 빌려 넣은 글은
+//! 클립보드 기록(Win+V)에 남기지 않습니다.
 //!
 //! 클립보드를 직접 다루는 부분은 [`Clipboard`]로 떼어 두어, 규칙을 실제 클립보드 없이 시험합니다.
 
@@ -25,8 +32,8 @@ pub trait Clipboard {
     fn snapshot(&mut self) -> Result<Self::Snapshot, ClipboardError>;
     /// 떠 둔 내용으로 바꿉니다.
     fn restore(&mut self, snapshot: &Self::Snapshot) -> Result<(), ClipboardError>;
-    /// 글로 바꿉니다.
-    fn set_text(&mut self, text: &str) -> Result<(), ClipboardError>;
+    /// 글로 바꿉니다. `keep_in_history`가 아니면 클립보드 기록·다른 기기 동기화에 남기지 않습니다.
+    fn set_text(&mut self, text: &str, keep_in_history: bool) -> Result<(), ClipboardError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,8 +71,24 @@ impl<C: Clipboard> PasteGuard<C> {
         }
     }
 
-    /// 받아쓴 글을 클립보드에 넣습니다.
-    pub fn deliver(&mut self, text: &str) -> Result<(), ClipboardError> {
+    /// 받아쓴 글을 클립보드에 복사합니다. `restore`면 사용자가 붙여넣은 뒤 원래 내용으로 되돌립니다.
+    pub fn copy(&mut self, text: &str, restore: bool) -> Result<(), ClipboardError> {
+        if restore {
+            return self.put(text, true);
+        }
+        // 되돌리지 않으므로, 앞서 붙여넣기를 기다리던 글이 있어도 더는 기다리지 않습니다.
+        self.pending = None;
+        self.clipboard.set_text(text, true)
+    }
+
+    /// 커서 위치에 붙여넣으려고 클립보드를 빌려 글을 넣습니다. 붙여넣기 키를 보낸 뒤 [`Self::pasted`]를,
+    /// 보내지 못했으면 [`Self::restore_now`]를 불러 원래 내용으로 되돌립니다.
+    pub fn lend(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.put(text, false)
+    }
+
+    /// 원래 내용을 떠 두고 글을 넣은 뒤, 되돌릴 때까지 기다립니다.
+    fn put(&mut self, text: &str, keep_in_history: bool) -> Result<(), ClipboardError> {
         // 아직 붙여넣지 않은 받아쓰기 글이 그대로 있으면, 되돌릴 내용은 그보다 앞의 원래 내용입니다.
         let sequence = self.clipboard.sequence();
         let kept = self
@@ -86,7 +109,7 @@ impl<C: Clipboard> PasteGuard<C> {
         };
 
         let before = self.clipboard.sequence();
-        if let Err(error) = self.clipboard.set_text(text) {
+        if let Err(error) = self.clipboard.set_text(text, keep_in_history) {
             if self.clipboard.sequence() != before {
                 // 비우기만 하고 넣지 못했습니다. 원래 내용으로 돌려 둡니다.
                 if let Some(original) = &original
@@ -112,7 +135,8 @@ impl<C: Clipboard> PasteGuard<C> {
         Ok(())
     }
 
-    /// 사용자가 붙여넣기 단축키를 눌렀습니다. 조금 뒤 원래 내용으로 되돌립니다.
+    /// 붙여넣기 단축키가 눌렸습니다(사용자가 눌렀거나, 커서 위치에 넣으려고 앱이 보냄).
+    /// 조금 뒤 원래 내용으로 되돌립니다.
     pub fn pasted(&mut self, now: Instant) {
         let sequence = self.clipboard.sequence();
         let Some(pending) = &mut self.pending else {
@@ -153,8 +177,9 @@ impl<C: Clipboard> PasteGuard<C> {
         self.pending.is_some()
     }
 
-    /// 앱을 끝낼 때 부릅니다. 받아쓴 글이 그대로 있으면 원래 내용으로 되돌립니다.
-    pub fn finish(&mut self) {
+    /// 기다리지 않고 지금 되돌립니다. 앱을 끝낼 때와 빌려 넣은 글을 붙여넣지 못했을 때 부릅니다.
+    /// 받아쓴 글이 그대로 있을 때만 되돌립니다.
+    pub fn restore_now(&mut self) {
         if let Some(pending) = self.pending.take()
             && pending.ours == self.clipboard.sequence()
         {
@@ -189,6 +214,8 @@ pub mod fake {
         pub fail_set_after_clear: bool,
         /// 다음 `snapshot`이 실패하게 합니다.
         pub fail_snapshot: bool,
+        /// 클립보드 기록(Win+V)에 남은 글 (`keep_in_history`로 넣은 것만)
+        pub history: Vec<String>,
     }
 
     /// 상태를 함께 보는 시험용 클립보드
@@ -211,6 +238,10 @@ pub mod fake {
 
         pub fn content(&self) -> Vec<String> {
             self.0.lock().unwrap().content.clone()
+        }
+
+        pub fn history(&self) -> Vec<String> {
+            self.0.lock().unwrap().history.clone()
         }
     }
 
@@ -236,7 +267,7 @@ pub mod fake {
             Ok(())
         }
 
-        fn set_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        fn set_text(&mut self, text: &str, keep_in_history: bool) -> Result<(), ClipboardError> {
             let mut state = self.0.lock().unwrap();
             if std::mem::take(&mut state.fail_set_after_clear) {
                 state.content.clear();
@@ -245,6 +276,9 @@ pub mod fake {
             }
             state.content = vec![format!("text:{text}")];
             state.sequence += 1;
+            if keep_in_history {
+                state.history.push(text.to_owned());
+            }
             Ok(())
         }
     }
@@ -263,7 +297,7 @@ mod tests {
     #[test]
     fn paste_restores_the_original_after_a_delay() {
         let (mut guard, clipboard) = guard(&["image:png", "files:a.txt"]);
-        guard.deliver("안녕하세요").unwrap();
+        guard.copy("안녕하세요", true).unwrap();
         assert_eq!(clipboard.content(), ["text:안녕하세요"]);
         assert!(guard.is_waiting());
 
@@ -291,7 +325,7 @@ mod tests {
     #[test]
     fn repeated_paste_extends_the_wait() {
         let (mut guard, clipboard) = guard(&["원래"]);
-        guard.deliver("글").unwrap();
+        guard.copy("글", true).unwrap();
         let now = Instant::now();
         guard.pasted(now);
         guard.pasted(now + RESTORE_DELAY / 2);
@@ -304,7 +338,7 @@ mod tests {
     #[test]
     fn copying_something_else_cancels_the_restore() {
         let (mut guard, clipboard) = guard(&["원래"]);
-        guard.deliver("글").unwrap();
+        guard.copy("글", true).unwrap();
         let now = Instant::now();
         guard.pasted(now);
         clipboard.user_copies(&["새로 복사"]);
@@ -313,19 +347,19 @@ mod tests {
         assert!(!guard.is_waiting());
 
         // 붙여넣기 전에 다른 것을 복사해도 마찬가지입니다.
-        guard.deliver("두 번째").unwrap();
+        guard.copy("두 번째", true).unwrap();
         clipboard.user_copies(&["또 복사"]);
         guard.tick(now);
         assert!(!guard.is_waiting(), "다른 것을 복사하면 기다리기를 그만둠");
-        guard.finish();
+        guard.restore_now();
         assert_eq!(clipboard.content(), ["또 복사"]);
     }
 
     #[test]
     fn second_dictation_keeps_the_first_original() {
         let (mut guard, clipboard) = guard(&["원래"]);
-        guard.deliver("첫째").unwrap();
-        guard.deliver("둘째").unwrap();
+        guard.copy("첫째", true).unwrap();
+        guard.copy("둘째", true).unwrap();
         assert_eq!(clipboard.content(), ["text:둘째"]);
         let now = Instant::now();
         guard.pasted(now);
@@ -340,8 +374,8 @@ mod tests {
     #[test]
     fn exit_restores_when_not_pasted() {
         let (mut guard, clipboard) = guard(&["원래"]);
-        guard.deliver("글").unwrap();
-        guard.finish();
+        guard.copy("글", true).unwrap();
+        guard.restore_now();
         assert_eq!(clipboard.content(), ["원래"]);
         assert!(!guard.is_waiting());
     }
@@ -349,8 +383,8 @@ mod tests {
     #[test]
     fn empty_original_is_restored_as_empty() {
         let (mut guard, clipboard) = guard(&[]);
-        guard.deliver("글").unwrap();
-        guard.finish();
+        guard.copy("글", true).unwrap();
+        guard.restore_now();
         assert!(clipboard.content().is_empty());
     }
 
@@ -358,9 +392,9 @@ mod tests {
     fn failed_snapshot_still_delivers_but_does_not_restore() {
         let (mut guard, clipboard) = guard(&["원래"]);
         clipboard.0.lock().unwrap().fail_snapshot = true;
-        guard.deliver("글").unwrap();
+        guard.copy("글", true).unwrap();
         assert_eq!(clipboard.content(), ["text:글"]);
-        guard.finish();
+        guard.restore_now();
         assert_eq!(
             clipboard.content(),
             ["text:글"],
@@ -372,9 +406,89 @@ mod tests {
     fn failed_write_puts_the_original_back() {
         let (mut guard, clipboard) = guard(&["원래"]);
         clipboard.0.lock().unwrap().fail_set_after_clear = true;
-        assert!(guard.deliver("글").is_err());
+        assert!(guard.copy("글", true).is_err());
         assert_eq!(clipboard.content(), ["원래"]);
         assert!(!guard.is_waiting());
+    }
+
+    #[test]
+    fn copy_without_restore_leaves_the_text() {
+        let (mut guard, clipboard) = guard(&["원래"]);
+        guard.copy("글", false).unwrap();
+        assert_eq!(clipboard.content(), ["text:글"]);
+        assert!(!guard.is_waiting(), "되돌리지 않으면 기다리지 않음");
+        assert_eq!(
+            clipboard.history(),
+            ["글"],
+            "복사한 글은 클립보드 기록에 남김"
+        );
+
+        let now = Instant::now();
+        guard.pasted(now);
+        guard.tick(now + RESTORE_DELAY);
+        guard.restore_now();
+        assert_eq!(
+            clipboard.content(),
+            ["text:글"],
+            "붙여넣어도, 앱을 끝내도 그대로"
+        );
+    }
+
+    #[test]
+    fn turning_restore_off_forgets_the_waiting_original() {
+        let (mut guard, clipboard) = guard(&["원래"]);
+        guard.copy("첫째", true).unwrap();
+        guard.copy("둘째", false).unwrap();
+        assert!(!guard.is_waiting());
+        guard.restore_now();
+        assert_eq!(clipboard.content(), ["text:둘째"]);
+    }
+
+    #[test]
+    fn lent_text_is_restored_after_the_paste_and_kept_out_of_history() {
+        let (mut guard, clipboard) = guard(&["image:png"]);
+        guard.lend("커서에 넣을 글").unwrap();
+        assert_eq!(clipboard.content(), ["text:커서에 넣을 글"]);
+        assert!(
+            clipboard.history().is_empty(),
+            "빌려 넣은 글은 클립보드 기록에 남기지 않음"
+        );
+
+        let now = Instant::now();
+        guard.pasted(now);
+        guard.tick(now + RESTORE_DELAY / 2);
+        assert_eq!(
+            clipboard.content(),
+            ["text:커서에 넣을 글"],
+            "붙여넣는 앱이 읽을 때까지 기다림"
+        );
+        guard.tick(now + RESTORE_DELAY);
+        assert_eq!(clipboard.content(), ["image:png"]);
+        assert!(!guard.is_waiting());
+    }
+
+    #[test]
+    fn lent_text_is_returned_at_once_when_the_paste_was_not_sent() {
+        let (mut guard, clipboard) = guard(&["원래"]);
+        guard.lend("글").unwrap();
+        guard.restore_now();
+        assert_eq!(clipboard.content(), ["원래"]);
+        assert!(!guard.is_waiting());
+    }
+
+    #[test]
+    fn lending_after_an_unpasted_copy_keeps_the_first_original() {
+        let (mut guard, clipboard) = guard(&["원래"]);
+        guard.copy("복사한 글", true).unwrap();
+        guard.lend("커서 글").unwrap();
+        let now = Instant::now();
+        guard.pasted(now);
+        guard.tick(now + RESTORE_DELAY);
+        assert_eq!(
+            clipboard.content(),
+            ["원래"],
+            "받아쓰기 글이 아니라 그 전 내용으로 되돌림"
+        );
     }
 
     #[test]

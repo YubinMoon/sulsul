@@ -431,10 +431,11 @@ impl DictationSettings {
             && self.feedback_sounds == config.audio.feedback_sounds
             && self.stt == config.stt
             && self.postprocess == config.postprocess
+            && self.output == config.output
     }
 }
 
-/// 받아쓰기 알림을 토스트로 띄웁니다. 복사했을 때와 처리 중에 다시 눌렀을 때는 소리와 오버레이로 알 수 있어
+/// 받아쓰기 알림을 토스트로 띄웁니다. 복사·입력했을 때와 처리 중에 다시 눌렀을 때는 소리와 오버레이로 알 수 있어
 /// 받아쓰기 쪽에서 알림을 내지 않습니다.
 fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
     match notice {
@@ -457,5 +458,7 @@ fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
                 .error(t!("dictation.failed", message = message));
         }
         Notice::ClipboardFailed => shared.toasts.error(t!("dictation.clipboard_failed")),
+        Notice::TypeFailed => shared.toasts.error(t!("dictation.type_failed")),
+        Notice::NoCursor => shared.toasts.warning(t!("dictation.no_cursor")),
     }
 }

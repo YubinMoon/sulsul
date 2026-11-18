@@ -21,6 +21,7 @@ mod autostart;
 mod clipboard;
 mod clock;
 mod config_sync;
+mod cursor;
 mod desktop;
 mod dictation;
 mod engines;
