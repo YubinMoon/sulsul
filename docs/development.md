@@ -65,6 +65,35 @@ cargo run -p sulsul-cli -- devices
 cargo run -p sulsul-cli -- record -s 5 -o test.wav
 ```
 
+## 설치 파일 만들기
+
+Windows x64 설치 파일은 [Inno Setup 6](https://jrsoftware.org/isinfo.php)으로 만듭니다.
+위 빌드 도구와 함께 아래 도구가 있어야 합니다.
+
+- Visual Studio C++ 도구 (VC++ 런타임 DLL을 재배포 폴더에서 가져옴)
+- Inno Setup 6: `winget install --id JRSoftware.InnoSetup -e`
+- cargo-about (Rust 크레이트 라이선스 고지): `cargo install cargo-about --locked --features cli`
+- PowerShell 7 (`pwsh`)
+
+```powershell
+pwsh -File installer\build.ps1   # 이미 빌드했으면 -SkipBuild
+```
+
+`installer\build.ps1`이 릴리스 빌드(기본 기능 = Vulkan)를 하고, 넣을 파일을 `target\installer\stage`에 모은 뒤
+`installer\sulsul.iss`를 컴파일해 `target\installer\sulsul-<버전>-windows-x64-setup.exe`를 만듭니다.
+버전은 루트 `Cargo.toml`의 `[workspace.package] version`을 씁니다.
+
+- 넣는 파일: `sulsul.exe`, `sulsul-llm-runner.exe`, `DirectML.dll`, VC++ 런타임 DLL(Visual Studio 재배포 폴더),
+  Vulkan 로더 `vulkan-1.dll`, `licenses\` 폴더
+- Vulkan 로더는 LunarG의 Vulkan 런타임 묶음(`VulkanRT-X64-<버전>-Components.zip`)을 내려받아 꺼냅니다.
+  버전과 SHA-256은 `build.ps1`에 고정해 두었고, 내려받은 파일은 `target\installer\cache`에 둡니다.
+  그래픽 드라이버가 없는 컴퓨터에서도 앱이 뜨고, 그때는 CPU로 인식합니다.
+- `licenses\`에는 술술 라이선스, 글꼴·말소리 찾기 모델 라이선스, `cargo about`으로 만든 Rust 크레이트 고지
+  (`THIRD-PARTY-NOTICES.txt`, 설정은 `installer\about.toml`), 네이티브 라이브러리 고지(`installer\licenses\`), Vulkan 런타임 라이선스가 들어갑니다.
+- 관리자 권한 없이 사용자별로 `%LOCALAPPDATA%\Programs\sulsul`에 설치합니다.
+- 설치·지우기 전에 설치 폴더에서 실행 중인 술술을 끝내고, 지울 때 자동 실행 등록을 지운 뒤 설정·기록·모델도 지울지 묻습니다.
+- 실행 파일 아이콘(`crates/sulsul-app/assets/icon/sulsul.ico`)은 트레이 아이콘과 같은 그림이고, 빌드 스크립트(`build.rs`)가 `winresource`로 넣습니다.
+
 ## 설정과 데이터 폴더
 
 설정 파일과 데이터 폴더 위치는 [사용 안내](guide.md#설정-파일과-기록)에 있습니다.

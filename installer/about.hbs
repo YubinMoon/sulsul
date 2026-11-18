@@ -1,0 +1,22 @@
+술술(sulsul)에 들어 있는 Rust 크레이트의 라이선스 고지입니다.
+네이티브 라이브러리(whisper.cpp, llama.cpp, ONNX Runtime, DirectML, Vulkan 런타임)와
+글꼴·모델의 라이선스는 같은 폴더의 다른 파일에 있습니다.
+
+Third-party license notices for the Rust crates included in sulsul.
+
+{{#each overview}}
+- {{{name}}}: {{count}}
+{{/each}}
+{{#each licenses}}
+
+================================================================================
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+--------------------------------------------------------------------------------
+
+{{{text}}}
+{{/each}}
