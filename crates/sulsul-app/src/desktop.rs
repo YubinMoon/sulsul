@@ -246,7 +246,7 @@ impl Desktop {
         self.applied_binding = Some(wanted);
     }
 
-    /// 받아쓰기 상태와 알림을 화면·트레이·오버레이로 옮깁니다.
+    /// 받아쓰기 상태와 알림을 화면·트레이·오버레이로, 새 기록을 기록 목록으로 옮깁니다.
     fn collect_status(&mut self, shared: &mut Shared, config: &Config) {
         let state = self
             .dictation
@@ -272,6 +272,9 @@ impl Desktop {
         if let Some(dictation) = &self.dictation {
             for notice in dictation.take_notices() {
                 show_notice(shared, config, notice);
+            }
+            for entry in dictation.take_entries() {
+                shared.history.push(entry);
             }
         }
         if let Some(tray) = &mut self.tray {

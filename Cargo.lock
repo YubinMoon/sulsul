@@ -4482,6 +4482,8 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rust-i18n",
+ "serde",
+ "serde_json",
  "sulsul-core",
  "sulsul-llm",
  "sulsul-stt-cloud",

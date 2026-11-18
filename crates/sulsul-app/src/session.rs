@@ -8,6 +8,7 @@ use sulsul_core::audio::{self, AudioClip, AudioError, InputDevice};
 use sulsul_core::config::Config;
 use sulsul_core::stt::SttRegistry;
 
+use crate::history::History;
 use crate::hotkey::KeyCapture;
 use crate::pages::Page;
 use crate::refiner::SharedRefiner;
@@ -42,6 +43,8 @@ pub struct Shared {
     pub key_capture: KeyCapture,
     /// 단축키 받아쓰기 상태 (화면 표시용)
     pub dictation: DictationStatus,
+    /// 단축키 받아쓰기 기록. 앱이 시작할 때 [`History::open`]으로 파일과 잇습니다.
+    pub history: History,
 }
 
 impl Shared {
@@ -57,6 +60,7 @@ impl Shared {
             navigate: None,
             key_capture: KeyCapture::default(),
             dictation: DictationStatus::default(),
+            history: History::default(),
         }
     }
 }

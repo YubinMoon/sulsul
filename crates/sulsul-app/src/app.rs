@@ -15,8 +15,10 @@ use sulsul_core::stt::SttRegistry;
 use crate::config_sync::{ConfigSync, ProblemKind};
 use crate::desktop::{Desktop, Launch};
 use crate::error_text;
+use crate::history::History;
 use crate::i18n;
 use crate::icons::{self, Icon};
+use crate::pages::history::HistoryPage;
 use crate::pages::models::ModelsPage;
 use crate::pages::prompts::PromptsPage;
 use crate::pages::settings::SettingsPage;
@@ -37,6 +39,7 @@ pub struct SulsulApp {
     sync: ConfigSync,
     page: Page,
     test: TestPage,
+    history: HistoryPage,
     models: ModelsPage,
     prompts: PromptsPage,
     settings: SettingsPage,
@@ -73,6 +76,10 @@ impl SulsulApp {
 
         let mut shared = Shared::new(paths, registry);
         shared.key_capture = key_capture;
+        let history_ctx = ctx.clone();
+        shared.history = History::open(shared.paths.history_file(), move || {
+            history_ctx.request_repaint();
+        });
         let desktop = Desktop::start(cc, &mut shared, &sync.config, launch);
         let mut app = Self {
             shared,
@@ -82,6 +89,7 @@ impl SulsulApp {
             sync,
             page: Page::Test,
             test: TestPage::default(),
+            history: HistoryPage::default(),
             models: ModelsPage::default(),
             prompts: PromptsPage::default(),
             settings: SettingsPage::default(),
@@ -253,6 +261,7 @@ impl SulsulApp {
         };
         match self.page {
             Page::Test => self.test.ui(ui, &mut cx),
+            Page::History => self.history.ui(ui, &mut cx),
             Page::Models => self.models.ui(ui, &mut cx),
             Page::Prompts => self.prompts.ui(ui, &mut cx),
             Page::Settings => self.settings.ui(ui, &mut cx, &issues),
@@ -390,6 +399,7 @@ impl eframe::App for SulsulApp {
         if let Some(remaining) = self.sync.save_due_in() {
             ctx.request_repaint_after(remaining + Duration::from_millis(10));
         }
+        self.shared.history.poll();
         self.test.tick(&mut self.shared, ctx);
         self.models.tick(&mut self.shared, ctx);
         self.desktop.tick(
@@ -421,6 +431,8 @@ impl eframe::App for SulsulApp {
         self.desktop.shutdown();
         // 글 다듬기 로컬 모델 실행기를 띄워 두었으면 끝냅니다.
         self.shared.refiner.shutdown();
+        // 밀린 받아쓰기 기록을 파일에 씁니다.
+        self.shared.history.shutdown();
         // 저장을 기다리던 변경이 있으면 끝내기 전에 씁니다.
         if self.sync.has_pending_save() && !self.sync.locked() {
             self.sync.save_now();

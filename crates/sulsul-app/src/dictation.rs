@@ -14,7 +14,11 @@
 //! 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고, 클립보드는 그대로 둡니다.
 //! 말소리를 판정하지 못하면(모델을 불러오지 못하는 등) 자르지 않고 받아씁니다.
 //!
-//! 화면은 매 프레임 [`Dictation::state`]와 [`Dictation::take_notices`]로 상태와 알림을 가져갑니다.
+//! 글을 만들어 낼 때마다(다듬기에 실패해도) 받아쓴 원문과 다듬은 글을 기록([`Entry`])으로 남깁니다.
+//! 인식된 말이 없거나 녹음·인식에 실패하면 남기지 않습니다.
+//!
+//! 화면은 매 프레임 [`Dictation::state`], [`Dictation::take_notices`], [`Dictation::take_entries`]로
+//! 상태와 알림, 새 기록을 가져갑니다.
 //!
 //! 누르는 동안 모드에서는 단축키를 누르자마자 녹음을 시작하지만(앞 소리를 놓치지 않게),
 //! [`PUSH_TO_TALK_CONFIRM`]만큼 누르고 있어야 시작음을 내고 녹음 중으로 보입니다. 그 전에 떼거나
@@ -26,7 +30,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use rust_i18n::t;
 use sulsul_core::CancelToken;
@@ -38,6 +42,7 @@ use sulsul_llm::refine::RefineError;
 use self::paste::{Clipboard, ClipboardError, PasteGuard};
 use crate::clipboard::SystemClipboard;
 use crate::error_text;
+use crate::history::{Entry, Refinement};
 use crate::hotkey::HotkeyEvent;
 use crate::refiner::SharedRefiner;
 use crate::session::DictationState;
@@ -159,10 +164,24 @@ enum Msg {
 /// 인식(과 다듬기)을 마친 결과
 #[derive(Debug)]
 enum Outcome {
-    /// 클립보드에 넣을 글. 인식된 말이 없으면 비어 있습니다.
-    Text { text: String, refined: bool },
+    /// 받아쓴 원문과 (다듬었으면) 다듬은 글. 인식된 말이 없으면 원문이 비어 있습니다.
+    Text {
+        transcript: String,
+        refined: Option<RefinedText>,
+    },
     /// 받아쓰기는 됐지만 다듬지 못했습니다.
-    RefineFailed(RefineError),
+    RefineFailed {
+        transcript: String,
+        prompt: String,
+        error: RefineError,
+    },
+}
+
+#[derive(Debug)]
+struct RefinedText {
+    text: String,
+    /// 쓴 프롬프트 이름
+    prompt: String,
 }
 
 /// 화면이 가져가는 상태
@@ -170,6 +189,7 @@ enum Outcome {
 struct Published {
     state: DictationState,
     notices: Vec<Notice>,
+    entries: Vec<Entry>,
 }
 
 /// 받아쓰기 스레드 손잡이. 버리면 스레드를 끝냅니다(붙여넣지 않은 글이 있으면 클립보드를 되돌림).
@@ -230,6 +250,7 @@ impl Dictation {
                     state: State::Idle,
                     published: service_published,
                     notices: Vec::new(),
+                    entries: Vec::new(),
                     play: Box::new(play),
                     wake: Box::new(wake),
                 }
@@ -261,6 +282,11 @@ impl Dictation {
     /// 쌓인 알림을 가져갑니다.
     pub fn take_notices(&self) -> Vec<Notice> {
         std::mem::take(&mut lock(&self.published).notices)
+    }
+
+    /// 새로 남긴 받아쓰기 기록을 가져갑니다 (오래된 것부터).
+    pub fn take_entries(&self) -> Vec<Entry> {
+        std::mem::take(&mut lock(&self.published).entries)
     }
 
     /// 스레드를 끝내고 기다립니다. 붙여넣지 않은 받아쓰기 글이 있으면 클립보드를 되돌립니다.
@@ -298,6 +324,8 @@ enum State<R> {
     },
     Transcribing {
         cancel: CancelToken,
+        /// 녹음을 끝낸 시각 (기록에 남기는 받아쓴 시각)
+        at: SystemTime,
     },
 }
 
@@ -330,6 +358,8 @@ struct Service<M: Microphone, C: Clipboard> {
     published: Arc<Mutex<Published>>,
     /// 아직 화면에 넘기지 않은 알림
     notices: Vec<Notice>,
+    /// 아직 화면에 넘기지 않은 기록
+    entries: Vec<Entry>,
     play: Box<dyn Fn(Cue) + Send>,
     wake: Box<dyn Fn() + Send>,
 }
@@ -553,6 +583,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             }
         };
 
+        let at = SystemTime::now();
         let cancel = CancelToken::new();
         let transcriber = self.transcriber.clone();
         let refiner = self.refiner.clone();
@@ -589,7 +620,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             });
         match spawned {
             Ok(_) => {
-                self.state = State::Transcribing { cancel };
+                self.state = State::Transcribing { cancel, at };
                 self.cue(Cue::Pop);
             }
             Err(error) => {
@@ -600,14 +631,22 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
     }
 
     fn on_transcribed(&mut self, result: Result<Outcome, DictationError>) {
-        if !matches!(self.state, State::Transcribing { .. }) {
-            return;
-        }
+        let at = match &self.state {
+            State::Transcribing { at, .. } => *at,
+            _ => return,
+        };
         self.state = State::Idle;
-        let (text, refined) = match result {
-            Ok(Outcome::Text { text, refined }) => (text, refined),
-            Ok(Outcome::RefineFailed(error)) => {
-                self.deliver_refine_failure(error);
+        let (transcript, refined) = match result {
+            Ok(Outcome::Text {
+                transcript,
+                refined,
+            }) => (transcript, refined),
+            Ok(Outcome::RefineFailed {
+                transcript,
+                prompt,
+                error,
+            }) => {
+                self.deliver_refine_failure(at, &transcript, prompt, error);
                 return;
             }
             Err(DictationError::Stt(SttError::Cancelled)) => return,
@@ -617,14 +656,30 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
                 return;
             }
         };
-        let text = text.trim();
-        if text.is_empty() {
-            // 클립보드는 건드리지 않습니다.
+        let transcript = transcript.trim();
+        if transcript.is_empty() {
+            // 클립보드는 건드리지 않고 기록도 남기지 않습니다.
             tracing::info!("dictation produced no text");
             self.fail(Notice::Empty);
             return;
         }
-        match self.paste.deliver(text) {
+        let (text, refine) = match refined {
+            Some(RefinedText { text, prompt }) => {
+                let text = text.trim().to_owned();
+                (text.clone(), Refinement::Done { text, prompt })
+            }
+            None => (transcript.to_owned(), Refinement::None),
+        };
+        let refined = !refine.is_none();
+        // 클립보드에 넣지 못해도 기록에서 다시 복사할 수 있게 먼저 남깁니다.
+        self.record(at, transcript, refine);
+        if text.is_empty() {
+            // 다듬은 글이 비었습니다. 클립보드는 건드리지 않습니다.
+            tracing::info!("refinement produced no text");
+            self.fail(Notice::Empty);
+            return;
+        }
+        match self.paste.deliver(&text) {
             Ok(()) => {
                 tracing::info!(
                     chars = text.chars().count(),
@@ -641,11 +696,33 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         }
     }
 
-    /// 다듬지 못했습니다: 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다.
-    /// 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
-    fn deliver_refine_failure(&mut self, error: RefineError) {
+    /// 받아쓰기 기록을 남깁니다. 원문이 비어 있으면 남기지 않습니다.
+    fn record(&mut self, at: SystemTime, transcript: &str, refine: Refinement) {
+        let transcript = transcript.trim();
+        if !transcript.is_empty() {
+            self.entries.push(Entry::new(at, transcript, refine));
+        }
+    }
+
+    /// 다듬지 못했습니다: 받아쓴 원문은 기록에만 남기고, 클립보드에는 원문 대신 실패 원인을 알리는 글을
+    /// 넣습니다. 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
+    fn deliver_refine_failure(
+        &mut self,
+        at: SystemTime,
+        transcript: &str,
+        prompt: String,
+        error: RefineError,
+    ) {
         tracing::warn!("dictation refinement failed: {error}");
         let reason = error_text::refine(&error, self.refiner.paths(), &self.settings.postprocess);
+        self.record(
+            at,
+            transcript,
+            Refinement::Failed {
+                prompt,
+                reason: reason.clone(),
+            },
+        );
         let notice = t!("dictation.refine_failed_clipboard", message = reason);
         match self.paste.deliver(&notice) {
             Ok(()) => self.fail(Notice::RefineFailed(error)),
@@ -734,9 +811,11 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         };
         let changed = {
             let mut published = lock(&self.published);
-            let changed = published.state != state || !self.notices.is_empty();
+            let changed =
+                published.state != state || !self.notices.is_empty() || !self.entries.is_empty();
             published.state = state;
             published.notices.append(&mut self.notices);
+            published.entries.append(&mut self.entries);
             changed
         };
         if changed {
@@ -745,7 +824,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
     }
 
     fn finish(&mut self) {
-        if let State::Transcribing { cancel } = &self.state {
+        if let State::Transcribing { cancel, .. } = &self.state {
             cancel.cancel();
         }
         self.state = State::Idle;
@@ -757,32 +836,44 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
 fn refine(
     refiner: &SharedRefiner,
     post: &PostProcessConfig,
-    text: String,
+    transcript: String,
     cancel: &CancelToken,
 ) -> Outcome {
-    if !post.enabled || text.trim().is_empty() {
+    if !post.enabled || transcript.trim().is_empty() {
         return Outcome::Text {
-            text,
-            refined: false,
+            transcript,
+            refined: None,
         };
     }
-    match refiner.lock().refine(post, text.trim(), cancel) {
+    // 기록에 남길 프롬프트 이름 (다듬기가 고르는 것과 같은 규칙)
+    let prompt = post
+        .active_prompt()
+        .map(|prompt| prompt.name.trim().to_owned())
+        .unwrap_or_default();
+    match refiner.lock().refine(post, transcript.trim(), cancel) {
         Ok(refined) => {
             tracing::info!(
                 seconds = refined.elapsed.as_secs_f32(),
                 "dictation text refined"
             );
             Outcome::Text {
-                text: refined.text,
-                refined: true,
+                transcript,
+                refined: Some(RefinedText {
+                    text: refined.text,
+                    prompt,
+                }),
             }
         }
         // 앱을 끝내느라 취소했습니다. 받아쓰기 스레드는 이 결과를 버립니다.
         Err(error) if error.is_cancelled() => Outcome::Text {
-            text,
-            refined: false,
+            transcript,
+            refined: None,
         },
-        Err(error) => Outcome::RefineFailed(error),
+        Err(error) => Outcome::RefineFailed {
+            transcript,
+            prompt,
+            error,
+        },
     }
 }
 
@@ -883,6 +974,7 @@ mod tests {
         clipboard: FakeClipboard,
         cues: Arc<Mutex<Vec<Cue>>>,
         notices: Vec<Notice>,
+        entries: Vec<Entry>,
     }
 
     impl Harness {
@@ -912,6 +1004,7 @@ mod tests {
                 clipboard,
                 cues,
                 notices: Vec::new(),
+                entries: Vec::new(),
             }
         }
 
@@ -925,6 +1018,8 @@ mod tests {
             loop {
                 let notices = self.dictation.take_notices();
                 self.notices.extend(notices);
+                let entries = self.dictation.take_entries();
+                self.entries.extend(entries);
                 if done(self) {
                     return;
                 }
@@ -964,6 +1059,10 @@ mod tests {
             "앞뒤 공백은 지움"
         );
         assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(h.entries.len(), 1, "받아쓴 글을 기록에 남김");
+        assert_eq!(h.entries[0].transcript, "안녕하세요");
+        assert_eq!(h.entries[0].refine, Refinement::None);
+        assert!(h.entries[0].time > 0);
 
         h.send(HotkeyEvent::Paste);
         h.wait_until("원래 내용으로 되돌림", |h| {
@@ -972,6 +1071,7 @@ mod tests {
         h.wait_until("기다리기 끝", |h| {
             h.dictation.state() == DictationState::Idle
         });
+        assert_eq!(h.entries.len(), 1, "붙여넣어도 기록은 그대로");
     }
 
     #[test]
@@ -984,6 +1084,7 @@ mod tests {
         assert_eq!(h.clipboard.content(), ["원래 내용"]);
         assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
         assert_eq!(h.dictation.state(), DictationState::Idle);
+        assert!(h.entries.is_empty(), "인식된 말이 없으면 기록하지 않음");
     }
 
     #[test]
@@ -1069,6 +1170,7 @@ mod tests {
             [Notice::RecordFailed(AudioError::NoInputDevice)]
         ));
         assert_eq!(h.cues(), [Cue::Fail]);
+        assert!(h.entries.is_empty(), "녹음에 실패하면 기록하지 않음");
 
         // 누르는 동안 모드는 짧게 눌렀으면 알리지 않습니다.
         h.notices.clear();
@@ -1105,6 +1207,18 @@ mod tests {
         );
         assert_eq!(h.clipboard.content(), ["text:[mock] 안녕 하세요"]);
         assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(
+            h.entries[0].transcript, "안녕 하세요",
+            "다듬기 전 원문도 남김"
+        );
+        assert_eq!(
+            h.entries[0].refine,
+            Refinement::Done {
+                text: "[mock] 안녕 하세요".into(),
+                prompt: "기본 다듬기".into(),
+            }
+        );
     }
 
     #[test]
@@ -1139,6 +1253,17 @@ mod tests {
         assert!(!copied.contains("고양이"), "원문은 넣지 않습니다: {copied}");
         assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Fail]);
 
+        // 원문은 클립보드 대신 기록에 남고, 다듬기에 실패했다는 표시가 붙습니다.
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0].transcript, "고양이가 좋아요");
+        match &h.entries[0].refine {
+            Refinement::Failed { prompt, reason } => {
+                assert_eq!(prompt, "기본 다듬기");
+                assert!(reason.contains("401"), "실패 원인을 남깁니다: {reason}");
+            }
+            other => panic!("다듬기 실패로 남아야 합니다: {other:?}"),
+        }
+
         // 붙여넣으면 받아쓴 글처럼 원래 클립보드 내용으로 되돌립니다.
         h.send(HotkeyEvent::Paste);
         h.wait_until("원래 내용으로 되돌림", |h| {
@@ -1154,5 +1279,23 @@ mod tests {
         h.wait_until("인식 결과", |h| !h.notices.is_empty());
         assert!(matches!(h.notices.as_slice(), [Notice::Empty]));
         assert_eq!(h.clipboard.content(), ["원래 내용"]);
+        assert!(h.entries.is_empty());
+    }
+
+    #[test]
+    fn clipboard_failure_still_keeps_the_entry() {
+        let mut h = Harness::new("복사 못 한 글", Mic::Speech);
+        h.clipboard.0.lock().unwrap().fail_set_after_clear = true;
+        h.send(HotkeyEvent::Toggle);
+        h.send(HotkeyEvent::Toggle);
+        h.wait_until("복사 실패", |h| !h.notices.is_empty());
+        assert!(
+            matches!(h.notices.as_slice(), [Notice::ClipboardFailed(_)]),
+            "{:?}",
+            h.notices
+        );
+        // 기록에서 다시 복사할 수 있게 남깁니다.
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0].transcript, "복사 못 한 글");
     }
 }

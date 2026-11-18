@@ -1,6 +1,7 @@
 //! 화면(페이지).
 
 pub mod about;
+pub mod history;
 pub mod models;
 pub mod prompts;
 pub mod settings;
@@ -15,6 +16,7 @@ use crate::widgets::text;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Test,
+    History,
     Models,
     Prompts,
     Settings,
@@ -22,8 +24,9 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Test,
+        Self::History,
         Self::Models,
         Self::Prompts,
         Self::Settings,
@@ -33,6 +36,7 @@ impl Page {
     pub fn title(self) -> String {
         match self {
             Self::Test => t!("nav.test"),
+            Self::History => t!("nav.history"),
             Self::Models => t!("nav.models"),
             Self::Prompts => t!("nav.prompts"),
             Self::Settings => t!("nav.settings"),
@@ -44,6 +48,7 @@ impl Page {
     pub fn icon(self) -> Icon {
         match self {
             Self::Test => Icon::FlaskConical,
+            Self::History => Icon::History,
             Self::Models => Icon::Boxes,
             Self::Prompts => Icon::MessageSquareText,
             Self::Settings => Icon::Settings,
