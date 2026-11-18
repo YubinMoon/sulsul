@@ -50,6 +50,8 @@ const WAITING_POLL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, PartialEq)]
 pub struct DictationSettings {
     pub input_device: String,
+    /// 녹음이 끝나면 작은 말소리를 키울지
+    pub auto_gain: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
     pub stt: SttConfig,
@@ -61,6 +63,7 @@ impl DictationSettings {
     pub fn from_config(config: &Config) -> Self {
         Self {
             input_device: config.audio.input_device.clone(),
+            auto_gain: config.audio.auto_gain,
             max_record_seconds: config.audio.max_record_seconds,
             feedback_sounds: config.audio.feedback_sounds,
             stt: config.stt.clone(),
@@ -530,14 +533,19 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         let cancel = CancelToken::new();
         let transcriber = self.transcriber.clone();
         let refiner = self.refiner.clone();
+        let auto_gain = self.settings.auto_gain;
         let stt = self.settings.stt.clone();
         let post = self.settings.postprocess.clone();
         let tx = self.tx.clone();
         let job_cancel = cancel.clone();
+        let mut clip = clip;
         let spawned = std::thread::Builder::new()
             .name("sulsul-dictation-stt".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    if auto_gain {
+                        clip.auto_gain();
+                    }
                     let job = TranscribeJob {
                         stt: &stt,
                         engine_id: &stt.engine,
@@ -806,6 +814,7 @@ mod tests {
         table.insert("text".into(), Value::String(text.to_owned()));
         DictationSettings {
             input_device: String::new(),
+            auto_gain: true,
             max_record_seconds: 60,
             feedback_sounds: true,
             stt,

@@ -123,6 +123,8 @@ pub enum HotkeyMode {
 pub struct AudioConfig {
     /// 입력 장치 ID(권장) 또는 이름. 비어 있으면 시스템 기본 장치
     pub input_device: String,
+    /// 녹음이 끝나면 작은 말소리를 알맞은 크기로 키움
+    pub auto_gain: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
 }
@@ -131,6 +133,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             input_device: String::new(),
+            auto_gain: true,
             max_record_seconds: 120,
             feedback_sounds: true,
         }

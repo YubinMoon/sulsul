@@ -52,6 +52,8 @@ struct Active {
     meter: MeterState,
     max: Duration,
     started: Instant,
+    /// 녹음을 시작할 때의 자동 음량 조절 설정
+    auto_gain: bool,
 }
 
 enum Problem {
@@ -105,6 +107,7 @@ impl RecordTest {
                     meter: MeterState::default(),
                     max,
                     started: Instant::now(),
+                    auto_gain: config.audio.auto_gain,
                 });
             }
             Err(error) => {
@@ -121,7 +124,11 @@ impl RecordTest {
         let device_name = active.recording.device_name().to_owned();
         match active.recording.stop() {
             Ok(clip) if clip.is_empty() => self.problem = Some(Problem::Empty),
-            Ok(clip) => {
+            Ok(mut clip) => {
+                // 받아쓰기 단축키와 같은 소리로 테스트하도록 똑같이 키웁니다.
+                if active.auto_gain {
+                    clip.auto_gain();
+                }
                 tracing::info!(
                     seconds = clip.duration().as_secs_f64(),
                     sample_rate = clip.sample_rate,

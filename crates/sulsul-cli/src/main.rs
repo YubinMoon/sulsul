@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use sulsul_core::audio::{self, Recording, RecordingOptions};
+use sulsul_core::config::AudioConfig;
 use sulsul_core::stt::WHISPER_SAMPLE_RATE;
 use sulsul_core::{AppPaths, Config, ConfigStore};
 
@@ -96,7 +97,8 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
         bail!("녹음 길이는 0보다 커야 합니다");
     }
     let duration = Duration::from_secs_f64(seconds);
-    let device = device.unwrap_or_else(configured_device);
+    let audio_config = configured_audio();
+    let device = device.unwrap_or(audio_config.input_device);
 
     let recording = Recording::start(&RecordingOptions {
         device,
@@ -127,7 +129,21 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
     }
     println!();
 
-    let clip = recording.stop()?;
+    let mut clip = recording.stop()?;
+    if audio_config.auto_gain {
+        let gain = clip.auto_gain();
+        if gain.applied() {
+            println!(
+                "자동 음량 조절: +{:.1} dB (말소리 {:.1} dBFS, 소음 {:.1} dBFS)",
+                gain.gain_db, gain.speech_dbfs, gain.noise_dbfs
+            );
+        } else {
+            println!(
+                "자동 음량 조절: 키우지 않음 (말소리 {:.1} dBFS, 소음 {:.1} dBFS)",
+                gain.speech_dbfs, gain.noise_dbfs
+            );
+        }
+    }
     let clip = if native_rate {
         clip
     } else {
@@ -151,11 +167,11 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
     Ok(())
 }
 
-/// 설정 파일이 있으면 그 입력 장치, 없으면 기본 장치(빈 문자열)
-fn configured_device() -> String {
+/// 설정 파일이 있으면 그 오디오 설정, 없으면 기본값
+fn configured_audio() -> AudioConfig {
     match AppPaths::resolve() {
-        Ok(paths) => load_config(&paths).audio.input_device,
-        Err(_) => String::new(),
+        Ok(paths) => load_config(&paths).audio,
+        Err(_) => AudioConfig::default(),
     }
 }
 

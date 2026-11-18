@@ -2,15 +2,19 @@
 //!
 //! 녹음은 장치의 기본 형식(샘플레이트·채널)으로 받아 모노로 합친 뒤 [`AudioClip`]으로
 //! 돌려줍니다. 엔진이 원하는 샘플레이트로는 [`AudioClip::resampled`]로 바꿉니다.
+//! 말소리가 작으면 [`AudioClip::auto_gain`]으로 키웁니다.
 
 mod clip;
 mod device;
+mod gain;
+mod level;
 mod recorder;
 mod resample;
 mod wav;
 
 pub use clip::AudioClip;
 pub use device::{InputDevice, input_devices};
+pub use gain::AutoGain;
 pub use recorder::{Recording, RecordingOptions};
 pub use resample::resample;
 pub use wav::{encode_wav_bytes, read_wav, test_audio_clip, write_wav};
