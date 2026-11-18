@@ -1,14 +1,14 @@
 //! 기록 화면: 단축키로 받아쓴 글을 최근 것부터 보여 줍니다.
 //!
-//! 기록마다 카드 하나를 두고, 받아쓴 원문과 (다듬었으면) 다듬은 글을 따로 보여 주며 각각 복사할 수 있습니다.
+//! 기록마다 펼침 카드 하나를 둡니다. 접힌 카드는 받아쓴 시각과 글 한 줄(다듬은 글, 없으면 받아쓴 원문)만
+//! 보여 주고 넘치는 부분은 말줄임표로 잘라, 여러 기록을 한눈에 볼 수 있게 합니다. 카드를 누르면 펼쳐져
+//! 다듬은 글과 받아쓴 원문을 모두 보여 주고, 글마다 복사 버튼이, 맨 아래에 기록을 지우는 버튼이 나옵니다.
 //! 복사는 클립보드에 그대로 넣습니다(단축키 받아쓰기처럼 붙여넣은 뒤 원래 내용으로 되돌리지 않음).
-//! 긴 글은 몇 줄만 보여 주고 펼치기 버튼으로 전부 봅니다. 기록이 많으면 [`PAGE_SIZE`]개씩 더 보여 줍니다.
+//! 기록이 많으면 [`PAGE_SIZE`]개씩 더 보여 줍니다.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
-use egui::text::LayoutJob;
-use egui::{Galley, Label, TextStyle, Ui};
+use egui::{Label, RichText, TextStyle, Ui};
 use rust_i18n::t;
 
 use super::header;
@@ -18,38 +18,32 @@ use crate::icons::Icon;
 use crate::session::PageContext;
 use crate::theme::Palette;
 use crate::widgets::confirm::{Answer, Confirm};
+use crate::widgets::expander::Expander;
 use crate::widgets::row;
 use crate::widgets::{card, controls, text};
 
 /// 한 번에 보여 주는 기록 수 ("더 보기"를 누를 때마다 이만큼 늘림)
 const PAGE_SIZE: usize = 50;
-/// 접힌 글이 보여 주는 줄 수
-const PREVIEW_ROWS: usize = 4;
 /// 카드 사이 간격
-const CARD_GAP: f32 = 8.0;
+const CARD_GAP: f32 = 4.0;
+/// 펼친 카드에서 글 사이 간격
+const BODY_SPACING: f32 = 6.0;
 
 #[derive(Default)]
 pub struct HistoryPage {
-    /// 전부 펼쳐 둔 글 (기록 번호, 어느 글인지)
-    expanded: HashSet<(u64, Part)>,
+    /// 펼쳐 둔 기록의 번호
+    expanded: HashSet<u64>,
     /// "더 보기"로 늘린 보여 줄 기록 수 (최소 [`PAGE_SIZE`])
     shown: usize,
     /// 전체 지우기를 묻는 중
     confirm_clear: bool,
 }
 
-/// 기록 안의 글 하나
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Part {
-    Transcript,
-    Refined,
-}
-
 /// 카드에서 누른 동작. 목록을 다 그린 뒤에 처리합니다.
 enum Action {
     Copy(String),
     Remove(u64),
-    Toggle(u64, Part),
+    Toggle(u64),
 }
 
 /// 시각 표시에 쓰는 오늘·어제 날짜 (프레임마다 한 번 구함)
@@ -103,7 +97,8 @@ impl HistoryPage {
         let shown = self.shown.max(PAGE_SIZE).min(entries.len());
         let mut action = None;
         for entry in entries.iter().rev().take(shown) {
-            if let Some(clicked) = self.entry_card(ui, entry, &today) {
+            let open = self.expanded.contains(&entry.id);
+            if let Some(clicked) = entry_card(ui, entry, open, &today) {
                 action = Some(clicked);
             }
             ui.add_space(CARD_GAP);
@@ -127,120 +122,14 @@ impl HistoryPage {
             }
             Some(Action::Remove(id)) => {
                 if cx.shared.history.remove(id) {
-                    self.expanded.retain(|(entry, _)| *entry != id);
+                    self.expanded.remove(&id);
                 }
             }
-            Some(Action::Toggle(id, part)) => toggle(&mut self.expanded, (id, part)),
+            Some(Action::Toggle(id)) => toggle(&mut self.expanded, id),
             None => {}
         }
 
         self.confirm_ui(ui, cx);
-    }
-
-    /// 기록 카드 하나를 그리고, 누른 동작을 돌려줍니다.
-    fn entry_card(&self, ui: &mut Ui, entry: &Entry, today: &Today) -> Option<Action> {
-        let mut action = None;
-        ui.push_id(("history_entry", entry.id), |ui| {
-            card::card(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
-                match entry.refined_text() {
-                    // 다듬은 글과 원문을 따로 보여 주고 각각 복사합니다.
-                    Some(refined) => {
-                        row::with_actions(
-                            ui,
-                            true,
-                            |ui| remove_button(ui, entry.id, &mut action),
-                            |ui| entry_title(ui, entry, today),
-                        );
-                        let label = match entry.refine.prompt() {
-                            Some(prompt) => t!("history.refined_with", prompt = prompt),
-                            None => t!("history.refined"),
-                        };
-                        self.text_block(ui, entry.id, Part::Refined, refined, &mut action, |ui| {
-                            ui.label(text::caption(ui, label));
-                        });
-                        row::separator(ui);
-                        self.text_block(
-                            ui,
-                            entry.id,
-                            Part::Transcript,
-                            &entry.transcript,
-                            &mut action,
-                            |ui| {
-                                ui.label(text::caption(ui, t!("history.transcript")));
-                            },
-                        );
-                    }
-                    // 글이 하나뿐이면 머리 줄에 복사 버튼을 함께 둡니다.
-                    None => {
-                        let galley =
-                            self.body_galley(ui, entry.id, Part::Transcript, &entry.transcript);
-                        row::with_actions(
-                            ui,
-                            true,
-                            |ui| {
-                                remove_button(ui, entry.id, &mut action);
-                                text_actions(
-                                    ui,
-                                    entry.id,
-                                    Part::Transcript,
-                                    &entry.transcript,
-                                    &galley,
-                                    self.is_expanded(entry.id, Part::Transcript),
-                                    &mut action,
-                                );
-                            },
-                            |ui| entry_title(ui, entry, today),
-                        );
-                        ui.add(Label::new(galley).selectable(true));
-                    }
-                }
-            });
-        });
-        action
-    }
-
-    /// 이름 줄(복사·펼치기 버튼 포함)과 글 하나
-    fn text_block(
-        &self,
-        ui: &mut Ui,
-        id: u64,
-        part: Part,
-        body: &str,
-        action: &mut Option<Action>,
-        add_label: impl FnOnce(&mut Ui),
-    ) {
-        let galley = self.body_galley(ui, id, part, body);
-        let expanded = self.is_expanded(id, part);
-        row::with_actions(
-            ui,
-            true,
-            |ui| text_actions(ui, id, part, body, &galley, expanded, action),
-            add_label,
-        );
-        ui.add(Label::new(galley).selectable(true));
-    }
-
-    fn is_expanded(&self, id: u64, part: Part) -> bool {
-        self.expanded.contains(&(id, part))
-    }
-
-    /// 글을 지금 너비에 맞춰 줄을 바꿔 둡니다. 접혀 있으면 [`PREVIEW_ROWS`]줄까지만 둡니다.
-    fn body_galley(&self, ui: &Ui, id: u64, part: Part, body: &str) -> Arc<Galley> {
-        let palette = Palette::of(ui);
-        // 빈 글(다듬은 결과가 비었을 때)도 자리를 차지하게 줄표를 둡니다.
-        let (body, color) = if body.trim().is_empty() {
-            ("–", palette.text_faint)
-        } else {
-            (body, palette.text)
-        };
-        let font = TextStyle::Body.resolve(ui.style());
-        let mut job = LayoutJob::simple(body.to_owned(), font, color, ui.available_width());
-        if !self.is_expanded(id, part) {
-            job.wrap.max_rows = PREVIEW_ROWS;
-            job.wrap.overflow_character = Some('…');
-        }
-        ui.fonts_mut(|fonts| fonts.layout_job(job))
     }
 
     /// 기록을 모두 지울지 묻는 창
@@ -271,11 +160,53 @@ impl HistoryPage {
     }
 }
 
-/// 카드 머리 줄 왼쪽: 받아쓴 시각과 (실패했으면) 다듬기 실패 표시
-fn entry_title(ui: &mut Ui, entry: &Entry, today: &Today) {
+/// 기록 카드 하나를 그리고, 누른 동작을 돌려줍니다.
+///
+/// 접혀 있으면 머리 줄에 글 한 줄을 함께 보여 주고, 펼치면 머리 줄에는 시각만 두고 아래에 글을 모두 보여 줍니다.
+/// 지우기 버튼은 펼친 내용 맨 아래에 둡니다. 머리 줄에 두면 펼친 뒤 펼치기 버튼이 옆으로 밀려, 접으려고
+/// 같은 자리를 다시 누르면 기록이 지워지기 때문입니다.
+fn entry_card(ui: &mut Ui, entry: &Entry, open: bool, today: &Today) -> Option<Action> {
+    let time = time_label(entry.time, today);
+    let summary = text::preview_line(summary_text(entry));
+    // 화면 낭독기가 읽을 카드 이름
+    let label = format!("{time} {summary}");
+    let mut remove = false;
+    let mut copy = None;
+    let shown = Expander::new(&label, open).show(
+        ui,
+        ("history_entry", entry.id),
+        |ui| entry_head(ui, entry, &time, (!open).then_some(summary.as_str())),
+        |_| {},
+        |ui| entry_body(ui, entry, &mut copy, &mut remove),
+    );
+    if remove {
+        Some(Action::Remove(entry.id))
+    } else if let Some(text) = copy {
+        Some(Action::Copy(text))
+    } else if shown.toggled {
+        Some(Action::Toggle(entry.id))
+    } else {
+        None
+    }
+}
+
+/// 접힌 카드에 한 줄로 보여 줄 글: 다듬은 글, 다듬지 않았거나 다듬은 글이 비었으면 받아쓴 원문
+fn summary_text(entry: &Entry) -> &str {
+    entry
+        .refined_text()
+        .filter(|refined| !refined.trim().is_empty())
+        .unwrap_or(&entry.transcript)
+}
+
+/// 카드 머리 줄 왼쪽: 받아쓴 시각, (실패했으면) 다듬기 실패 표시, (접혀 있으면) 글 한 줄
+fn entry_head(ui: &mut Ui, entry: &Entry, time: &str, summary: Option<&str>) {
     let palette = Palette::of(ui);
-    row::title_line(ui, |ui| {
-        ui.label(text::strong(time_label(entry.time, today)));
+    // 줄 높이를 글자 높이에 맞춰, 머리 줄의 펼치기 버튼과 글의 세로 가운데가 맞게 합니다
+    // (`row::title_line`과 같은 방법. 한 줄로 자르려고 줄을 바꾸지 않는 칸을 씁니다).
+    ui.spacing_mut().interact_size.y = ui.text_style_height(&TextStyle::Body);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(text::caption(ui, time));
         if let Refinement::Failed { reason, .. } = &entry.refine {
             let badge = controls::tone_badge(
                 ui,
@@ -287,45 +218,71 @@ fn entry_title(ui: &mut Ui, entry: &Entry, today: &Today) {
                 badge.on_hover_text(reason.as_str());
             }
         }
+        match summary {
+            Some("") => {
+                ui.label(RichText::new("–").color(palette.text_faint));
+            }
+            // 남은 너비에 한 줄로 넣고 넘치는 부분은 말줄임표로 자릅니다.
+            Some(line) => {
+                ui.add(Label::new(line).truncate());
+            }
+            None => {}
+        }
     });
 }
 
-fn remove_button(ui: &mut Ui, id: u64, action: &mut Option<Action>) {
-    if controls::icon_button(ui, Icon::Trash2, &t!("history.remove")).clicked() {
-        *action = Some(Action::Remove(id));
-    }
-}
-
-/// 글 하나의 복사 버튼과 (길어서 접혔거나 펼쳐 둔 글이면) 펼치기·접기 버튼.
-/// 오른쪽에서 왼쪽으로 놓이므로 복사 버튼이 오른쪽에 옵니다.
-fn text_actions(
-    ui: &mut Ui,
-    id: u64,
-    part: Part,
-    body: &str,
-    galley: &Galley,
-    expanded: bool,
-    action: &mut Option<Action>,
-) {
-    if controls::icon_button(ui, Icon::Copy, &t!("history.copy")).clicked() {
-        *action = Some(Action::Copy(body.to_owned()));
-    }
-    if expanded || galley.elided {
-        let (icon, label) = if expanded {
-            (Icon::ChevronUp, t!("common.collapse"))
-        } else {
-            (Icon::ChevronDown, t!("common.expand"))
+/// 펼친 카드의 내용: 다듬은 글(다듬었으면)과 받아쓴 원문을 글마다 복사 버튼과 함께 모두 보여 주고,
+/// 맨 아래에 기록을 지우는 버튼을 둡니다.
+fn entry_body(ui: &mut Ui, entry: &Entry, copy: &mut Option<String>, remove: &mut bool) {
+    ui.spacing_mut().item_spacing.y = BODY_SPACING;
+    if let Some(refined) = entry.refined_text() {
+        let label = match entry.refine.prompt() {
+            Some(prompt) => t!("history.refined_with", prompt = prompt),
+            None => t!("history.refined"),
         };
-        if controls::icon_button(ui, icon, &label).clicked() {
-            *action = Some(Action::Toggle(id, part));
-        }
+        text_block(ui, &label, refined, copy);
+        row::separator(ui);
+    }
+    text_block(ui, &t!("history.transcript"), &entry.transcript, copy);
+    ui.add_space(BODY_SPACING);
+    row::with_actions(
+        ui,
+        true,
+        |ui| {
+            let label = t!("history.remove");
+            *remove = controls::icon_text_button(ui, Icon::Trash2, label).clicked();
+        },
+        |_| {},
+    );
+}
+
+/// 이름 줄(복사 버튼 포함)과 글 전체
+fn text_block(ui: &mut Ui, label: &str, body: &str, copy: &mut Option<String>) {
+    let palette = Palette::of(ui);
+    row::with_actions(
+        ui,
+        true,
+        |ui| {
+            if controls::icon_button(ui, Icon::Copy, &t!("history.copy")).clicked() {
+                *copy = Some(body.to_owned());
+            }
+        },
+        |ui| {
+            ui.label(text::caption(ui, label));
+        },
+    );
+    // 빈 글(다듬은 결과가 비었을 때)도 자리를 차지하게 줄표를 둡니다.
+    if body.trim().is_empty() {
+        ui.label(RichText::new("–").color(palette.text_faint));
+    } else {
+        ui.add(Label::new(body).selectable(true).wrap());
     }
 }
 
-/// 펼쳐 둔 글이면 접고, 접혀 있으면 펼칩니다.
-fn toggle(expanded: &mut HashSet<(u64, Part)>, key: (u64, Part)) {
-    if !expanded.remove(&key) {
-        expanded.insert(key);
+/// 펼쳐 둔 기록이면 접고, 접혀 있으면 펼칩니다.
+fn toggle(expanded: &mut HashSet<u64>, id: u64) {
+    if !expanded.remove(&id) {
+        expanded.insert(id);
     }
 }
 
@@ -362,4 +319,48 @@ fn time_label(millis: i64, today: &Today) -> String {
         )
     }
     .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::SystemTime;
+
+    use super::*;
+
+    fn entry(transcript: &str, refine: Refinement) -> Entry {
+        Entry::new(SystemTime::now(), transcript, refine)
+    }
+
+    #[test]
+    fn summary_shows_the_refined_text_or_else_the_transcript() {
+        let done = |text: &str| Refinement::Done {
+            text: text.into(),
+            prompt: "기본 다듬기".into(),
+        };
+        assert_eq!(
+            summary_text(&entry("받아쓴 글", done("다듬은 글"))),
+            "다듬은 글"
+        );
+        assert_eq!(
+            summary_text(&entry("받아쓴 글", Refinement::None)),
+            "받아쓴 글",
+            "다듬지 않았으면 받아쓴 원문을 보여 줍니다"
+        );
+        assert_eq!(
+            summary_text(&entry(
+                "받아쓴 글",
+                Refinement::Failed {
+                    prompt: String::new(),
+                    reason: "연결 실패".into(),
+                }
+            )),
+            "받아쓴 글",
+            "다듬기에 실패했으면 받아쓴 원문을 보여 줍니다"
+        );
+        assert_eq!(
+            summary_text(&entry("받아쓴 글", done("  "))),
+            "받아쓴 글",
+            "다듬은 글이 비었으면 받아쓴 원문을 보여 줍니다"
+        );
+    }
 }

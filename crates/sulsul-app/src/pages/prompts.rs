@@ -26,8 +26,6 @@ const CARD_GAP: f32 = 4.0;
 const BODY_GAP: f32 = 12.0;
 /// 지시문 입력 칸의 기본 높이 (줄 수). 글이 길어지면 칸이 따라 늘어납니다.
 const TEXT_ROWS: usize = 10;
-/// 카드 머리 줄에 보일 지시문 미리보기의 최대 글자 수
-const PREVIEW_CHARS: usize = 160;
 /// 카드로 화면을 옮길 때 카드 위에 남기는 여백
 const REVEAL_MARGIN: f32 = 12.0;
 
@@ -150,7 +148,7 @@ impl PromptsPage {
         for (index, prompt) in post.prompts.iter_mut().enumerate() {
             let id = prompt.id.clone();
             let name = prompt_display_name(prompt);
-            let preview = preview_line(&prompt.text);
+            let preview = text::preview_line(&prompt.text);
             let in_use = active == Some(index);
             let open = self.expanded.as_ref() == Some(&id);
             // 방금 만든 프롬프트면 이름 칸에 커서를 둡니다.
@@ -344,27 +342,6 @@ pub fn prompt_display_name(prompt: &Prompt) -> String {
     }
 }
 
-/// 지시문을 한 줄 미리보기로 줄입니다: 줄바꿈과 이어진 빈칸을 빈칸 하나로 바꾸고 앞부분만 남깁니다.
-fn preview_line(text: &str) -> String {
-    let mut line = String::new();
-    let mut count = 0;
-    for word in text.split_whitespace() {
-        if count > 0 {
-            line.push(' ');
-            count += 1;
-        }
-        for ch in word.chars() {
-            if count >= PREVIEW_CHARS {
-                line.push('…');
-                return line;
-            }
-            line.push(ch);
-            count += 1;
-        }
-    }
-    line
-}
-
 /// 목록의 다른 프롬프트와 겹치지 않는 새 이름 ("새 프롬프트", "새 프롬프트 2", …)
 fn new_prompt_name(prompts: &[Prompt]) -> String {
     let taken = |name: &str| prompts.iter().any(|prompt| prompt.name.trim() == name);
@@ -505,20 +482,6 @@ mod tests {
             post.active_prompt().map(|p| p.id.as_str()),
             Some(DEFAULT_PROMPT_ID)
         );
-    }
-
-    #[test]
-    fn preview_is_a_single_shortened_line() {
-        assert_eq!(
-            preview_line("  첫 줄\n\n둘째   줄\t끝 "),
-            "첫 줄 둘째 줄 끝"
-        );
-        assert_eq!(preview_line(" \n "), "");
-
-        let long = "가".repeat(PREVIEW_CHARS + 50);
-        let preview = preview_line(&long);
-        assert_eq!(preview.chars().count(), PREVIEW_CHARS + 1);
-        assert!(preview.ends_with('…'));
     }
 
     #[test]
