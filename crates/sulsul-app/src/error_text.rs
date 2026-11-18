@@ -25,6 +25,7 @@ use crate::pages::models::llm_issue_text;
 pub fn audio(error: &AudioError) -> String {
     match error {
         AudioError::NoInputDevice => t!("error.audio.no_input_device").into_owned(),
+        AudioError::NoOutputDevice => t!("error.audio.no_output_device").into_owned(),
         AudioError::DeviceNotFound(device) => {
             t!("error.audio.device_not_found", device = device).into_owned()
         }

@@ -238,15 +238,12 @@ impl SttCard {
     }
 
     fn open_wav(&mut self, cx: &mut PageContext<'_>) {
-        let mut dialog = rfd::FileDialog::new()
+        let picked = rfd::FileDialog::new()
             .set_parent(cx.frame)
             .set_title(t!("test.stt.open_dialog_title"))
-            .add_filter(t!("common.wav_files"), &["wav"]);
-        let recordings = cx.shared.paths.recordings_dir();
-        if recordings.is_dir() {
-            dialog = dialog.set_directory(&recordings);
-        }
-        let Some(path) = dialog.pick_file() else {
+            .add_filter(t!("common.wav_files"), &["wav"])
+            .pick_file();
+        let Some(path) = picked else {
             return;
         };
         match audio::read_wav(&path) {

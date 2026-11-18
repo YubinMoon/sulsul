@@ -396,7 +396,8 @@ impl eframe::App for SulsulApp {
             ctx.request_repaint_after(remaining + Duration::from_millis(10));
         }
         self.shared.history.poll();
-        self.test.tick(&mut self.shared, ctx);
+        self.test
+            .tick(&mut self.shared, ctx, self.page == Page::Test);
         self.models.tick(&mut self.shared, ctx);
         self.desktop.tick(
             ctx,

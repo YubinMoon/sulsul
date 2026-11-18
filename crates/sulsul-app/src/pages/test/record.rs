@@ -6,17 +6,18 @@
 //! 키우기 전의 녹음에서 말소리를 찾고, 녹음 전체로 음량을 맞춘 뒤, 말소리 바깥을 잘라 냅니다.
 //! 단축키 받아쓰기는 말소리가 없으면 받아쓰지 않지만, 여기서는 무엇이 녹음됐는지 볼 수 있게
 //! 녹음을 남기고 경고만 보여 줍니다.
+//!
+//! 녹음은 파일로 저장하지 않고 메모리에만 둡니다. 가장 최근 녹음 하나만 [녹음 듣기]로 기본 출력 장치에서
+//! 들어 볼 수 있습니다. 들려주는 것은 받아쓰기로 넘기는 정리된 녹음이고, 새로 녹음을 시작하면 이전 녹음은 버립니다.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use egui::{Align, Align2, Layout, Response, RichText, Role, Sense, Stroke, Ui, WidgetInfo, vec2};
 use rust_i18n::t;
-use sulsul_core::audio::{self, AudioClip, AudioError, AutoGain, Recording, RecordingOptions};
+use sulsul_core::audio::{AudioClip, AudioError, AutoGain, Playback, Recording, RecordingOptions};
 use sulsul_core::config::{Config, MAX_RECORD_SECONDS};
-use sulsul_core::stt::WHISPER_SAMPLE_RATE;
 
 use super::Gate;
 use crate::error_text;
@@ -25,7 +26,6 @@ use crate::i18n::microphone_settings_hint;
 use crate::icons::{self, Icon};
 use crate::pages::Page;
 use crate::session::{PageContext, Shared};
-use crate::system;
 use crate::theme::{self, Palette, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card::Section;
@@ -43,10 +43,14 @@ pub struct RecordCard {
     /// 녹음을 정리하는 작업 스레드의 결과
     cleaning: Option<Receiver<Recorded>>,
     problem: Option<Problem>,
-    /// 마지막으로 정리를 마친 녹음
+    /// 마지막으로 정리를 마친 녹음. 새로 녹음을 시작하면 버립니다.
     recorded: Option<Arc<Recorded>>,
     /// 새 녹음이 생겼는데 아직 [`Self::take_new`]로 넘기지 않았는지
     fresh: bool,
+    /// [`Self::recorded`]를 들려주는 중인 재생. 버리면 재생이 멈춥니다.
+    playback: Option<Playback>,
+    /// 마지막 재생이 실패한 이유
+    playback_error: Option<AudioError>,
 }
 
 struct Active {
@@ -66,9 +70,9 @@ enum Problem {
 
 /// 정리를 마친 녹음
 pub struct Recorded {
-    /// 받아쓰기에 넘기는 소리 (음량을 맞추고 앞뒤를 자른 것)
+    /// 받아쓰기에 넘기고 [녹음 듣기]로 들려주는 소리 (음량을 맞추고 앞뒤를 자른 것).
+    /// 말소리를 찾지 못했으면 자르지 않은 녹음입니다.
     pub clip: Arc<AudioClip>,
-    pub device_name: String,
     /// 최대 녹음 길이에 닿아 자동으로 끝났는지
     pub auto_stopped: bool,
     /// 정리하기 전 녹음 길이
@@ -109,9 +113,11 @@ impl RecordCard {
         }
     }
 
-    /// 매 프레임 부릅니다(화면이 보이지 않아도). 최대 길이에 닿으면 녹음을 끝내고, 정리 결과를 챙깁니다.
-    pub fn tick(&mut self, ctx: &egui::Context) {
+    /// 매 프레임 부릅니다(화면이 보이지 않아도). 최대 길이에 닿으면 녹음을 끝내고, 정리 결과와
+    /// 재생 결과를 챙깁니다. 테스트 화면을 떠나면(`visible`이 아니면) 재생을 멈춥니다.
+    pub fn tick(&mut self, ctx: &egui::Context, visible: bool) {
         self.collect_cleaned();
+        self.collect_playback(visible);
         let Some(active) = &self.active else {
             return;
         };
@@ -147,8 +153,51 @@ impl RecordCard {
         self.cleaning = None;
     }
 
+    /// 재생이 끝났으면 결과를 챙겨 버튼을 되돌립니다. 화면을 떠났으면 재생을 멈춥니다.
+    fn collect_playback(&mut self, visible: bool) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        if !visible {
+            // 버리면 재생 스레드가 스트림을 닫고 끝납니다.
+            self.playback = None;
+            return;
+        }
+        if let Some(outcome) = playback.poll() {
+            // 실패 원문은 재생 스레드가 로그에 남겼습니다.
+            self.playback_error = outcome.err();
+            self.playback = None;
+        }
+    }
+
+    /// 재생 중이면 멈추고, 아니면 가장 최근 녹음을 들려주기 시작합니다.
+    fn toggle_playback(&mut self, ctx: &egui::Context) {
+        self.playback_error = None;
+        if self.playback.take().is_some() {
+            return;
+        }
+        let Some(recorded) = &self.recorded else {
+            return;
+        };
+        let ctx = ctx.clone();
+        // 재생이 끝나면 화면을 다시 그려 버튼을 되돌립니다.
+        match Playback::start(Arc::clone(&recorded.clip), move || ctx.request_repaint()) {
+            Ok(playback) => self.playback = Some(playback),
+            Err(error) => self.playback_error = Some(error),
+        }
+    }
+
+    /// 가장 최근 녹음만 들을 수 있도록, 새로 녹음하기 전에 이전 녹음과 그 재생을 버립니다.
+    fn discard_recording(&mut self) {
+        self.playback = None;
+        self.playback_error = None;
+        self.recorded = None;
+        self.fresh = false;
+    }
+
     fn start(&mut self, config: &Config) {
         self.problem = None;
+        self.discard_recording();
         let max = max_duration(config);
         let options = RecordingOptions {
             device: config.audio.input_device.clone(),
@@ -174,7 +223,6 @@ impl RecordCard {
         let Some(active) = self.active.take() else {
             return;
         };
-        let device_name = active.recording.device_name().to_owned();
         match active.recording.stop() {
             Ok(clip) if clip.is_empty() => self.problem = Some(Problem::Empty),
             Ok(clip) => {
@@ -185,7 +233,6 @@ impl RecordCard {
                 );
                 self.cleaning = Some(spawn_cleanup(ctx.clone(), move || {
                     let mut recorded = clean(clip);
-                    recorded.device_name = device_name;
                     recorded.auto_stopped = auto_stopped;
                     recorded
                 }));
@@ -217,9 +264,9 @@ impl RecordCard {
                 }
             }
 
-            if let Some(recorded) = self.recorded.clone() {
+            if let Some(recorded) = &self.recorded {
                 row::separator(ui);
-                result_ui(ui, cx, &recorded);
+                result_ui(ui, recorded);
             }
 
             row::separator(ui);
@@ -285,8 +332,34 @@ impl RecordCard {
                     t!("test.record.level_idle")
                 };
                 ui.label(text::caption(ui, readout));
+                ui.add_space(8.0);
+                self.listen_ui(ui);
             });
         });
+    }
+
+    /// 방금 녹음 듣기 버튼. 재생 중에는 같은 자리에서 멈추고, 재생하지 못했으면 그 안내를 한 줄 보여 줍니다.
+    fn listen_ui(&mut self, ui: &mut Ui) {
+        let playing = self.playback.is_some();
+        // 녹음하거나 정리하는 동안에는 들을 녹음이 아직 없습니다 (시작할 때 이전 녹음을 버림).
+        let can_listen = playing || (self.recorded.is_some() && !self.is_busy());
+        let (icon, label) = if playing {
+            (Icon::Square, t!("test.record.listen_stop"))
+        } else {
+            (Icon::Play, t!("test.record.listen"))
+        };
+        let clicked = ui
+            .add_enabled_ui(can_listen, |ui| {
+                controls::icon_text_button(ui, icon, label).clicked()
+            })
+            .inner;
+        if let Some(error) = &self.playback_error {
+            ui.label(text::caption(ui, playback_problem(error)).color(Palette::of(ui).danger_text));
+        }
+        if clicked {
+            let ctx = ui.ctx().clone();
+            self.toggle_playback(&ctx);
+        }
     }
 
     fn status_ui(&self, ui: &mut Ui, config: &Config) {
@@ -373,7 +446,7 @@ fn spawn_cleanup(
     rx
 }
 
-/// 녹음을 단축키 받아쓰기와 같은 순서로 정리합니다 (장치 이름 등은 부르는 쪽이 채움).
+/// 녹음을 단축키 받아쓰기와 같은 순서로 정리합니다 (자동으로 끝났는지는 부르는 쪽이 채움).
 fn clean(mut clip: AudioClip) -> Recorded {
     let raw_duration = clip.duration();
     // 말소리는 키우기 전의 녹음에서 찾고, 배경 소음을 잘 재도록 자르기 전의 녹음 전체로 음량을 맞춥니다.
@@ -391,7 +464,6 @@ fn clean(mut clip: AudioClip) -> Recorded {
     };
     Recorded {
         clip: Arc::new(clip),
-        device_name: String::new(),
         auto_stopped: false,
         raw_duration,
         gain,
@@ -488,8 +560,17 @@ fn device_hint(ui: &mut Ui, shared: &mut Shared, config: &Config) {
     }
 }
 
-/// 정리를 마친 녹음의 측정값, 경고, 저장 버튼
-fn result_ui(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
+/// 재생하지 못한 이유 (한 줄 안내)
+fn playback_problem(error: &AudioError) -> String {
+    match error {
+        AudioError::NoOutputDevice => error_text::audio(error),
+        // 다른 오디오 오류 문구는 녹음(마이크) 기준이라 재생 실패로 묶어 알립니다 (원문은 로그에 남음).
+        _ => t!("test.record.play_failed").into_owned(),
+    }
+}
+
+/// 정리를 마친 녹음의 측정값과 경고
+fn result_ui(ui: &mut Ui, recorded: &Recorded) {
     let clip = &recorded.clip;
     let rms = dbfs(clip.rms());
     let silent = rms < SILENCE_DBFS;
@@ -553,67 +634,14 @@ fn result_ui(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
             .lines(notes.into_iter().map(|note| note.into_owned()))
             .show(ui);
     }
-
-    ui.add_space(10.0);
-    ui.horizontal_wrapped(|ui| {
-        if controls::icon_text_button(ui, Icon::Save, t!("test.record.save_wav")).clicked() {
-            save_wav(cx, clip);
-        }
-        if controls::icon_text_button(ui, Icon::FolderOpen, t!("test.record.open_folder")).clicked()
-            && system::open_dir(&cx.shared.paths.recordings_dir()).is_err()
-        {
-            cx.shared.toasts.error(t!("common.open_failed"));
-        }
-        ui.label(text::caption(ui, &recorded.device_name));
-    });
-}
-
-/// 저장 대화상자를 띄우고 정리한 녹음을 16kHz 모노 WAV로 저장합니다.
-fn save_wav(cx: &mut PageContext<'_>, clip: &AudioClip) {
-    let dir = cx.shared.paths.recordings_dir();
-    if let Err(error) = std::fs::create_dir_all(&dir) {
-        tracing::warn!("could not create {}: {error}", dir.display());
-    }
-    let picked = rfd::FileDialog::new()
-        .set_parent(cx.frame)
-        .set_title(t!("test.record.save_dialog_title"))
-        .set_directory(&dir)
-        .set_file_name(next_file_name(&dir))
-        .add_filter(t!("common.wav_files"), &["wav"])
-        .save_file();
-    let Some(mut path) = picked else {
-        return;
-    };
-    if path.extension().is_none() {
-        path.set_extension("wav");
-    }
-
-    match write_recording(&path, clip) {
-        // 저장할 곳을 사용자가 방금 골랐으므로 성공은 따로 알리지 않습니다.
-        Ok(()) => tracing::info!("saved recording to {}", path.display()),
-        Err(error) => {
-            tracing::warn!("could not save recording: {error}");
-            cx.shared.toasts.error(error_text::audio(&error));
-        }
-    }
-}
-
-/// 녹음을 음성 인식에 쓰는 형식(16kHz 모노)으로 바꿔 WAV 파일로 씁니다.
-fn write_recording(path: &Path, clip: &AudioClip) -> Result<(), AudioError> {
-    let clip = clip.resampled(WHISPER_SAMPLE_RATE)?;
-    audio::write_wav(path, &clip)
-}
-
-/// 폴더에 아직 없는 `sulsul-001.wav` 꼴의 이름
-fn next_file_name(dir: &Path) -> String {
-    (1..10_000)
-        .map(|n| format!("sulsul-{n:03}.wav"))
-        .find(|name| !dir.join(name).exists())
-        .unwrap_or_else(|| "sulsul.wav".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use sulsul_core::audio;
+
     use super::*;
 
     /// 앞뒤에 1초씩 무음을 붙인 말소리 (Windows 음성 합성으로 만든 시험용 말)
@@ -626,31 +654,49 @@ mod tests {
         AudioClip::new(samples, speech.sample_rate)
     }
 
-    #[test]
-    fn file_name_skips_existing() {
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(next_file_name(dir.path()), "sulsul-001.wav");
-        std::fs::write(dir.path().join("sulsul-001.wav"), b"").unwrap();
-        std::fs::write(dir.path().join("sulsul-002.wav"), b"").unwrap();
-        assert_eq!(next_file_name(dir.path()), "sulsul-003.wav");
+    /// 정리를 마친 녹음이 있는 카드 (실제 녹음 장치 없이)
+    fn card_with_recording() -> RecordCard {
+        RecordCard {
+            recorded: Some(Arc::new(clean(AudioClip::new(vec![0.0; 1_600], 16_000)))),
+            ..RecordCard::default()
+        }
     }
 
     #[test]
-    fn recording_is_saved_as_16khz_wav() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.wav");
-        // 48kHz로 녹음한 1초
-        let clip = AudioClip::new(vec![0.25; 48_000], 48_000);
-
-        write_recording(&path, &clip).unwrap();
-
-        let saved = audio::read_wav(&path).unwrap();
-        assert_eq!(saved.sample_rate, WHISPER_SAMPLE_RATE);
-        let seconds = saved.duration().as_secs_f64();
+    fn new_recording_drops_the_previous_one_and_its_playback_error() {
+        let mut card = card_with_recording();
+        card.fresh = true;
+        card.playback_error = Some(AudioError::NoOutputDevice);
+        card.discard_recording();
         assert!(
-            (seconds - 1.0).abs() < 0.05,
-            "길이가 유지되어야 함: {seconds}"
+            card.recorded.is_none(),
+            "이전 녹음은 더는 들을 수 없어야 합니다"
         );
+        assert!(card.take_new().is_none());
+        assert!(card.playback.is_none());
+        assert!(card.playback_error.is_none());
+    }
+
+    #[test]
+    fn listening_needs_a_finished_recording() {
+        let mut card = RecordCard::default();
+        let ctx = egui::Context::default();
+        // 녹음이 없으면 눌러도 재생하지 않습니다 (버튼도 꺼져 있음).
+        card.toggle_playback(&ctx);
+        assert!(card.playback.is_none());
+        assert!(card.playback_error.is_none());
+    }
+
+    #[test]
+    fn playback_problem_is_one_short_line() {
+        rust_i18n::set_locale("ko");
+        let no_device = playback_problem(&AudioError::NoOutputDevice);
+        assert_eq!(no_device, error_text::audio(&AudioError::NoOutputDevice));
+        // 마이크 기준 문구 대신 재생 실패로 알리고, 오류 원문은 화면에 싣지 않습니다.
+        let failed = playback_problem(&AudioError::Stream("WASAPI 0x88890004".into()));
+        assert_eq!(failed, t!("test.record.play_failed"));
+        assert!(!failed.contains("0x88890004"));
+        assert!(!failed.contains('\n'));
     }
 
     #[test]

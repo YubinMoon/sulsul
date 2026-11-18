@@ -69,6 +69,7 @@ error:
   model_missing: 모델 파일이 없습니다. 모델 관리에서 내려받으세요.
   audio:
     no_input_device: 마이크를 찾지 못했습니다. 연결을 확인하세요.
+    no_output_device: 소리를 낼 장치를 찾지 못했습니다. 연결을 확인하세요.
     device_not_found: "'%{device}' 장치가 연결되어 있지 않습니다."
     permission_denied: "마이크 권한이 없습니다. %{hint}"
     device_busy: 다른 앱이 마이크를 쓰고 있습니다.
@@ -371,9 +372,10 @@ test:
     no_speech: 말소리를 찾지 못했습니다.
     unchecked: 말소리를 판정하지 못해 자르지 않았습니다.
     auto_stopped: 최대 길이에 닿아 멈췄습니다.
-    save_wav: WAV로 저장
-    save_dialog_title: 녹음을 WAV 파일로 저장
-    open_folder: 녹음 폴더 열기
+    # 녹음 듣기: 받아쓰기로 넘기는 정리된 녹음(음량을 맞추고 앞뒤를 자른 것)을 들려줍니다.
+    listen: 녹음 듣기
+    listen_stop: 듣기 정지
+    play_failed: 녹음을 재생하지 못했습니다.
   stt:
     title: 2. 받아쓰기
     input: 오디오
@@ -533,7 +535,6 @@ about:
     config: 설정 파일
     data: 데이터
     models: 모델
-    recordings: 녹음
     logs: 로그
     open: "%{name} 열기"
   engines:

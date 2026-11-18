@@ -27,7 +27,7 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 설정의 기준은 TOML 파일입니다. 설정 화면에서 바꾼 값도 이 파일에 저장되고(주석 유지),
 앱 실행 중 파일을 직접 고치면 자동으로 다시 불러옵니다.
 
-| OS | 설정 파일 | 데이터(모델·녹음·기록) |
+| OS | 설정 파일 | 데이터(모델·기록·로그) |
 |---|---|---|
 | Windows | `%APPDATA%\sulsul\config\config.toml` | `%LOCALAPPDATA%\sulsul\data` |
 

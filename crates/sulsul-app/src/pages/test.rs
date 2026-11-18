@@ -1,7 +1,7 @@
 //! 테스트 화면: 단축키 받아쓰기의 흐름(녹음 → 받아쓰기 → 글 다듬기)을 위에서 아래로 한 단계씩 시험합니다.
 //!
 //! - 녹음(`record`): 마이크로 녹음하고, 단축키 받아쓰기와 같은 오디오 처리(자동 음량 조절, 앞뒤 무음
-//!   자르기)를 거친 결과를 보여 줍니다. 입력 장치는 설정 화면에서 고릅니다.
+//!   자르기)를 거친 결과를 보여 주고 들려줍니다. 녹음은 저장하지 않습니다. 입력 장치는 설정 화면에서 고릅니다.
 //! - 받아쓰기(`stt`): 방금 녹음한 오디오(또는 WAV 파일)를 설정의 엔진으로 받아씁니다.
 //! - 글 다듬기(`refine`): 받아쓴 글을 설정의 모델·제공자와 고른 프롬프트로 다듬습니다.
 //!
@@ -68,8 +68,9 @@ impl TestPage {
     }
 
     /// 매 프레임 부릅니다(화면이 보이지 않아도). 녹음 최대 길이와 작업 스레드의 결과를 챙깁니다.
-    pub fn tick(&mut self, shared: &mut Shared, ctx: &egui::Context) {
-        self.record.tick(ctx);
+    /// `visible`은 지금 테스트 화면을 보고 있는지이고, 화면을 떠나면 녹음 듣기를 멈춥니다.
+    pub fn tick(&mut self, shared: &mut Shared, ctx: &egui::Context, visible: bool) {
+        self.record.tick(ctx, visible);
         self.stt.tick(shared);
         self.refine.tick(shared);
         self.follow();

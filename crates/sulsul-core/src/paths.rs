@@ -24,7 +24,7 @@ pub enum PathsError {
 pub struct AppPaths {
     /// 설정 파일이 있는 폴더
     pub config_dir: PathBuf,
-    /// 모델·녹음 등 큰 데이터를 두는 폴더 (로밍되지 않는 위치)
+    /// 모델·기록·로그 등 큰 데이터를 두는 폴더 (로밍되지 않는 위치)
     pub data_dir: PathBuf,
 }
 
@@ -55,10 +55,6 @@ impl AppPaths {
 
     pub fn models_dir(&self) -> PathBuf {
         self.data_dir.join("models")
-    }
-
-    pub fn recordings_dir(&self) -> PathBuf {
-        self.data_dir.join("recordings")
     }
 
     /// 앱 로그 폴더
