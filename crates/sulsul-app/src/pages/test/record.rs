@@ -52,10 +52,6 @@ struct Active {
     meter: MeterState,
     max: Duration,
     started: Instant,
-    /// 녹음을 시작할 때의 자동 음량 조절 설정
-    auto_gain: bool,
-    /// 녹음을 시작할 때의 앞뒤 조용한 부분 자르기 설정
-    trim_silence: bool,
 }
 
 enum Problem {
@@ -109,8 +105,6 @@ impl RecordTest {
                     meter: MeterState::default(),
                     max,
                     started: Instant::now(),
-                    auto_gain: config.audio.auto_gain,
-                    trim_silence: config.audio.trim_silence,
                 });
             }
             Err(error) => {
@@ -128,22 +122,14 @@ impl RecordTest {
         match active.recording.stop() {
             Ok(clip) if clip.is_empty() => self.problem = Some(Problem::Empty),
             Ok(mut clip) => {
-                // 받아쓰기 단축키와 같은 소리로 테스트하도록 똑같이 키우고 자릅니다.
+                // 받아쓰기 단축키와 같은 소리로 테스트하도록 똑같이 키우고 자릅니다(설정 없이 늘 함).
                 // 말소리가 없어도 무엇이 녹음됐는지 들어 볼 수 있게 녹음은 남깁니다.
-                let speech = if active.trim_silence {
-                    sulsul_vad::find_speech(&clip)
-                        .inspect_err(|error| {
-                            tracing::warn!(
-                                "could not check the test recording for speech: {error}"
-                            );
-                        })
-                        .ok()
-                } else {
-                    None
-                };
-                if active.auto_gain {
-                    clip.auto_gain();
-                }
+                let speech = sulsul_vad::find_speech(&clip)
+                    .inspect_err(|error| {
+                        tracing::warn!("could not check the test recording for speech: {error}");
+                    })
+                    .ok();
+                clip.auto_gain();
                 let trim = speech.map(|speech| match speech {
                     Some(speech) => {
                         let before = clip.duration();

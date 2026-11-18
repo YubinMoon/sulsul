@@ -81,6 +81,7 @@ cargo build -p sulsul-llm-runner
 # 입력 장치 목록
 cargo run -p sulsul-cli -- devices
 # 5초 녹음해서 16kHz 모노 WAV로 저장 (--native-rate: 장치 샘플레이트 그대로)
+# 앱처럼 음량을 맞추고 앞뒤 조용한 부분을 자름 (--no-auto-gain, --no-trim-silence: 하지 않음)
 cargo run -p sulsul-cli -- record -s 5 -o test.wav
 ```
 

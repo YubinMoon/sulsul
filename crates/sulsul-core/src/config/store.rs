@@ -677,6 +677,60 @@ enabled = false
         assert_eq!(reloaded.config, loaded.config);
     }
 
+    /// 늘 켜 두게 된 `[audio] auto_gain`, `trim_silence`가 남은 파일은 값을 무시하고 경고 없이 읽으며,
+    /// 저장할 때 붙은 주석과 함께 지우고 같은 표의 다른 값·주석은 남깁니다.
+    #[test]
+    fn removed_audio_switches_are_ignored_and_dropped_on_save() {
+        let (_dir, store) = store();
+        fs::write(
+            store.path(),
+            "[audio]\n# 내가 고른 마이크\ninput_device = \"mic-1\"\n\
+             # 녹음이 끝나면 작은 말소리를 알맞은 크기로 키운 뒤 받아씁니다\nauto_gain = false\n\
+             # 녹음 앞뒤의 말소리가 없는 부분을 잘라 낸 뒤 받아씁니다\ntrim_silence = false\n\
+             max_record_seconds = 30\nmemo = \"직접 넣은 키\"\n",
+        )
+        .unwrap();
+        let loaded = store.load().unwrap();
+        let paths: Vec<_> = loaded.issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["audio.memo"],
+            "없앤 키는 경고하지 않고, 직접 넣은 키만 경고해야 합니다"
+        );
+        assert_eq!(
+            loaded.removed_keys,
+            ["audio.auto_gain", "audio.trim_silence"]
+        );
+        assert_eq!(loaded.config.audio.input_device, "mic-1");
+        assert_eq!(loaded.config.audio.max_record_seconds, 30);
+
+        store.save(&loaded.config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        for gone in [
+            "auto_gain",
+            "trim_silence",
+            "작은 말소리",
+            "말소리가 없는 부분",
+        ] {
+            assert!(
+                !text.contains(gone),
+                "`{gone}`이(가) 지워져야 합니다:\n{text}"
+            );
+        }
+        assert!(
+            text.contains(
+                "[audio]\n# 내가 고른 마이크\ninput_device = \"mic-1\"\nmax_record_seconds = 30\n\
+                 memo = \"직접 넣은 키\"\n"
+            ),
+            "남은 값의 주석·순서와 직접 넣은 키는 지켜야 합니다:\n{text}"
+        );
+
+        let reloaded = store.load().unwrap();
+        assert!(reloaded.removed_keys.is_empty(), "{text}");
+        assert_eq!(reloaded.issues, loaded.issues);
+        assert_eq!(reloaded.config, loaded.config);
+    }
+
     /// 인라인 표나 점 키로 적은 없앤 키도 지워야 합니다. 남으면 앱이 저장을 되풀이합니다.
     #[test]
     fn removed_keys_in_inline_or_dotted_form_are_dropped() {

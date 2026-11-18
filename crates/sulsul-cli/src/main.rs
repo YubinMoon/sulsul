@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use sulsul_core::audio::{self, Recording, RecordingOptions};
-use sulsul_core::config::AudioConfig;
 use sulsul_core::stt::WHISPER_SAMPLE_RATE;
 use sulsul_core::{AppPaths, Config, ConfigStore};
 
@@ -42,6 +41,12 @@ enum Command {
         /// 16kHz로 바꾸지 않고 장치 샘플레이트 그대로 저장
         #[arg(long)]
         native_rate: bool,
+        /// 자동 음량 조절을 하지 않고 저장 (앱은 늘 합니다)
+        #[arg(long)]
+        no_auto_gain: bool,
+        /// 앞뒤 조용한 부분을 자르지 않고 저장 (앱은 늘 자릅니다). `speech` 확인용 녹음을 만들 때 씁니다
+        #[arg(long)]
+        no_trim_silence: bool,
     },
     /// WAV 파일을 받아쓰고 걸린 시간을 보여 줍니다
     Transcribe(transcribe::Args),
@@ -73,7 +78,18 @@ fn main() -> Result<()> {
             output,
             device,
             native_rate,
-        } => record(seconds, output, device, native_rate),
+            no_auto_gain,
+            no_trim_silence,
+        } => record(
+            seconds,
+            output,
+            device,
+            native_rate,
+            Processing {
+                auto_gain: !no_auto_gain,
+                trim_silence: !no_trim_silence,
+            },
+        ),
         Command::Transcribe(args) => transcribe::run(args),
         Command::Speech { wavs } => speech(&wavs),
         Command::Models { command } => models::run(command),
@@ -99,13 +115,24 @@ fn devices() -> Result<()> {
     Ok(())
 }
 
-fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bool) -> Result<()> {
+/// 녹음을 마친 뒤 앱의 받아쓰기처럼 손볼지 (앱은 둘 다 늘 합니다)
+struct Processing {
+    auto_gain: bool,
+    trim_silence: bool,
+}
+
+fn record(
+    seconds: f64,
+    output: PathBuf,
+    device: Option<String>,
+    native_rate: bool,
+    processing: Processing,
+) -> Result<()> {
     if !(seconds.is_finite() && seconds > 0.0) {
         bail!("녹음 길이는 0보다 커야 합니다");
     }
     let duration = Duration::from_secs_f64(seconds);
-    let audio_config = configured_audio();
-    let device = device.unwrap_or(audio_config.input_device);
+    let device = device.unwrap_or_else(configured_device);
 
     let recording = Recording::start(&RecordingOptions {
         device,
@@ -138,12 +165,12 @@ fn record(seconds: f64, output: PathBuf, device: Option<String>, native_rate: bo
 
     let mut clip = recording.stop()?;
     // 앱의 받아쓰기와 같은 순서: 자르기 전의 녹음 전체로 말소리를 찾고 음량을 맞춘 뒤 자릅니다.
-    let speech = if audio_config.trim_silence {
+    let speech = if processing.trim_silence {
         Some(sulsul_vad::find_speech(&clip).context("말소리를 찾지 못했습니다")?)
     } else {
         None
     };
-    if audio_config.auto_gain {
+    if processing.auto_gain {
         let gain = clip.auto_gain();
         if gain.applied() {
             println!(
@@ -236,11 +263,11 @@ fn segments_text(span: &sulsul_vad::SpeechSpan, sample_rate: u32) -> String {
         .join(", ")
 }
 
-/// 설정 파일이 있으면 그 오디오 설정, 없으면 기본값
-fn configured_audio() -> AudioConfig {
+/// 설정 파일이 있으면 그 입력 장치, 없으면 기본 장치(빈 문자열)
+fn configured_device() -> String {
     match AppPaths::resolve() {
-        Ok(paths) => load_config(&paths).audio,
-        Err(_) => AudioConfig::default(),
+        Ok(paths) => load_config(&paths).audio.input_device,
+        Err(_) => String::new(),
     }
 }
 

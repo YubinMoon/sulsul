@@ -86,7 +86,7 @@ pub struct Recorded {
     pub device_name: String,
     /// 최대 녹음 길이에 닿아 자동으로 끝났는지
     pub auto_stopped: bool,
-    /// 앞뒤 조용한 부분을 자른 결과 (설정에서 껐으면 `None`)
+    /// 앞뒤 조용한 부분을 자른 결과 (말소리를 판정하지 못해 자르지 않았으면 `None`)
     pub trim: Option<SilenceTrim>,
 }
 

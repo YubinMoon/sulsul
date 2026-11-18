@@ -29,6 +29,9 @@ pub const REMOVED_KEYS: &[&str] = &[
     "general.start_minimized",
     // 출력은 "클립보드에 복사하고 붙여넣은 뒤 되돌리기"로 고정되었습니다.
     "output",
+    // 자동 음량 조절과 앞뒤 조용한 부분 자르기는 끌 이유가 없어 늘 켜 둡니다.
+    "audio.auto_gain",
+    "audio.trim_silence",
 ];
 
 /// `path`(점으로 구분한 키 경로)가 [`REMOVED_KEYS`]의 키이거나 그 아래 키인지
@@ -123,10 +126,6 @@ pub enum HotkeyMode {
 pub struct AudioConfig {
     /// 입력 장치 ID(권장) 또는 이름. 비어 있으면 시스템 기본 장치
     pub input_device: String,
-    /// 녹음이 끝나면 작은 말소리를 알맞은 크기로 키움
-    pub auto_gain: bool,
-    /// 녹음 앞뒤의 말소리가 없는 부분을 잘라 내고, 말소리가 없으면 받아쓰지 않음 (`sulsul-vad`)
-    pub trim_silence: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
 }
@@ -135,8 +134,6 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             input_device: String::new(),
-            auto_gain: true,
-            trim_silence: true,
             max_record_seconds: 120,
             feedback_sounds: true,
         }
@@ -441,6 +438,12 @@ mod tests {
         assert!(is_removed_key("general.start_minimized"));
         assert!(is_removed_key("output"));
         assert!(is_removed_key("output.restore_delay_ms"));
+        assert!(is_removed_key("audio.auto_gain"));
+        assert!(is_removed_key("audio.trim_silence"));
+        assert!(
+            !is_removed_key("audio.input_device"),
+            "같은 표의 남은 키는 아닙니다"
+        );
         assert!(
             !is_removed_key("outputs"),
             "이름이 비슷한 다른 키는 아닙니다"

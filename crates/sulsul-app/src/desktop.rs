@@ -424,8 +424,6 @@ impl DictationSettings {
     /// 지금 설정과 같은 값인지 (매 프레임 복사하지 않으려고 그대로 비교합니다)
     pub fn matches(&self, config: &Config) -> bool {
         self.input_device == config.audio.input_device
-            && self.auto_gain == config.audio.auto_gain
-            && self.trim_silence == config.audio.trim_silence
             && self.max_record_seconds == config.audio.max_record_seconds
             && self.feedback_sounds == config.audio.feedback_sounds
             && self.stt == config.stt

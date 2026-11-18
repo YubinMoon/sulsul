@@ -29,7 +29,6 @@ nav:
 common:
   cancel: 취소
   retry: 다시 시도
-  coming_soon: 준비 중
   expand: 펼치기
   collapse: 접기
   open_failed: "열지 못했습니다: %{message}"
@@ -514,22 +513,10 @@ settings:
     title: 오디오
     input_device: 입력 장치
     input_device_help: 녹음에 쓸 마이크입니다.
-    auto_gain: 자동 음량 조절
-    auto_gain_help: 마이크 소리가 작게 들어오면 녹음이 끝난 뒤 말소리를 알맞은 크기로 키워서 받아씁니다. 소음만 있는 녹음은 키우지 않습니다.
-    trim_silence: 앞뒤 조용한 부분 자르기
-    trim_silence_help: 녹음 앞뒤의 말소리가 없는 부분을 잘라 내고 받아씁니다. 숨소리나 키보드 소리처럼 말소리가 아닌 소리만 있는 녹음은 받아쓰지 않고 끝내며, 클립보드도 건드리지 않습니다. 말소리를 판정하는 작은 모델(Silero VAD)이 앱에 들어 있어 따로 내려받지 않아도 됩니다. 말한 내용이 잘려 나가는 일이 잦으면 꺼 주세요.
     max_record_seconds: 최대 녹음 길이
     max_record_seconds_help: "이 시간을 넘으면 녹음을 자동으로 끝냅니다. (%{min} ~ %{max}초)"
     feedback_sounds: 효과음
     feedback_sounds_help: 녹음을 시작하고 마칠 때와 받아쓴 글을 클립보드에 넣었을 때 소리로 알려 줍니다.
-  postprocess:
-    title: 후처리
-    llm: 글 다듬기
-    llm_help: 인식 결과의 문장 부호와 오탈자를 언어 모델로 다듬습니다. 사용 여부와 모델은 모델 관리의 '글 다듬기'에서 고릅니다.
-    prompt: 프롬프트
-    prompt_help: 글을 다듬을 때 언어 모델에 보낼 지시문입니다. 프롬프트 화면에서 만들고 고릅니다.
-    prompt_current: "글을 다듬을 때 언어 모델에 보낼 지시문입니다. 지금 고른 프롬프트: %{name}"
-    open_prompts: 프롬프트 화면으로
   # 엔진·후처리기 설정 항목(스키마로 자동 생성되는 입력란)에 함께 쓰는 문구
   field:
     browse: 찾아보기

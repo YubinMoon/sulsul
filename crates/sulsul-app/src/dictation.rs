@@ -9,9 +9,10 @@
 //! 글 다듬기에 실패하면 받아쓴 원문 대신 실패 원인을 알리는 글을 클립보드에 넣습니다. 그 글은
 //! 다듬은 결과로 착각하지 않게 `[술술 오류]`로 시작합니다(`dictation.refine_failed_clipboard`).
 //!
-//! 녹음을 끝내면 앞뒤의 말소리가 없는 부분을 잘라 내고(`[audio] trim_silence`, [`sulsul_vad`]), 말소리가
-//! 없으면 인식하지 않고 끝냅니다. 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고,
-//! 클립보드는 그대로 둡니다. 말소리를 판정하지 못하면(모델을 불러오지 못하는 등) 자르지 않고 받아씁니다.
+//! 녹음을 끝내면 작은 말소리를 알맞은 크기로 키우고([`AudioClip::auto_gain`]) 앞뒤의 말소리가 없는 부분을
+//! 잘라 냅니다([`sulsul_vad`]). 끌 이유가 없어 설정 없이 늘 합니다. 말소리가 없으면 인식하지 않고 끝냅니다.
+//! 인식을 시작하지 않으니 터지는 소리([`Cue::Pop`]) 없이 실패음만 내고, 클립보드는 그대로 둡니다.
+//! 말소리를 판정하지 못하면(모델을 불러오지 못하는 등) 자르지 않고 받아씁니다.
 //!
 //! 화면은 매 프레임 [`Dictation::state`]와 [`Dictation::take_notices`]로 상태와 알림을 가져갑니다.
 //!
@@ -54,10 +55,6 @@ const WAITING_POLL: Duration = Duration::from_millis(500);
 #[derive(Debug, Clone, PartialEq)]
 pub struct DictationSettings {
     pub input_device: String,
-    /// 녹음이 끝나면 작은 말소리를 키울지
-    pub auto_gain: bool,
-    /// 녹음 앞뒤의 조용한 부분을 잘라 내고, 말소리가 없으면 받아쓰지 않을지
-    pub trim_silence: bool,
     pub max_record_seconds: u32,
     pub feedback_sounds: bool,
     pub stt: SttConfig,
@@ -69,8 +66,6 @@ impl DictationSettings {
     pub fn from_config(config: &Config) -> Self {
         Self {
             input_device: config.audio.input_device.clone(),
-            auto_gain: config.audio.auto_gain,
-            trim_silence: config.audio.trim_silence,
             max_record_seconds: config.audio.max_record_seconds,
             feedback_sounds: config.audio.feedback_sounds,
             stt: config.stt.clone(),
@@ -342,11 +337,9 @@ struct Service<M: Microphone, C: Clipboard> {
 impl<M: Microphone, C: Clipboard> Service<M, C> {
     fn run(mut self) {
         tracing::info!("dictation service started");
-        if self.settings.trim_silence {
-            // 첫 받아쓰기가 모델을 불러오느라 늦어지지 않게 미리 불러 둡니다.
-            if let Err(error) = sulsul_vad::preload() {
-                tracing::warn!("could not load the speech detector: {error}");
-            }
+        // 첫 받아쓰기가 말소리 감지 모델을 불러오느라 늦어지지 않게 미리 불러 둡니다.
+        if let Err(error) = sulsul_vad::preload() {
+            tracing::warn!("could not load the speech detector: {error}");
         }
         loop {
             let message = match self.next_wake() {
@@ -545,29 +538,24 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             "dictation recording finished"
         );
         // 말소리가 없으면 모델을 돌리지 않고 여기서 끝냅니다 (조용한 녹음은 환각을 만들기 쉬움).
-        let speech = if self.settings.trim_silence {
-            match sulsul_vad::find_speech(&clip) {
-                Ok(Some(speech)) => Some(speech.range),
-                Ok(None) => {
-                    tracing::info!("dictation skipped: no speech in the recording");
-                    self.fail(Notice::NoSpeech);
-                    return;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        "could not check the recording for speech, keeping all of it: {error}"
-                    );
-                    None
-                }
+        let speech = match sulsul_vad::find_speech(&clip) {
+            Ok(Some(speech)) => Some(speech.range),
+            Ok(None) => {
+                tracing::info!("dictation skipped: no speech in the recording");
+                self.fail(Notice::NoSpeech);
+                return;
             }
-        } else {
-            None
+            Err(error) => {
+                tracing::warn!(
+                    "could not check the recording for speech, keeping all of it: {error}"
+                );
+                None
+            }
         };
 
         let cancel = CancelToken::new();
         let transcriber = self.transcriber.clone();
         let refiner = self.refiner.clone();
-        let auto_gain = self.settings.auto_gain;
         let stt = self.settings.stt.clone();
         let post = self.settings.postprocess.clone();
         let tx = self.tx.clone();
@@ -578,9 +566,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             .spawn(move || {
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     // 배경 소음을 잘 재도록 자르기 전의 녹음 전체로 음량을 맞춥니다.
-                    if auto_gain {
-                        clip.auto_gain();
-                    }
+                    clip.auto_gain();
                     if let Some(range) = speech {
                         clip.keep_range(range);
                     }
@@ -870,8 +856,6 @@ mod tests {
         table.insert("text".into(), Value::String(text.to_owned()));
         DictationSettings {
             input_device: String::new(),
-            auto_gain: true,
-            trim_silence: true,
             max_record_seconds: 60,
             feedback_sounds: true,
             stt,
@@ -1041,17 +1025,6 @@ mod tests {
         );
         assert_eq!(h.cues(), [Cue::Start, Cue::Fail], "인식을 시작하지 않음");
         assert_eq!(h.dictation.state(), DictationState::Idle);
-    }
-
-    #[test]
-    fn silence_check_can_be_turned_off() {
-        let mut untouched = settings("그대로");
-        untouched.trim_silence = false;
-        let mut h = Harness::with(untouched, Mic::Silent);
-        h.send(HotkeyEvent::Toggle);
-        h.send(HotkeyEvent::Toggle);
-        h.wait_until("복사", |h| h.clipboard.content() == ["text:그대로"]);
-        assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
     }
 
     #[test]

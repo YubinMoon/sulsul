@@ -1,7 +1,10 @@
 //! 설정 화면. 여기서 바꾼 값은 TOML 설정 파일에 저장됩니다.
 //!
 //! 음성 인식 엔진·모델·제공자와 그 설정(인식 언어, 용어 힌트, 엔진별 설정)은 모델 관리 화면에서
-//! 고릅니다. 여기에는 두지 않습니다.
+//! 고릅니다. 글 다듬기를 켜고 끄는 것과 그 모델은 모델 관리 > 글 다듬기에서, 다듬을 때 쓸 프롬프트는
+//! 프롬프트 화면에서 고릅니다. 여기에는 두지 않습니다.
+//!
+//! 녹음의 자동 음량 조절과 앞뒤 조용한 부분 자르기는 끌 이유가 없어 설정 없이 늘 켜져 있습니다.
 
 use egui::{DragValue, Ui};
 use rust_i18n::t;
@@ -9,8 +12,7 @@ use sulsul_core::config::{Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, T
 use sulsul_core::settings;
 use sulsul_core::stt::SttRegistry;
 
-use super::prompts::prompt_display_name;
-use super::{Page, SECTION_GAP, header};
+use super::{SECTION_GAP, header};
 use crate::error_text;
 use crate::i18n::{self, hotkey_mode_name};
 use crate::icons::Icon;
@@ -44,15 +46,12 @@ impl SettingsPage {
 
         // 설정 파일을 읽지 못하는 동안에는 편집을 잠급니다 (안내는 앱 위쪽 배너).
         ui.add_enabled_ui(!cx.locked, |ui| {
-            let soon = t!("common.coming_soon");
             ui.add_space(SECTION_GAP);
             general_section(ui, cx.config);
             ui.add_space(SECTION_GAP);
             hotkey_section(ui, cx);
             ui.add_space(SECTION_GAP);
             audio_section(ui, cx);
-            ui.add_space(SECTION_GAP);
-            postprocess_section(ui, cx, &soon);
         });
 
         if self.confirm_reset {
@@ -267,20 +266,6 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
         }
         row::separator(ui);
 
-        let label = t!("settings.audio.auto_gain");
-        Row::new(&label)
-            .help(&t!("settings.audio.auto_gain_help"))
-            .show(ui, |ui| controls::toggle(ui, &mut audio.auto_gain, &label));
-        row::separator(ui);
-
-        let label = t!("settings.audio.trim_silence");
-        Row::new(&label)
-            .help(&t!("settings.audio.trim_silence_help"))
-            .show(ui, |ui| {
-                controls::toggle(ui, &mut audio.trim_silence, &label)
-            });
-        row::separator(ui);
-
         let (min, max) = MAX_RECORD_SECONDS;
         Row::new(&t!("settings.audio.max_record_seconds"))
             .help(&t!(
@@ -307,39 +292,6 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
                 controls::toggle(ui, &mut audio.feedback_sounds, &label)
             });
     });
-}
-
-fn postprocess_section(ui: &mut Ui, cx: &mut PageContext<'_>, soon: &str) {
-    Section::new(Icon::Sparkles, &t!("settings.postprocess.title"))
-        .badge(soon)
-        .show(ui, |ui| {
-            let label = t!("settings.postprocess.llm");
-            Row::new(&label)
-                .help(&t!("settings.postprocess.llm_help"))
-                .show(ui, |ui| {
-                    // 켜고 끄기는 모델 관리에서 합니다. 여기서는 저장된 상태만 보여 줍니다.
-                    let mut enabled = cx.config.postprocess.enabled;
-                    ui.add_enabled_ui(false, |ui| controls::toggle(ui, &mut enabled, &label));
-                });
-            row::separator(ui);
-
-            // 다듬을 때 쓸 지시문은 프롬프트 화면에서 만들고 고릅니다. 여기서는 고른 것만 알려 줍니다.
-            let help = match cx.config.postprocess.active_prompt() {
-                Some(prompt) => t!(
-                    "settings.postprocess.prompt_current",
-                    name = prompt_display_name(prompt)
-                ),
-                None => t!("settings.postprocess.prompt_help"),
-            };
-            Row::new(&t!("settings.postprocess.prompt"))
-                .help(&help)
-                .show(ui, |ui| {
-                    let open = t!("settings.postprocess.open_prompts");
-                    if controls::icon_text_button(ui, Icon::ArrowRight, open).clicked() {
-                        cx.shared.navigate = Some(Page::Prompts);
-                    }
-                });
-        });
 }
 
 /// 값을 기본값으로 되돌립니다. 사용자가 만들어 둔 것(등록한 외부 제공자, 프롬프트)은 남깁니다.
