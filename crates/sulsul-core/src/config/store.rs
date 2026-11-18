@@ -49,6 +49,9 @@ pub struct LoadedConfig {
     /// 파일에 남아 있던, 지금은 없앤 설정 키의 경로 ([`super::REMOVED_KEYS`]).
     /// 경고하지 않고 다음 저장 때 파일에서 지우므로, 비어 있지 않으면 한 번 저장해 정리하면 됩니다.
     pub removed_keys: Vec<String>,
+    /// 사용자가 고치지 않은 예전 기본 프롬프트 지시문을 지금 지시문으로 바꿨는지
+    /// ([`super::PostProcessConfig::upgrade_default_prompt`]). 바꿨으면 한 번 저장해 파일에도 반영하면 됩니다.
+    pub upgraded_prompts: bool,
 }
 
 /// 설정 파일 읽기·쓰기·감시
@@ -89,7 +92,7 @@ impl ConfigStore {
         let mut removed_keys = Vec::new();
         let deserializer =
             toml::Deserializer::parse(text).map_err(|e| self.parse_error(text, &e))?;
-        let config: Config = serde_ignored::deserialize(deserializer, |path| {
+        let mut config: Config = serde_ignored::deserialize(deserializer, |path| {
             let path = path.to_string();
             if is_removed_key(&path) {
                 removed_keys.push(path);
@@ -102,10 +105,12 @@ impl ConfigStore {
         })
         .map_err(|e| self.parse_error(text, &e))?;
         issues.extend(config.validate());
+        let upgraded_prompts = config.postprocess.upgrade_default_prompt();
         Ok(LoadedConfig {
             config,
             issues,
             removed_keys,
+            upgraded_prompts,
         })
     }
 
@@ -503,6 +508,45 @@ mod tests {
         );
         let loaded = store.load().unwrap().config;
         assert_eq!(loaded.postprocess, config.postprocess);
+    }
+
+    /// 예전 기본 지시문이 그대로 남은 파일은 읽을 때 새 지시문으로 바꾸고, 저장하면 파일에도 씁니다.
+    #[test]
+    fn old_default_prompt_is_upgraded_on_load_and_saved() {
+        let (_dir, store) = store();
+        let old_text = super::super::OLD_DEFAULT_PROMPT_TEXTS[0];
+        fs::write(
+            store.path(),
+            format!(
+                "[postprocess]\nprompt = \"default\"\n\n\
+                 # 내 프롬프트 목록\n[[postprocess.prompts]]\nid = \"default\"\nname = \"기본 다듬기\"\n\
+                 text = \"\"\"\n{old_text}\"\"\"\n"
+            ),
+        )
+        .unwrap();
+
+        let loaded = store.load().unwrap();
+        assert!(
+            loaded.upgraded_prompts,
+            "예전 기본 지시문을 바꿨다고 알려야 합니다"
+        );
+        assert_eq!(
+            loaded.config.postprocess.prompts,
+            crate::config::default_prompts()
+        );
+
+        store.save(&loaded.config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains("군말"), "{text}");
+        assert!(!text.contains("문장 부호만 바로잡습니다"), "{text}");
+        assert!(
+            text.contains("# 내 프롬프트 목록"),
+            "주석은 지켜야 합니다:\n{text}"
+        );
+        assert!(
+            !store.load().unwrap().upgraded_prompts,
+            "한 번 바꾼 뒤에는 다시 바꾸지 않습니다"
+        );
     }
 
     fn position(text: &str, needle: &str) -> usize {

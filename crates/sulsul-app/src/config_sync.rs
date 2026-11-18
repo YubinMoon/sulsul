@@ -49,23 +49,47 @@ pub struct ConfigSync {
     _watcher: Option<ConfigWatcher>,
 }
 
+/// 읽은 설정을 파일에 맞추려고 한 번 저장해야 하는 까닭
+struct Cleanup {
+    removed_keys: Vec<String>,
+    upgraded_prompts: bool,
+}
+
+impl Cleanup {
+    fn of(loaded: &LoadedConfig) -> Self {
+        Self {
+            removed_keys: loaded.removed_keys.clone(),
+            upgraded_prompts: loaded.upgraded_prompts,
+        }
+    }
+
+    fn needed(&self) -> bool {
+        !self.removed_keys.is_empty() || self.upgraded_prompts
+    }
+}
+
 impl ConfigSync {
     /// 설정 파일을 읽습니다(없으면 기본 파일을 만듭니다).
     ///
-    /// 파일에 없앤 설정 키가 남아 있으면 곧바로 한 번 저장해 파일에서 지우도록 예약합니다.
+    /// 파일에 없앤 설정 키가 남아 있거나 예전 판의 기본 프롬프트를 지금 것으로 맞췄으면, 곧바로 한 번 저장해
+    /// 파일에도 반영하도록 예약합니다.
     pub fn open(store: ConfigStore) -> Self {
-        let (config, issues, removed_keys, problem) = match store.load_or_create() {
-            Ok(LoadedConfig {
-                config,
-                issues,
-                removed_keys,
-            }) => (config, issues, removed_keys, None),
+        let (loaded, problem) = match store.load_or_create() {
+            Ok(loaded) => (loaded, None),
             Err(error) => {
                 tracing::warn!("could not load config: {error}");
                 let problem = classify(&store, error);
-                (Config::default(), Vec::new(), Vec::new(), Some(problem))
+                let loaded = LoadedConfig {
+                    config: Config::default(),
+                    issues: Vec::new(),
+                    removed_keys: Vec::new(),
+                    upgraded_prompts: false,
+                };
+                (loaded, Some(problem))
             }
         };
+        let cleanup = Cleanup::of(&loaded);
+        let LoadedConfig { config, issues, .. } = loaded;
         let mut sync = Self {
             store,
             on_disk: config.clone(),
@@ -78,7 +102,7 @@ impl ConfigSync {
             events: None,
             _watcher: None,
         };
-        sync.clean_up_removed_keys(&removed_keys);
+        sync.clean_up(&cleanup);
         sync
     }
 
@@ -169,14 +193,15 @@ impl ConfigSync {
 
     /// 파일을 다시 읽습니다. `config`가 바뀌었으면 `true`를 돌려줍니다.
     ///
-    /// 파일에 없앤 설정 키가 들어 있으면 지우도록 저장을 예약합니다.
+    /// 파일에 없앤 설정 키가 들어 있거나 예전 판의 기본 프롬프트를 지금 것으로 맞췄으면 저장을 예약합니다.
     pub fn reload(&mut self) -> bool {
         match self.read() {
             Ok(loaded) => {
                 self.problem = None;
+                let cleanup = Cleanup::of(&loaded);
                 self.issues = loaded.issues;
                 let replaced = self.apply_reloaded(loaded.config);
-                self.clean_up_removed_keys(&loaded.removed_keys);
+                self.clean_up(&cleanup);
                 replaced
             }
             Err(problem) => {
@@ -201,16 +226,19 @@ impl ConfigSync {
         true
     }
 
-    /// 파일에 남은 없앤 설정 키를 지우도록 저장을 예약합니다. 저장은 기존 흐름([`Self::poll`])을 탑니다.
-    fn clean_up_removed_keys(&mut self, removed_keys: &[String]) {
-        if removed_keys.is_empty() {
-            return;
+    /// 파일에 남은 없앤 설정 키를 지우고 맞춘 기본 프롬프트를 쓰도록 저장을 예약합니다.
+    /// 저장은 기존 흐름([`Self::poll`])을 탑니다.
+    fn clean_up(&mut self, cleanup: &Cleanup) {
+        if !cleanup.removed_keys.is_empty() {
+            tracing::info!(
+                "config file has removed keys ({}); saving to clean up",
+                cleanup.removed_keys.join(", ")
+            );
         }
-        tracing::info!(
-            "config file has removed keys ({}); saving to clean up",
-            removed_keys.join(", ")
-        );
-        if self.dirty_since.is_none() {
+        if cleanup.upgraded_prompts {
+            tracing::info!("config file had older built-in prompts; saving the current ones");
+        }
+        if cleanup.needed() && self.dirty_since.is_none() {
             self.mark_dirty();
         }
     }
@@ -432,6 +460,37 @@ mod tests {
         assert!(
             !reopened.has_pending_save(),
             "정리한 뒤에는 다시 저장하지 않습니다"
+        );
+    }
+
+    /// 예전 기본 프롬프트 지시문이 남은 파일을 열면 새 지시문을 쓰도록 저장을 예약합니다.
+    #[test]
+    fn open_saves_the_upgraded_default_prompt() {
+        let home = Home::new();
+        let store = home.store();
+        fs::write(
+            store.path(),
+            "[[postprocess.prompts]]\nid = \"default\"\nname = \"기본 다듬기\"\n\
+             text = \"\"\"\n음성 인식으로 받아쓴 글을 다듬어 주세요.\n\
+             - 맞춤법, 띄어쓰기, 문장 부호만 바로잡습니다.\n\
+             - 뜻과 말투는 바꾸지 않고, 내용을 더하거나 빼지 않습니다.\n\
+             - 설명 없이 다듬은 글만 돌려줍니다.\"\"\"\n",
+        )
+        .unwrap();
+
+        let mut sync = ConfigSync::open(store);
+        assert!(
+            sync.has_pending_save(),
+            "바꾼 지시문을 쓰도록 저장이 예약되어야 합니다"
+        );
+        assert!(!flush(&mut sync));
+        let text = fs::read_to_string(sync.path()).unwrap();
+        assert!(text.contains("군말"), "{text}");
+
+        let reopened = ConfigSync::open(home.store());
+        assert!(
+            !reopened.has_pending_save(),
+            "한 번 저장한 뒤에는 다시 저장하지 않습니다"
         );
     }
 
