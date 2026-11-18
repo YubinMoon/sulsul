@@ -305,6 +305,18 @@ pub struct Prompt {
 /// 처음부터 넣어 두는 프롬프트의 ID
 pub const DEFAULT_PROMPT_ID: &str = "default";
 
+/// 개발 지시 정리 프롬프트의 ID
+pub const DEV_INSTRUCTION_PROMPT_ID: &str = "dev_instruction";
+
+/// 앱에 들어 있는 기본 프롬프트의 판. 기본 프롬프트를 새로 더할 때 올리고, [`builtin_prompts`]에서
+/// 그 프롬프트에 새 판을 적습니다.
+pub const BUILTIN_PROMPTS_VERSION: u32 = 2;
+
+/// [`PostProcessConfig::builtin_prompts`]가 없는 예전 파일의 판 (기본 다듬기 하나만 있던 때)
+fn first_builtin_prompts_version() -> u32 {
+    1
+}
+
 /// 기본 프롬프트의 지시문 (`default.toml`에 같은 내용)
 const DEFAULT_PROMPT_TEXT: &str = "음성 인식으로 받아쓴 글을 다듬어 주세요.\n\
      - \"음\", \"어\"나 뜻 없이 붙인 \"그러니까\", \"막\" 같은 군말과 되풀이한 말을 뺍니다.\n\
@@ -324,13 +336,38 @@ const OLD_DEFAULT_PROMPT_TEXTS: &[&str] = &["음성 인식으로 받아쓴 글�
      - 뜻과 말투는 바꾸지 않고, 내용을 더하거나 빼지 않습니다.\n\
      - 설명 없이 다듬은 글만 돌려줍니다."];
 
+/// 개발 지시 정리 프롬프트의 지시문 (`default.toml`에 같은 내용).
+/// 음성으로 두서없이 말한 개발 요청을 코딩 에이전트에게 보낼 작업 지시로 정리합니다.
+const DEV_INSTRUCTION_PROMPT_TEXT: &str = include_str!("prompts/dev_instruction.md");
+
+/// 앱에 들어 있는 기본 프롬프트와 각 프롬프트가 처음 들어간 판 (화면 순서)
+fn builtin_prompts() -> Vec<(u32, Prompt)> {
+    vec![
+        (
+            1,
+            Prompt {
+                id: DEFAULT_PROMPT_ID.into(),
+                name: "기본 다듬기".into(),
+                text: DEFAULT_PROMPT_TEXT.into(),
+            },
+        ),
+        (
+            2,
+            Prompt {
+                id: DEV_INSTRUCTION_PROMPT_ID.into(),
+                name: "개발 지시 정리".into(),
+                text: DEV_INSTRUCTION_PROMPT_TEXT.trim_end().into(),
+            },
+        ),
+    ]
+}
+
 /// 처음부터 넣어 두는 프롬프트 목록 (`Config::default()`와 `default.toml`에 같은 내용)
 pub fn default_prompts() -> Vec<Prompt> {
-    vec![Prompt {
-        id: DEFAULT_PROMPT_ID.into(),
-        name: "기본 다듬기".into(),
-        text: DEFAULT_PROMPT_TEXT.into(),
-    }]
+    builtin_prompts()
+        .into_iter()
+        .map(|(_, prompt)| prompt)
+        .collect()
 }
 
 /// 글 다듬기(LLM 후처리) 설정 (`[postprocess]`)
@@ -357,6 +394,13 @@ pub struct PostProcessConfig {
     /// 파일에 이 항목이 아예 없으면 [`default_prompts`]로 읽습니다. 사용자가 모두 지운 상태를
     /// 지키려고 비어 있어도 저장합니다(`prompts = []`).
     pub prompts: Vec<Prompt>,
+    /// 목록에 넣어 준 기본 프롬프트의 판 ([`BUILTIN_PROMPTS_VERSION`]).
+    ///
+    /// 이 판보다 새로 생긴 기본 프롬프트를 읽을 때 한 번만 목록에 더하고 판을 올립니다
+    /// ([`Self::upgrade_builtin_prompts`]). 사용자가 지운 기본 프롬프트가 되살아나지 않게 하려는 값입니다.
+    /// 이 값이 없는 예전 파일은 1판으로 봅니다.
+    #[serde(default = "first_builtin_prompts_version")]
+    pub builtin_prompts: u32,
 }
 
 impl Default for PostProcessConfig {
@@ -369,11 +413,32 @@ impl Default for PostProcessConfig {
             api_profiles: Vec::new(),
             processors: BTreeMap::new(),
             prompts: default_prompts(),
+            builtin_prompts: BUILTIN_PROMPTS_VERSION,
         }
     }
 }
 
 impl PostProcessConfig {
+    /// 예전 판의 파일을 지금 기본 프롬프트에 맞춥니다. 바꾼 것이 있으면 `true`를 돌려줍니다.
+    ///
+    /// - 사용자가 고치지 않은 예전 기본 지시문을 지금 지시문으로 바꿉니다 ([`Self::upgrade_default_prompt`]).
+    /// - 파일의 판보다 새로 생긴 기본 프롬프트를 목록 끝에 더하고 판을 올립니다. 같은 ID가 이미 있으면
+    ///   더하지 않습니다. 고른 프롬프트는 바꾸지 않습니다.
+    pub fn upgrade_builtin_prompts(&mut self) -> bool {
+        let mut changed = self.upgrade_default_prompt();
+        if self.builtin_prompts < BUILTIN_PROMPTS_VERSION {
+            for (since, prompt) in builtin_prompts() {
+                let listed = self.prompts.iter().any(|p| p.id == prompt.id);
+                if since > self.builtin_prompts && !listed {
+                    self.prompts.push(prompt);
+                }
+            }
+            self.builtin_prompts = BUILTIN_PROMPTS_VERSION;
+            changed = true;
+        }
+        changed
+    }
+
     /// 기본 프롬프트의 지시문이 사용자가 고치지 않은 예전 기본 지시문이면 지금 지시문으로 바꿉니다.
     /// 바꿨으면 `true`를 돌려줍니다. 고친 지시문과 다른 ID의 프롬프트는 그대로 둡니다.
     pub fn upgrade_default_prompt(&mut self) -> bool {
@@ -697,6 +762,89 @@ mod tests {
         assert!(
             !post.upgrade_default_prompt(),
             "기본 프롬프트가 아닌 프롬프트는 같은 지시문이어도 그대로 둡니다"
+        );
+    }
+
+    /// 판이 적히지 않은 예전 파일(기본 다듬기 하나만 있던 때)에는 새 기본 프롬프트를 한 번만 더합니다.
+    #[test]
+    fn old_files_get_new_builtin_prompts_once() {
+        let parsed: Config = toml::from_str(
+            "[postprocess]\nprompt = \"mine\"\n\
+             [[postprocess.prompts]]\nid = \"default\"\nname = \"기본 다듬기\"\ntext = \"내가 고친 지시문\"\n\
+             [[postprocess.prompts]]\nid = \"mine\"\nname = \"내 프롬프트\"\ntext = \"짧게\"\n",
+        )
+        .unwrap();
+        let mut post = parsed.postprocess;
+        assert_eq!(post.builtin_prompts, 1, "판이 없는 파일은 1판으로 봅니다");
+
+        assert!(post.upgrade_builtin_prompts());
+        let ids: Vec<_> = post.prompts.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["default", "mine", DEV_INSTRUCTION_PROMPT_ID],
+            "새 프롬프트는 끝에 붙입니다"
+        );
+        assert_eq!(
+            post.prompts[0].text, "내가 고친 지시문",
+            "고친 지시문은 그대로 둡니다"
+        );
+        assert_eq!(post.prompt, "mine", "고른 프롬프트는 바꾸지 않습니다");
+        assert_eq!(post.builtin_prompts, BUILTIN_PROMPTS_VERSION);
+        assert!(
+            !post.upgrade_builtin_prompts(),
+            "한 번 더한 뒤에는 다시 더하지 않습니다"
+        );
+    }
+
+    #[test]
+    fn removed_or_already_listed_builtin_prompts_are_not_added_again() {
+        // 지금 판에서 지운 기본 프롬프트는 되살리지 않습니다.
+        let mut post = PostProcessConfig::default();
+        post.prompts.retain(|p| p.id != DEV_INSTRUCTION_PROMPT_ID);
+        assert!(!post.upgrade_builtin_prompts());
+        assert_eq!(post.prompts.len(), 1);
+
+        // 예전 판이어도 같은 ID가 이미 있으면 겹쳐 넣지 않습니다.
+        let mut post = PostProcessConfig {
+            builtin_prompts: 1,
+            ..PostProcessConfig::default()
+        };
+        post.prompts[1].text = "내가 만든 같은 ID".into();
+        assert!(post.upgrade_builtin_prompts(), "판은 올려야 합니다");
+        assert_eq!(post.prompts.len(), 2);
+        assert_eq!(post.prompts[1].text, "내가 만든 같은 ID");
+    }
+
+    #[test]
+    fn builtin_prompts_are_well_formed() {
+        let prompts = builtin_prompts();
+        let mut ids: Vec<_> = prompts.iter().map(|(_, p)| p.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), prompts.len(), "기본 프롬프트 ID가 겹칩니다");
+        for (since, prompt) in &prompts {
+            assert!(
+                (1..=BUILTIN_PROMPTS_VERSION).contains(since),
+                "{}: 판이 범위를 벗어났습니다",
+                prompt.id
+            );
+            assert!(
+                !prompt.name.is_empty() && !prompt.text.trim().is_empty(),
+                "{}",
+                prompt.id
+            );
+            assert_eq!(
+                prompt.text,
+                prompt.text.trim(),
+                "{}: 앞뒤 공백 없이 넣어야 합니다",
+                prompt.id
+            );
+        }
+        assert!(
+            prompts
+                .iter()
+                .any(|(since, _)| *since == BUILTIN_PROMPTS_VERSION),
+            "지금 판에 들어간 기본 프롬프트가 있어야 합니다 (판을 올렸다면)"
         );
     }
 

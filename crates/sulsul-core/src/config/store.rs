@@ -49,8 +49,9 @@ pub struct LoadedConfig {
     /// 파일에 남아 있던, 지금은 없앤 설정 키의 경로 ([`super::REMOVED_KEYS`]).
     /// 경고하지 않고 다음 저장 때 파일에서 지우므로, 비어 있지 않으면 한 번 저장해 정리하면 됩니다.
     pub removed_keys: Vec<String>,
-    /// 사용자가 고치지 않은 예전 기본 프롬프트 지시문을 지금 지시문으로 바꿨는지
-    /// ([`super::PostProcessConfig::upgrade_default_prompt`]). 바꿨으면 한 번 저장해 파일에도 반영하면 됩니다.
+    /// 예전 판의 기본 프롬프트를 지금 것으로 맞췄는지 (고치지 않은 예전 기본 지시문을 바꾸거나 새 기본
+    /// 프롬프트를 더함, [`super::PostProcessConfig::upgrade_builtin_prompts`]).
+    /// 바꿨으면 한 번 저장해 파일에도 반영하면 됩니다.
     pub upgraded_prompts: bool,
 }
 
@@ -105,7 +106,7 @@ impl ConfigStore {
         })
         .map_err(|e| self.parse_error(text, &e))?;
         issues.extend(config.validate());
-        let upgraded_prompts = config.postprocess.upgrade_default_prompt();
+        let upgraded_prompts = config.postprocess.upgrade_builtin_prompts();
         Ok(LoadedConfig {
             config,
             issues,
@@ -544,6 +545,14 @@ mod tests {
             "주석은 지켜야 합니다:\n{text}"
         );
         assert!(
+            text.contains("builtin_prompts = 2"),
+            "올린 판을 파일에 써야 합니다:\n{text}"
+        );
+        assert!(
+            text.contains("id = \"dev_instruction\""),
+            "새 기본 프롬프트를 더해야 합니다:\n{text}"
+        );
+        assert!(
             !store.load().unwrap().upgraded_prompts,
             "한 번 바꾼 뒤에는 다시 바꾸지 않습니다"
         );
@@ -953,6 +962,7 @@ enabled = false
         let original = r#"[postprocess]
 enabled = true
 prompt = "b"
+builtin_prompts = 2
 
 # 회의록용
 [[postprocess.prompts]]

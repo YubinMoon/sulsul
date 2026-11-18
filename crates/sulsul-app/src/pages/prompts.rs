@@ -435,6 +435,7 @@ mod tests {
     fn added_prompt_gets_unused_id_and_name() {
         rust_i18n::set_locale("ko");
         let mut post = PostProcessConfig::default();
+        let before = post.prompts.len();
         let first_name = new_prompt_name(&post.prompts);
         let first = add_prompt(&mut post, first_name.clone());
         let second_name = new_prompt_name(&post.prompts);
@@ -444,7 +445,7 @@ mod tests {
         assert_ne!(first, DEFAULT_PROMPT_ID);
         assert_eq!(first_name, "새 프롬프트");
         assert_eq!(second_name, "새 프롬프트 2");
-        assert_eq!(post.prompts.len(), 3);
+        assert_eq!(post.prompts.len(), before + 2);
         // 새로 만들기만 해서는 쓰는 프롬프트가 바뀌지 않습니다.
         assert_eq!(post.prompt, DEFAULT_PROMPT_ID);
     }
