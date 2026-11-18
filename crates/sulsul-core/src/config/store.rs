@@ -597,7 +597,8 @@ max_record_seconds = 60
         );
     }
 
-    /// 없앤 항목(`general.start_minimized`, `[output]`)이 들어 있는 예전 설정 파일
+    /// 없앤 항목(`general.start_minimized`, `output.mode`, `output.restore_delay_ms`)이 들어 있는 예전 설정 파일.
+    /// `output.restore_clipboard`는 지금도 같은 뜻으로 씁니다.
     const OLD_FILE: &str = r#"# 술술(sulsul) 설정 파일
 
 [general]
@@ -636,19 +637,29 @@ enabled = false
             ["general.my_key"],
             "없앤 키는 경고하지 않고, 직접 넣은 키는 경고해야 합니다"
         );
-        assert_eq!(loaded.removed_keys, ["general.start_minimized", "output"]);
+        assert_eq!(
+            loaded.removed_keys,
+            [
+                "general.start_minimized",
+                "output.mode",
+                "output.restore_delay_ms"
+            ]
+        );
         assert_eq!(loaded.config.hotkey.key, "F9");
         assert!(loaded.config.general.launch_at_startup);
+        assert_eq!(
+            loaded.config.output,
+            crate::config::OutputConfig::default(),
+            "예전 `mode = \"paste\"`는 커서 입력으로 읽지 않습니다"
+        );
 
         store.save(&loaded.config).unwrap();
         let text = fs::read_to_string(store.path()).unwrap();
         for gone in [
             "start_minimized",
             "# 시작할 때 창을 띄우지 않고",
-            "[output]",
+            "mode = \"paste\"",
             "# paste: 커서 위치에 붙여넣기",
-            "restore_clipboard",
-            "# 붙여넣은 뒤 원래 클립보드",
             "restore_delay_ms",
         ] {
             assert!(
@@ -661,6 +672,8 @@ enabled = false
             "# 로그인할 때 자동 실행\nlaunch_at_startup = true\n",
             "# 내가 넣은 키\nmy_key = 1\n",
             "[hotkey]\nkey = \"F9\"\n",
+            "[output]\n# 붙여넣은 뒤 원래 클립보드 내용을 되돌리기\nrestore_clipboard = true\n",
+            "target = \"clipboard\"",
             "\n[postprocess]\n# 글 다듬기를 쓸지\nenabled = false\n",
         ] {
             assert!(text.contains(kept), "`{kept}`이(가) 남아야 합니다:\n{text}");
@@ -743,7 +756,14 @@ enabled = false
         .unwrap();
         let loaded = store.load().unwrap();
         assert!(loaded.issues.is_empty(), "{:?}", loaded.issues);
-        assert_eq!(loaded.removed_keys, ["general.start_minimized", "output"]);
+        assert_eq!(
+            loaded.removed_keys,
+            [
+                "general.start_minimized",
+                "output.mode",
+                "output.restore_delay_ms"
+            ]
+        );
 
         store.save(&loaded.config).unwrap();
         let text = fs::read_to_string(store.path()).unwrap();
@@ -751,7 +771,9 @@ enabled = false
         assert!(reloaded.removed_keys.is_empty(), "{text}");
         assert!(reloaded.issues.is_empty(), "{:?}", reloaded.issues);
         assert!(
-            !text.contains("start_minimized") && !text.contains("output"),
+            !text.contains("start_minimized")
+                && !text.contains("\"type\"")
+                && !text.contains("restore_delay_ms"),
             "{text}"
         );
     }

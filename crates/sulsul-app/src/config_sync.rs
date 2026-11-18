@@ -421,7 +421,10 @@ mod tests {
 
         let text = fs::read_to_string(sync.path()).unwrap();
         assert!(!text.contains("start_minimized"), "{text}");
-        assert!(!text.contains("[output]"), "{text}");
+        assert!(
+            !text.contains("mode = \"paste\"") && !text.contains("restore_delay_ms"),
+            "{text}"
+        );
         assert!(text.contains("# 내가 넣은 키\nmy_key = 1"), "{text}");
         assert_eq!(sync.config.hotkey.key, "F9");
 
@@ -438,14 +441,17 @@ mod tests {
         let home = Home::new();
         let mut sync = ConfigSync::open(home.store());
         let text = fs::read_to_string(sync.path()).unwrap();
-        fs::write(sync.path(), format!("{text}\n[output]\nmode = \"type\"\n")).unwrap();
+        // 새 파일에도 `[output]` 표가 있으므로 그 안에 예전 키를 넣습니다.
+        assert!(text.contains("[output]\n"), "{text}");
+        let old = text.replacen("[output]\n", "[output]\nmode = \"type\"\n", 1);
+        fs::write(sync.path(), old).unwrap();
 
         assert!(!sync.reload(), "설정 값은 그대로입니다");
         assert!(sync.issues().is_empty(), "{:?}", sync.issues());
         assert!(sync.has_pending_save());
         flush(&mut sync);
         let cleaned = fs::read_to_string(sync.path()).unwrap();
-        assert!(!cleaned.contains("[output]"), "{cleaned}");
+        assert!(!cleaned.contains("mode = \"type\""), "{cleaned}");
         assert!(!sync.reload());
         assert!(!sync.has_pending_save());
     }

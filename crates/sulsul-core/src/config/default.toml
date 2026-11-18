@@ -23,6 +23,15 @@ input_device = ""
 max_record_seconds = 120
 feedback_sounds = true
 
+[output]
+# 받아쓴 글을 보낼 곳
+# clipboard: 클립보드에 복사
+# cursor: 입력 중인 커서 위치에 바로 넣기 (입력할 곳이 없으면 기록에만 남김)
+# auto: 입력 중인 커서가 있으면 그 자리에 넣고, 없으면 클립보드에 복사
+target = "clipboard"
+# 클립보드에 복사한 글을 붙여넣은 뒤 원래 클립보드 내용으로 되돌리기 (clipboard, auto일 때)
+restore_clipboard = true
+
 [stt]
 engine = "whisper_local"
 initial_prompt = ""

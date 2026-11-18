@@ -27,8 +27,10 @@ pub const DEFAULT_CONFIG_TOML: &str = include_str!("default.toml");
 pub const REMOVED_KEYS: &[&str] = &[
     // 로그인 자동 실행으로 켜질 때만 트레이로 시작하도록 바뀌어 없앴습니다.
     "general.start_minimized",
-    // 출력은 "클립보드에 복사하고 붙여넣은 뒤 되돌리기"로 고정되었습니다.
-    "output",
+    // 예전 `[output]`의 출력 방식(paste·type·clipboard)과 되돌리기 전 기다리는 시간.
+    // 지금은 보낼 곳을 `output.target`으로 고르고, 기다리는 시간은 앱이 정합니다.
+    "output.mode",
+    "output.restore_delay_ms",
     // 자동 음량 조절과 앞뒤 조용한 부분 자르기는 끌 이유가 없어 늘 켜 둡니다.
     "audio.auto_gain",
     "audio.trim_silence",
@@ -49,6 +51,7 @@ pub struct Config {
     pub general: GeneralConfig,
     pub hotkey: HotkeyConfig,
     pub audio: AudioConfig,
+    pub output: OutputConfig,
     pub stt: SttConfig,
     pub postprocess: PostProcessConfig,
 }
@@ -60,6 +63,7 @@ impl Default for Config {
             general: GeneralConfig::default(),
             hotkey: HotkeyConfig::default(),
             audio: AudioConfig::default(),
+            output: OutputConfig::default(),
             stt: SttConfig::default(),
             postprocess: PostProcessConfig::default(),
         }
@@ -137,6 +141,47 @@ impl Default for AudioConfig {
             max_record_seconds: 120,
             feedback_sounds: true,
         }
+    }
+}
+
+/// 받아쓴(다듬은) 글을 보내는 방법 (`[output]`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputConfig {
+    /// 받아쓴 글을 보낼 곳
+    pub target: OutputTarget,
+    /// 클립보드에 복사한 글을 사용자가 붙여넣은 뒤 원래 클립보드 내용으로 되돌릴지.
+    /// 클립보드에 복사할 때(`clipboard`, 입력할 곳이 없을 때의 `auto`)만 씁니다. 커서 위치에 넣을 때는
+    /// 클립보드를 잠깐 빌려 쓰기만 하므로 이 값과 상관없이 늘 되돌립니다.
+    pub restore_clipboard: bool,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            target: OutputTarget::Clipboard,
+            restore_clipboard: true,
+        }
+    }
+}
+
+/// 받아쓴 글을 보낼 곳
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputTarget {
+    /// 클립보드에 복사
+    #[default]
+    Clipboard,
+    /// 입력 중인 커서 위치에 바로 넣기. 입력할 곳이 없으면 기록에만 남깁니다.
+    Cursor,
+    /// 입력 중인 커서가 있으면 그 자리에 넣고, 없으면 클립보드에 복사
+    Auto,
+}
+
+impl OutputTarget {
+    /// 이 방식에서 클립보드에 복사하는 일이 있는지 ([`OutputConfig::restore_clipboard`]를 쓰는지)
+    pub fn may_copy(self) -> bool {
+        matches!(self, Self::Clipboard | Self::Auto)
     }
 }
 
@@ -436,8 +481,16 @@ mod tests {
     #[test]
     fn removed_key_matches_key_and_children_only() {
         assert!(is_removed_key("general.start_minimized"));
-        assert!(is_removed_key("output"));
+        assert!(is_removed_key("output.mode"));
         assert!(is_removed_key("output.restore_delay_ms"));
+        assert!(
+            !is_removed_key("output") && !is_removed_key("output.target"),
+            "다시 쓰는 `[output]` 표와 새 키는 아닙니다"
+        );
+        assert!(
+            !is_removed_key("output.restore_clipboard"),
+            "예전과 뜻이 같아 이어 쓰는 키입니다"
+        );
         assert!(is_removed_key("audio.auto_gain"));
         assert!(is_removed_key("audio.trim_silence"));
         assert!(
