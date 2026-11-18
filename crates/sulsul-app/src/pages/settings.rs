@@ -8,7 +8,9 @@
 
 use egui::{DragValue, Ui};
 use rust_i18n::t;
-use sulsul_core::config::{Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, Theme};
+use sulsul_core::config::{
+    Config, ConfigIssue, HotkeyMode, MAX_RECORD_SECONDS, OutputConfig, OutputTarget, Theme,
+};
 use sulsul_core::settings;
 use sulsul_core::stt::SttRegistry;
 
@@ -174,6 +176,9 @@ fn general_section(ui: &mut Ui, config: &mut Config) {
             .show(ui, |ui| {
                 controls::toggle(ui, &mut general.launch_at_startup, &label)
             });
+        row::separator(ui);
+
+        output_rows(ui, &mut config.output);
     });
 }
 
@@ -275,6 +280,52 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
             .show(ui, |ui| {
                 controls::toggle(ui, &mut audio.feedback_sounds, &label)
             });
+    });
+}
+
+/// 일반 설정 아래쪽의 받아쓰기 결과(보낼 곳)와 클립보드 되돌리기.
+///
+/// 되돌리기는 클립보드에 복사할 때(클립보드에 복사, 입력할 곳이 없을 때의 자동)만 쓰는 설정이라, 커서 위치에
+/// 붙여넣기에서는 저장된 값을 그대로 두고 바꿀 수 없게 보여 줍니다. 커서 위치에 넣을 때는 클립보드를 잠깐 빌리기만
+/// 해서 늘 되돌립니다.
+fn output_rows(ui: &mut Ui, output: &mut OutputConfig) {
+    let targets = [
+        (
+            OutputTarget::Clipboard,
+            t!("settings.general.output_clipboard"),
+        ),
+        (OutputTarget::Cursor, t!("settings.general.output_cursor")),
+        (OutputTarget::Auto, t!("settings.general.output_auto")),
+    ];
+    let items: Vec<_> = targets
+        .iter()
+        .map(|(target, label)| ComboItem::new(*target, label.as_ref()))
+        .collect();
+    let help = match output.target {
+        OutputTarget::Clipboard => t!("settings.general.output_clipboard_help"),
+        OutputTarget::Cursor => t!("settings.general.output_cursor_help"),
+        OutputTarget::Auto => t!("settings.general.output_auto_help"),
+    };
+    Row::new(&t!("settings.general.output"))
+        .help(&help)
+        .show(ui, |ui| {
+            // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+            let width = CONTROL_WIDTH.min(ui.available_width());
+            controls::combo(ui, "output_target", width, &mut output.target, &items, "");
+        });
+    row::separator(ui);
+
+    let may_copy = output.target.may_copy();
+    let label = t!("settings.general.restore_clipboard");
+    let help = if may_copy {
+        t!("settings.general.restore_clipboard_help")
+    } else {
+        t!("settings.general.restore_clipboard_cursor_help")
+    };
+    Row::new(&label).help(&help).show(ui, |ui| {
+        ui.add_enabled_ui(may_copy, |ui| {
+            controls::toggle(ui, &mut output.restore_clipboard, &label)
+        });
     });
 }
 
