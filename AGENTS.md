@@ -104,7 +104,7 @@ cargo run -p sulsul-cli -- transcribe test.wav --engine whisper_local
 - 글꼴은 Pretendard(`fonts.rs`), 아이콘은 Lucide 아이콘 글꼴(`icons.rs`)을 씁니다.
 - 창 최소 크기(780×540)에서도 화면이 잘리거나 겹치지 않아야 합니다.
 - 모델 로딩·인식·내려받기처럼 오래 걸리는 일은 화면 스레드에서 돌리지 않고, 작업 스레드와 `CancelToken`으로 처리합니다
-  (`pages/test/transcribe/job.rs` 참고).
+  (`pages/test/stt/job.rs` 참고).
 - 가속 장치는 "예상 장치"(`accel.rs`)와 엔진이 보고한 실제 장치를 화면에서 섞지 않습니다.
 
 ## 커밋

@@ -1,10 +1,9 @@
 //! 화면들이 함께 쓰는 실행 중 상태 (설정 파일에 저장하지 않는 것들).
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sulsul_core::AppPaths;
-use sulsul_core::audio::{self, AudioClip, AudioError, InputDevice};
+use sulsul_core::audio::{self, AudioError, InputDevice};
 use sulsul_core::config::Config;
 use sulsul_core::stt::SttRegistry;
 
@@ -30,14 +29,12 @@ pub struct Shared {
     pub paths: AppPaths,
     pub registry: SttRegistry,
     pub devices: DeviceList,
-    /// 방금 녹음한 오디오 (받아쓰기 테스트에서 사용)
-    pub last_recording: Option<Arc<Recorded>>,
     pub toasts: Toasts,
     /// 다음 프레임에 이동할 화면
     pub navigate: Option<Page>,
     /// 테스트 화면의 받아쓰기 테스트와 단축키 받아쓰기가 함께 쓰는 엔진 보관소
     pub transcriber: SharedTranscriber,
-    /// 단축키 받아쓰기가 쓰는 글 다듬기 보관소 (로컬 모델 실행기를 띄워 둠)
+    /// 테스트 화면의 글 다듬기 테스트와 단축키 받아쓰기가 함께 쓰는 글 다듬기 보관소 (로컬 모델 실행기를 띄워 둠)
     pub refiner: SharedRefiner,
     /// 설정 화면에서 새 단축키를 입력받는 창구
     pub key_capture: KeyCapture,
@@ -55,7 +52,6 @@ impl Shared {
             paths,
             registry,
             devices: DeviceList::load(),
-            last_recording: None,
             toasts: Toasts::default(),
             navigate: None,
             key_capture: KeyCapture::default(),
@@ -82,25 +78,6 @@ pub enum DictationState {
     Transcribing,
     /// 받아쓴 글이 클립보드에 있고, 붙여넣으면 원래 클립보드 내용으로 되돌릴 차례
     WaitingPaste,
-}
-
-/// 녹음 결과
-pub struct Recorded {
-    pub clip: AudioClip,
-    pub device_name: String,
-    /// 최대 녹음 길이에 닿아 자동으로 끝났는지
-    pub auto_stopped: bool,
-    /// 앞뒤 조용한 부분을 자른 결과 (말소리를 판정하지 못해 자르지 않았으면 `None`)
-    pub trim: Option<SilenceTrim>,
-}
-
-/// 녹음 앞뒤의 조용한 부분을 자른 결과
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SilenceTrim {
-    /// 이만큼 잘라 냈습니다 (0일 수도 있음)
-    Trimmed(Duration),
-    /// 말소리를 찾지 못해 자르지 않았습니다. 단축키 받아쓰기라면 받아쓰지 않았을 녹음입니다.
-    NoSpeech,
 }
 
 /// 입력 장치 목록. 장치를 훑는 데 시간이 걸릴 수 있어 필요할 때만 다시 읽습니다.

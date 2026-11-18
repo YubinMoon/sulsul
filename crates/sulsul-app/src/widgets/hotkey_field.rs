@@ -1,6 +1,5 @@
 //! 단축키 표시와 입력란.
 //!
-//! - [`keycaps`]: 단축키를 키캡 모양으로 나란히 보여 줍니다.
 //! - [`hotkey_field`]: 지금 단축키를 보여 주다가, 누르면 새 단축키를 입력받는 칸입니다.
 //!
 //! 키 이름은 [`hotkey_key_parts`]로 바꿉니다 (설정 값 `Ctrl+Shift+Space` → "Ctrl", "Shift", "스페이스").
@@ -14,7 +13,6 @@ use egui::{
 };
 use rust_i18n::t;
 
-use super::text;
 use crate::hotkey::{Captured, KeyCapture};
 use crate::i18n::hotkey_key_parts;
 use crate::icons::{self, Icon};
@@ -150,23 +148,6 @@ impl Caps {
             );
         }
     }
-}
-
-/// 단축키(`"RightCtrl"`, `"Ctrl+Shift+Space"`)를 키캡 모양으로 나란히 보여 줍니다.
-///
-/// 한 줄에 다 들어가지 않으면 키캡 단위로 줄을 바꿉니다. 단축키가 비어 있으면 "지정 안 됨"을 보여 줍니다.
-pub fn keycaps(ui: &mut Ui, key: &str) -> Response {
-    let parts = hotkey_key_parts(key);
-    if parts.is_empty() {
-        return ui.label(text::caption(ui, t!("hotkey.unset")));
-    }
-    let caps = Caps::layout(ui, &parts, ui.max_rect().width());
-    let (rect, response) = ui.allocate_exact_size(caps.size, Sense::hover());
-    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, parts.join(" + ")));
-    if ui.is_rect_visible(rect) {
-        caps.paint(ui, rect.min, CapTone::Plain);
-    }
-    response
 }
 
 /// 입력란 왼쪽에 보일 내용

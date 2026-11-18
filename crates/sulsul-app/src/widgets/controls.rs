@@ -403,17 +403,6 @@ impl<T> ComboItem<T> {
         self.unavailable = Some(reason.into());
         self
     }
-
-    /// 이름과 부가 정보는 그대로 두고 값만 바꿉니다 (예: `String` → `Option<String>`).
-    pub fn map_value<U>(self, map: impl FnOnce(T) -> U) -> ComboItem<U> {
-        ComboItem {
-            value: map(self.value),
-            label: self.label,
-            detail: self.detail,
-            unavailable: self.unavailable,
-            group: self.group,
-        }
-    }
 }
 
 /// 값 하나를 고르는 콤보 상자. 값이 바뀌면 `true`를 돌려줍니다.
@@ -544,21 +533,4 @@ fn combo_item_reason(ui: &mut Ui, reason: &str, width: f32) {
                 });
         },
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mapping_the_value_keeps_everything_else() {
-        let item = ComboItem::new("fr".to_owned(), "프랑스어")
-            .detail("fr")
-            .unavailable("쓸 수 없음")
-            .map_value(Some);
-        assert_eq!(item.value.as_deref(), Some("fr"));
-        assert_eq!(item.label, "프랑스어");
-        assert_eq!(item.detail.as_deref(), Some("fr"));
-        assert_eq!(item.unavailable.as_deref(), Some("쓸 수 없음"));
-    }
 }

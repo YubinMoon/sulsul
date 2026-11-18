@@ -14,7 +14,6 @@ use sulsul_core::audio::{AudioClip, AudioError};
 use sulsul_core::config::SttConfig;
 use sulsul_core::stt::{ComputeDevice, SttError, TranscribeError, TranscribeJob};
 
-use crate::session::Recorded;
 use crate::transcriber::SharedTranscriber;
 
 pub struct JobInput {
@@ -23,25 +22,10 @@ pub struct JobInput {
     /// 설정 파일의 `[stt]` (엔진별 설정 포함)
     pub stt: SttConfig,
     pub engine_id: String,
-    /// 이 작업에만 쓸 언어(`ko`, `en`, `auto` 등). `None`이면 엔진 설정의 언어를 씁니다.
-    pub language: Option<String>,
-    pub audio: JobAudio,
+    /// 받아쓸 오디오 (정리한 녹음 또는 WAV 파일)
+    pub audio: Arc<AudioClip>,
     /// 작업을 중간에 멈추는 신호
     pub cancel: CancelToken,
-}
-
-pub enum JobAudio {
-    Recorded(Arc<Recorded>),
-    File(Arc<AudioClip>),
-}
-
-impl JobAudio {
-    pub fn clip(&self) -> &AudioClip {
-        match self {
-            Self::Recorded(recorded) => &recorded.clip,
-            Self::File(clip) => clip,
-        }
-    }
 }
 
 pub struct JobOutput {
@@ -55,7 +39,7 @@ pub struct Success {
     pub language: String,
     /// 엔진이 판단한 언어 (알 수 있을 때)
     pub detected_language: Option<String>,
-    /// 엔진이 계산에 쓴 장치 (결과 카드에 표시)
+    /// 엔진이 계산에 쓴 장치 (결과에 표시)
     pub device: ComputeDevice,
     /// 엔진을 만드는 데 걸린 시간 (다시 쓴 경우 0)
     pub prepare: Duration,
@@ -105,7 +89,6 @@ fn run(input: JobInput) -> JobOutput {
         transcriber,
         stt,
         engine_id,
-        language,
         audio,
         cancel,
     } = input;
@@ -113,11 +96,12 @@ fn run(input: JobInput) -> JobOutput {
     let job = TranscribeJob {
         stt: &stt,
         engine_id: &engine_id,
-        language: language.as_deref(),
+        // 단축키 받아쓰기처럼 엔진 설정의 언어를 씁니다.
+        language: None,
         cancel,
     };
     // 단축키 받아쓰기가 엔진을 쓰고 있으면 끝날 때까지 기다립니다.
-    let result = match transcriber.lock().transcribe(audio.clip(), &job) {
+    let result = match transcriber.lock().transcribe(&audio, &job) {
         Ok(done) => {
             tracing::info!(
                 engine = %engine_id,
@@ -166,9 +150,8 @@ mod tests {
             transcriber,
             stt,
             engine_id: engine_id.to_owned(),
-            language: None,
             // 엔진이 16kHz를 받으므로 48kHz 오디오는 변환되어야 합니다.
-            audio: JobAudio::File(Arc::new(AudioClip::new(vec![0.1; 48_000], 48_000))),
+            audio: Arc::new(AudioClip::new(vec![0.1; 48_000], 48_000)),
             cancel: CancelToken::new(),
         }
     }

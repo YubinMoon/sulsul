@@ -338,106 +338,101 @@ stt:
     label: 모델 메모리 유지 시간(분)
     help: 받아쓰기가 끝난 뒤 이 시간 동안 쓰지 않으면 모델을 메모리에서 내려놓습니다. 0이면 바로 내려놓고, 다음 받아쓰기 때 다시 불러옵니다.
 
-# 테스트 화면: 위쪽은 녹음 테스트(record.*), 아래쪽은 받아쓰기 테스트(transcribe.*)
+# 테스트 화면: 단축키 받아쓰기의 흐름을 녹음(record) → 받아쓰기(stt) → 글 다듬기(refine) 차례로 시험합니다.
 test:
   title: 테스트
-  subtitle: 마이크 소리가 제대로 들어오는지, 받아쓰기가 잘 되는지 확인합니다.
-
-record:
-  start: 녹음 시작
-  stop: 녹음 정지
-  error_title: 녹음하지 못했습니다
-  empty_title: 녹음된 소리가 없습니다
-  empty_body: 장치에서 오디오를 받지 못했습니다. 조금 더 길게 녹음하거나 다른 입력 장치를 골라 보세요.
-  # 녹음 테스트 카드 아래쪽의 단축키 안내 줄 (글 뒤에 단축키가 키캡 모양으로 붙습니다)
-  hotkey:
-    label: "단축키 · %{mode}"
-    recording: 단축키로 녹음 중
-    transcribing: 받아쓰는 중
-    waiting_paste: 붙여넣기를 기다리는 중
-  # 녹음 테스트 카드 아래쪽의 입력 장치 안내 줄 (장치는 설정 화면에서 고릅니다)
-  device:
-    label: "입력 장치 · %{name}"
-    change: 설정에서 바꾸기
-  recorder:
-    title: 녹음 테스트
+  subtitle: 녹음 → 받아쓰기 → 글 다듬기를 차례로 시험합니다.
+  copy: 복사
+  copied: 클립보드에 복사했습니다.
+  running: "실행 중… %{elapsed}"
+  cancelling: 취소하는 중…
+  cancelled: 취소했습니다.
+  wait_step: 다른 단계가 끝나면 실행할 수 있습니다.
+  wait_dictation: 단축키 받아쓰기가 끝나면 실행할 수 있습니다.
+  dictation_waits: 단축키 받아쓰기는 이 작업이 끝난 뒤 이어집니다.
+  manage_models: 모델 관리
+  change_in_settings: 설정에서 바꾸기
+  record:
+    title: 1. 녹음
+    start: 녹음 시작
+    stop: 녹음 정지
     idle: 녹음 대기 중
     recording: 녹음 중
-    limit: "최대 %{max}까지 녹음합니다"
-    limit_with_device: "최대 %{max} · %{device}"
-    level_idle: 녹음을 시작하면 입력 음량이 여기에 표시됩니다. (dBFS)
-    level_readout: "입력 음량 %{level} · 최근 최댓값 %{peak}"
-  result:
-    title: 방금 녹음한 오디오
+    cleaning: 녹음 정리 중…
+    limit: "최대 %{max} · %{device}"
+    limit_idle: "최대 %{max}까지 녹음합니다"
+    level: "입력 음량 %{level} · 최근 최댓값 %{peak}"
+    level_idle: 녹음을 시작하면 입력 음량이 여기에 표시됩니다.
+    device: "입력 장치 · %{name}"
+    error_title: 녹음하지 못했습니다
+    empty: 녹음된 소리가 없습니다. 조금 더 길게 녹음하거나 다른 입력 장치를 골라 보세요.
+    crashed: 녹음을 정리하지 못했습니다. 로그를 확인해 주세요.
+    # 녹음 결과 측정값. 녹음은 단축키 받아쓰기처럼 음량을 맞추고 앞뒤를 자른 뒤의 값입니다.
     duration: 길이
-    sample_rate: 샘플레이트
+    trimmed: "앞뒤 %{seconds} 자름"
+    not_trimmed: 자르지 않음
+    trim_off: 자르기 꺼짐
     peak: 최대 음량
-    rms: 평균 음량 (RMS)
-    device: "녹음 장치: %{device}"
-    auto_stopped: 최대 녹음 길이에 닿아 자동으로 멈췄습니다.
+    rms: 평균 음량
+    gain: 자동 음량
+    gain_db: "+%{value} dB"
+    gain_none: 그대로
+    off: 꺼짐
     silent_title: 소리가 거의 들어오지 않았습니다
     silent_body: "마이크가 음소거되어 있지 않은지, 올바른 입력 장치를 골랐는지 확인하세요. %{hint}"
     no_speech_title: 말소리를 찾지 못했습니다
-    no_speech_body: 단축키로 받아쓸 때 이런 녹음은 받아쓰지 않고 끝냅니다. 마이크에 조금 더 가까이 대고 말해 보세요.
-    trimmed: "앞뒤의 조용한 부분 %{seconds}를 잘라 냈습니다."
+    no_speech_body: 단축키로 받아쓸 때는 이런 녹음을 받아쓰지 않고 끝냅니다.
+    unchecked: 말소리를 판정하지 못해 자르지 않았습니다.
+    auto_stopped: 최대 녹음 길이에 닿아 자동으로 멈췄습니다.
     save_wav: WAV로 저장
     save_dialog_title: 녹음을 WAV 파일로 저장
     saved: "저장했습니다: %{path}"
     open_folder: 녹음 폴더 열기
-
-transcribe:
-  follow_settings: "설정 값 사용 (%{value})"
-  temporary_help: 여기서 바꾼 엔진과 언어는 이 화면에서만 쓰이고 설정 파일에는 저장되지 않습니다.
-  run: 받아쓰기
-  running: "인식 중… %{elapsed}"
-  need_audio: 먼저 받아쓰기할 오디오를 준비하세요.
-  source:
-    title: 받아쓸 오디오
-    recording: 방금 녹음한 오디오
-    file: WAV 파일
-    summary: "길이 %{duration} · %{rate}"
-    no_recording: 아직 녹음한 오디오가 없습니다. 위의 녹음 테스트에서 녹음해 보세요.
+  stt:
+    title: 2. 받아쓰기
+    input: 오디오
+    recording: 방금 녹음
+    summary: "%{duration} · %{rate}"
+    no_audio: 위에서 먼저 녹음하세요.
     open_wav: WAV 파일 열기
-    open_dialog_title: 받아쓰기할 WAV 파일 선택
-    no_file: 선택한 파일이 없습니다.
+    open_dialog_title: 받아쓸 WAV 파일 선택
     empty_file: 이 WAV 파일에는 오디오가 들어 있지 않습니다.
-  engine:
-    title: 받아쓰기 엔진
-  model:
-    label: 모델 · API
-    found: 사용 가능
-    missing: 설정 필요
-    unknown: 모델·프로필 상태를 알 수 없습니다
-    open_folder: 모델 폴더 열기
-    download: 모델 내려받기
-    manage: 모델 관리에서 설정
-    cloud_profile: "API 프로필: %{profile} · 모델 %{model}"
-    cloud_missing: 선택된 API 프로필이 없습니다. 모델 관리에서 프로필을 추가·활성화하세요.
-    expected_device: "예상 장치: %{device}"
-  result:
-    title: 받아쓰기 결과
-    empty: (인식된 내용이 없습니다)
-    copy: 복사
-    copied: 결과를 클립보드에 복사했습니다.
-    detected: "감지된 언어 %{language}"
-    device: "실제로 쓴 장치 %{device}"
-    audio: 오디오 길이
-    prepare: 엔진 준비 시간
-    reused: 다시 사용
-    reused_note: 앞에서 준비한 엔진
-    recognize: 인식 시간
-    rtf: RTF
-    rtf_note: 인식 시간 ÷ 오디오 길이
-    failed: 받아쓰기하지 못했습니다
-  history:
-    title: 시도 기록
-    help: 이번 실행 동안의 기록입니다. 번호를 누르면 그 결과를 다시 볼 수 있습니다.
-    number: 번호
+    use_recording: 방금 녹음으로 되돌리기
     engine: 엔진
-    language: 언어
-    time: 걸린 시간
-    rtf: RTF
-    result: 결과
+    expected_device: "예상 장치 %{device}"
+    model_missing: 모델 파일이 없습니다. 모델 관리에서 내려받으세요.
+    cloud_not_ready: API 프로필이 없거나 덜 채워졌습니다. 모델 관리에서 확인하세요.
+    run: 받아쓰기
+    need_audio: 받아쓸 오디오가 없습니다.
+    failed: 받아쓰지 못했습니다
+    empty: (인식된 말이 없습니다)
+    detected: "감지된 언어 %{language}"
+    device: "실제 장치 %{device}"
+    audio: 오디오 길이
+    prepare: 엔진 준비
+    reused: 다시 사용
+    recognize: 인식 시간
+    rtf: "RTF %{value}"
+  refine:
+    title: 3. 글 다듬기
+    model: 모델
+    no_model: 고른 모델이 없습니다
+    provider: "%{name} · %{model}"
+    dictation_off: 단축키 받아쓰기에서는 다듬기가 꺼져 있습니다.
+    prompt: 프롬프트
+    prompt_help: 여기서 고른 프롬프트는 이 화면에서만 씁니다.
+    prompt_settings: "설정 값 사용 (%{name})"
+    input: 다듬을 글
+    input_hint: 받아쓰면 결과가 여기에 들어옵니다. 직접 고쳐 넣어도 됩니다.
+    run: 다듬기
+    need_input: 다듬을 글을 넣으세요.
+    failed: 다듬지 못했습니다
+    crashed: 다듬기 작업이 결과 없이 멈췄습니다. 로그를 확인해 주세요.
+    elapsed: 걸린 시간
+    cold: 모델 불러오기 포함
+
+# 받아쓰기 작업이 결과 없이 끝났을 때 (단축키 받아쓰기와 테스트 화면에서 씀)
+transcribe:
   error:
     crashed: 엔진이 결과를 내지 못하고 멈췄습니다. 로그를 확인해 주세요.
 
