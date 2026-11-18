@@ -66,6 +66,17 @@ rust_i18n::i18n!("../../locales", fallback = "ko");
 const WINDOW_SIZE: [f32; 2] = [960.0, 660.0];
 const WINDOW_MIN_SIZE: [f32; 2] = [780.0, 540.0];
 
+/// 창 제목 표시줄과 작업 표시줄 아이콘. 트레이 아이콘(대기 상태)과 같은 그림이고,
+/// 지정하지 않으면 eframe 기본 아이콘이 보입니다.
+fn window_icon() -> egui::IconData {
+    const SIZE: u32 = 256;
+    egui::IconData {
+        rgba: tray::icon_rgba(SIZE, session::DictationState::Idle),
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
 fn main() {
     let args = LaunchArgs::parse(std::env::args_os().skip(1));
     let home = home_dir(&args);
@@ -137,6 +148,7 @@ fn run(
         viewport: egui::ViewportBuilder::default()
             .with_title(t!("app.name"))
             .with_app_id("sulsul")
+            .with_icon(window_icon())
             .with_inner_size(WINDOW_SIZE)
             .with_min_inner_size(WINDOW_MIN_SIZE),
         // 로그인할 때 자동 실행(`--background`)이면 창 없이 트레이로 시작합니다. eframe은 첫 프레임을 그린 뒤

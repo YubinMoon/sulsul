@@ -94,8 +94,9 @@ fn tooltip(state: DictationState) -> String {
     .into_owned()
 }
 
-/// 아이콘 RGBA (가로·세로 `size` 픽셀)
-fn icon_rgba(size: u32, state: DictationState) -> Vec<u8> {
+/// 아이콘 RGBA (가로·세로 `size` 픽셀). 대기 상태 그림은 앱 창 아이콘과 실행 파일 아이콘
+/// (`assets/icon/sulsul.ico`)으로도 씁니다.
+pub(crate) fn icon_rgba(size: u32, state: DictationState) -> Vec<u8> {
     // 트레이는 작업 표시줄 위에 있고 작업 표시줄은 대개 어두우므로 다크 테마 색을 씁니다.
     let palette = Palette::for_dark_mode(true);
     let (fill, glyph) = match state {

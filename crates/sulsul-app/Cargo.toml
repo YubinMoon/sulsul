@@ -69,6 +69,9 @@ windows = { workspace = true, features = [
     "Win32_UI_Accessibility",
 ] }
 
+[build-dependencies]
+winresource.workspace = true
+
 [dev-dependencies]
 tempfile = "3"
 

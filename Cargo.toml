@@ -71,6 +71,8 @@ windows-sys = "0.61"
 windows = "0.62"
 tray-icon = { version = "0.26", default-features = false }
 raw-window-handle = "0.6"
+# 실행 파일에 아이콘과 파일 정보 넣기 (sulsul-app 빌드 스크립트, Windows)
+winresource = "0.1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
