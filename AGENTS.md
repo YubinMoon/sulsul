@@ -1,7 +1,8 @@
 # AGENTS.md
 
 이 저장소에서 일하는 에이전트(Claude, Codex 등)를 위한 안내입니다.
-사람이 읽는 소개, 빌드 종류 표, 설정 파일 위치는 [README.md](README.md)에 있습니다.
+사용자용 소개는 [README.md](README.md), 쓰는 법과 설정 파일 위치는 [docs/guide.md](docs/guide.md),
+빌드 종류 표와 개발 절차는 [docs/development.md](docs/development.md)에 있습니다.
 
 ## 프로젝트
 
