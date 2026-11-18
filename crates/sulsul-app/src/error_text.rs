@@ -149,6 +149,7 @@ pub fn llm(error: &LlmError) -> String {
             429 => t!("error.llm.rate_limited").into_owned(),
             _ => t!("error.llm.http", status = status).into_owned(),
         },
+        LlmError::ReasoningRejected { .. } => t!("error.llm.reasoning_rejected").into_owned(),
         LlmError::Network(_) => t!("error.llm.network").into_owned(),
         LlmError::BadResponse(_) => t!("error.llm.bad_response").into_owned(),
         LlmError::Cancelled => t!("error.llm.cancelled").into_owned(),
@@ -248,6 +249,10 @@ mod tests {
             LlmError::Http {
                 status: 500,
                 message: String::new(),
+            },
+            LlmError::ReasoningRejected {
+                status: 400,
+                message: "unsupported value".into(),
             },
             LlmError::Network("timed out".into()),
             LlmError::BadResponse("no choices".into()),

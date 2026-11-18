@@ -4,6 +4,11 @@
 //! 비용이 거의 들지 않게 짧은 질문 하나만 보냅니다. 글 다듬기([`chat`])는 지시문을 system 메시지로,
 //! 받아쓴 글을 user 메시지로 보냅니다. 두 요청 모두 제공자·모델마다 거부하는 매개변수(`max_tokens`,
 //! `temperature` 등)는 넣지 않습니다.
+//!
+//! 예외는 프로필에서 고른 추론 단계([`ReasoningEffort`])입니다. 제공자 기본값이면 아무것도 넣지 않고,
+//! 고른 단계는 제공자가 받는 방법([`ReasoningStyle`])으로 넣습니다. 받는 단계가 모델마다 달라, 400·422로
+//! 거절되면 추론 단계를 빼고 한 번 더 보냅니다. 글 다듬기는 그 답을 쓰고, 연결 테스트는 그 답이 오면
+//! 고른 단계가 원인이라고 알립니다([`LlmError::ReasoningRejected`]).
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -11,11 +16,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sulsul_core::CancelToken;
-use sulsul_core::config::ApiProfile;
+use sulsul_core::config::{ApiProfile, ReasoningEffort};
 
-use crate::presets::{MOCK_PROVIDER_ID, chat_completions_url, find_preset, requires_api_key};
+use crate::presets::{
+    MOCK_PROVIDER_ID, ReasoningStyle, chat_completions_url, find_preset, reasoning_support,
+    requires_api_key,
+};
 
 /// 외부 서버 연결 테스트의 기본 제한 시간 (생각하는 모델도 짧은 답은 이 안에 끝납니다)
 pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -67,6 +75,13 @@ pub enum LlmError {
         /// 응답 본문에서 뽑은 오류 설명 (없으면 빈 문자열)
         message: String,
     },
+    /// 고른 추론 단계를 넣은 요청은 거절되고, 빼고 보낸 요청은 통했습니다 (연결 테스트에서만 남).
+    #[error("the model rejected the reasoning effort ({})", http_error_text(*status, message))]
+    ReasoningRejected {
+        status: u16,
+        /// 거절한 응답 본문에서 뽑은 오류 설명 (없으면 빈 문자열)
+        message: String,
+    },
     #[error("network error: {0}")]
     Network(String),
     #[error("unexpected response: {0}")]
@@ -116,7 +131,14 @@ pub fn test_connection(
     cancel: &CancelToken,
 ) -> Result<ConnectionReply, LlmError> {
     let messages = json!([{ "role": "user", "content": TEST_PROMPT }]);
-    send(profile, messages, || "OK".to_owned(), timeout, cancel)
+    send(
+        profile,
+        messages,
+        || "OK".to_owned(),
+        WhenRejected::Report,
+        timeout,
+        cancel,
+    )
 }
 
 /// 받아쓴 글을 지시문에 따라 다듬어 달라고 요청합니다. 블로킹 함수입니다.
@@ -136,14 +158,71 @@ pub fn chat(
         { "role": "user", "content": text.trim() },
     ]);
     let mock_text = format!("[mock] {}", text.trim());
-    send(profile, messages, move || mock_text, timeout, cancel)
+    send(
+        profile,
+        messages,
+        move || mock_text,
+        WhenRejected::SendWithout,
+        timeout,
+        cancel,
+    )
+}
+
+/// 고른 추론 단계를 제공자가 거절했을 때 할 일
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhenRejected {
+    /// 추론 단계를 빼고 다시 보내 그 답을 씁니다 (글 다듬기).
+    SendWithout,
+    /// 추론 단계를 빼고 다시 보내 보고, 통하면 [`LlmError::ReasoningRejected`]로 알립니다 (연결 테스트).
+    Report,
+}
+
+/// 추론 단계를 넣은 요청을 거절할 때 제공자가 쓰는 상태 코드 (잘못된 값, 모르는 매개변수)
+fn is_rejection(status: u16) -> bool {
+    matches!(status, 400 | 422)
+}
+
+/// 고른 추론 단계를 요청 본문에 넣을 필드. 제공자 기본값이거나 바꿀 수 없는 제공자면 비어 있습니다.
+fn reasoning_fields(profile: &ApiProfile) -> Map<String, Value> {
+    let mut fields = Map::new();
+    let effort = profile.reasoning_effort;
+    let Some(level) = effort_value(effort) else {
+        return fields;
+    };
+    match (reasoning_support(&profile.provider).style, effort) {
+        (ReasoningStyle::Ignored, _) => {}
+        (ReasoningStyle::ThinkingType, ReasoningEffort::None) => {
+            fields.insert("thinking".into(), json!({ "type": "disabled" }));
+        }
+        (ReasoningStyle::ReasoningEnabled, ReasoningEffort::None) => {
+            fields.insert("reasoning".into(), json!({ "enabled": false }));
+        }
+        _ => {
+            fields.insert("reasoning_effort".into(), json!(level));
+        }
+    }
+    fields
+}
+
+/// `reasoning_effort`에 넣는 단계 이름. 제공자 기본값이면 `None`입니다.
+fn effort_value(effort: ReasoningEffort) -> Option<&'static str> {
+    match effort {
+        ReasoningEffort::Default => None,
+        ReasoningEffort::None => Some("none"),
+        ReasoningEffort::Low => Some("low"),
+        ReasoningEffort::Medium => Some("medium"),
+        ReasoningEffort::High => Some("high"),
+    }
 }
 
 /// `messages`로 채팅 요청을 보냅니다. 가짜 제공자는 네트워크 없이 `mock_text`로 답합니다.
+///
+/// 고른 추론 단계를 거절당해 다시 보낼 때도 `timeout`은 처음 보낸 때부터 셉니다.
 fn send(
     profile: &ApiProfile,
     messages: Value,
     mock_text: impl FnOnce() -> String,
+    when_rejected: WhenRejected,
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<ConnectionReply, LlmError> {
@@ -159,25 +238,86 @@ fn send(
     if api_key.is_empty() && requires_api_key(&profile.provider) {
         return Err(LlmError::MissingApiKey);
     }
-    let body = json!({
-        "model": profile.model.trim(),
-        "messages": messages,
-    })
-    .to_string();
+    let mut body = Map::new();
+    body.insert("model".into(), json!(profile.model.trim()));
+    body.insert("messages".into(), messages);
+    let reasoning = reasoning_fields(profile);
     tracing::debug!(
         provider = %profile.provider,
         model = %profile.model.trim(),
+        reasoning_effort = ?profile.reasoning_effort,
         %url,
         "sending LLM chat request"
     );
 
     let started = Instant::now();
+    if reasoning.is_empty() {
+        return post(
+            &url,
+            &api_key,
+            Value::Object(body),
+            started,
+            timeout,
+            cancel,
+        );
+    }
+    let mut with_reasoning = body.clone();
+    with_reasoning.extend(reasoning);
+    let (status, message) = match post(
+        &url,
+        &api_key,
+        Value::Object(with_reasoning),
+        started,
+        timeout,
+        cancel,
+    ) {
+        Err(LlmError::Http { status, message }) if is_rejection(status) => (status, message),
+        other => return other,
+    };
+    tracing::warn!(
+        provider = %profile.provider,
+        model = %profile.model.trim(),
+        reasoning_effort = ?profile.reasoning_effort,
+        "provider rejected the request with the reasoning effort (HTTP {status}: {message}); \
+         sending again without it"
+    );
+    let reply = post(
+        &url,
+        &api_key,
+        Value::Object(body),
+        started,
+        timeout,
+        cancel,
+    )?;
+    match when_rejected {
+        WhenRejected::SendWithout => Ok(reply),
+        WhenRejected::Report => Err(LlmError::ReasoningRejected { status, message }),
+    }
+}
+
+/// 요청 하나를 보내고 답을 기다립니다. `started`부터 `timeout`이 지나거나 `cancel`이 켜지면 바로 돌아옵니다.
+fn post(
+    url: &str,
+    api_key: &str,
+    body: Value,
+    started: Instant,
+    timeout: Duration,
+    cancel: &CancelToken,
+) -> Result<ConnectionReply, LlmError> {
+    if cancel.is_cancelled() {
+        return Err(LlmError::Cancelled);
+    }
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Err(timeout_error(timeout));
+    }
+    let (url, api_key, body) = (url.to_owned(), api_key.to_owned(), body.to_string());
     let (tx, rx) = mpsc::channel();
     // ureq 요청은 중간에 끊을 수 없으므로 따로 돌리고, 여기서는 취소·제한 시간만 지켜봅니다.
     thread::Builder::new()
         .name("sulsul-llm-request".into())
         .spawn(move || {
-            let _ = tx.send(send_chat_request(&url, &api_key, &body, timeout));
+            let _ = tx.send(send_chat_request(&url, &api_key, &body, remaining));
         })
         .map_err(|e| LlmError::Network(format!("failed to start request thread: {e}")))?;
 
@@ -599,6 +739,7 @@ mod tests {
             endpoint: endpoint.into(),
             api_key: key.into(),
             model: model.into(),
+            ..ApiProfile::default()
         }
     }
 
@@ -674,6 +815,192 @@ mod tests {
             ])
         );
         assert_eq!(reply.text, "안녕하세요.");
+    }
+
+    /// 요청을 차례로 받아 `responses`의 (상태, 본문)으로 하나씩 답하는 가짜 서버. 받은 요청 원문들을 돌려줍니다.
+    fn serve_sequence(
+        responses: &'static [(&'static str, &'static str)],
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            responses
+                .iter()
+                .map(|(status, body)| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let raw = read_http_request(&mut stream);
+                    respond(&mut stream, status, body);
+                    raw
+                })
+                .collect()
+        });
+        (format!("http://{addr}/v1"), server)
+    }
+
+    fn body_of(raw: &str) -> Value {
+        serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    }
+
+    fn with_effort(provider: &str, effort: ReasoningEffort) -> ApiProfile {
+        ApiProfile {
+            reasoning_effort: effort,
+            ..profile(provider, "http://127.0.0.1:1/v1", "sk-test", "m")
+        }
+    }
+
+    const OK_REPLY: &str = r#"{"model":"m","choices":[{"message":{"content":"고친 글"}}]}"#;
+    const REJECTED: &str = r#"{"error":{"message":"Unsupported value: 'reasoning_effort'"}}"#;
+
+    #[test]
+    fn reasoning_effort_goes_in_the_way_each_provider_takes_it() {
+        use ReasoningEffort::{Default, High, Low, Medium, None};
+
+        let fields = |provider: &str, effort| {
+            Value::Object(reasoning_fields(&with_effort(provider, effort)))
+        };
+        for provider in ["openai", "deepseek", "together", "anthropic", "unknown"] {
+            assert_eq!(
+                fields(provider, Default),
+                json!({}),
+                "{provider}: 제공자 기본값이면 아무것도 넣지 않아야 합니다"
+            );
+        }
+        assert_eq!(
+            fields("openai", None),
+            json!({ "reasoning_effort": "none" })
+        );
+        assert_eq!(fields("openai", Low), json!({ "reasoning_effort": "low" }));
+        assert_eq!(
+            fields("groq", Medium),
+            json!({ "reasoning_effort": "medium" })
+        );
+        assert_eq!(
+            fields("openai", High),
+            json!({ "reasoning_effort": "high" })
+        );
+        assert_eq!(
+            fields("unknown", Low),
+            json!({ "reasoning_effort": "low" }),
+            "모르는 공급자(직접 입력한 호환 서버)는 OpenAI 방식으로 보냅니다"
+        );
+
+        // DeepSeek은 `thinking`으로, Together는 `reasoning.enabled`로 끄고, 단계는 `reasoning_effort`로 고릅니다.
+        assert_eq!(
+            fields("deepseek", None),
+            json!({ "thinking": { "type": "disabled" } })
+        );
+        assert_eq!(
+            fields("deepseek", High),
+            json!({ "reasoning_effort": "high" })
+        );
+        assert_eq!(
+            fields("together", None),
+            json!({ "reasoning": { "enabled": false } })
+        );
+        assert_eq!(
+            fields("together", Low),
+            json!({ "reasoning_effort": "low" })
+        );
+
+        // Anthropic 호환 주소는 추론 단계를 무시하므로 파일에 값이 있어도 넣지 않습니다.
+        for effort in ReasoningEffort::ALL {
+            assert_eq!(fields("anthropic", effort), json!({}), "{effort:?}");
+        }
+    }
+
+    #[test]
+    fn chosen_reasoning_effort_is_sent_with_the_chat() {
+        let (endpoint, server) = serve_once("200 OK", OK_REPLY);
+        let profile = ApiProfile {
+            reasoning_effort: ReasoningEffort::Low,
+            ..profile("openai", &endpoint, "sk-test", "gpt-6-luna")
+        };
+        let reply = chat(&profile, "지시", "글", quick(), &CancelToken::new()).unwrap();
+        let body = body_of(&server.join().unwrap());
+        let mut fields: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
+        fields.sort();
+        assert_eq!(fields, ["messages", "model", "reasoning_effort"]);
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(reply.text, "고친 글");
+    }
+
+    #[test]
+    fn chat_sends_again_without_a_rejected_reasoning_effort() {
+        let (endpoint, server) =
+            serve_sequence(&[("400 Bad Request", REJECTED), ("200 OK", OK_REPLY)]);
+        let profile = ApiProfile {
+            reasoning_effort: ReasoningEffort::None,
+            ..profile("openai", &endpoint, "sk-test", "gpt-6.1-sol")
+        };
+        let reply = chat(&profile, "지시", "글", quick(), &CancelToken::new()).unwrap();
+        assert_eq!(
+            reply.text, "고친 글",
+            "추론 단계를 거절당해도 빼고 다시 보내 다듬은 글을 받아야 합니다"
+        );
+
+        let requests = server.join().unwrap();
+        let (first, second) = (body_of(&requests[0]), body_of(&requests[1]));
+        assert_eq!(first["reasoning_effort"], "none");
+        assert!(
+            second.get("reasoning_effort").is_none(),
+            "다시 보낼 때는 추론 단계를 빼야 합니다: {second}"
+        );
+        assert_eq!(first["messages"], second["messages"]);
+    }
+
+    #[test]
+    fn connection_test_reports_a_rejected_reasoning_effort() {
+        let (endpoint, server) =
+            serve_sequence(&[("422 Unprocessable Entity", REJECTED), ("200 OK", OK_REPLY)]);
+        let profile = ApiProfile {
+            reasoning_effort: ReasoningEffort::High,
+            ..profile("mistral", &endpoint, "sk-test", "m")
+        };
+        let result = test_connection(&profile, quick(), &CancelToken::new());
+        server.join().unwrap();
+        match result {
+            Err(LlmError::ReasoningRejected { status, message }) => {
+                assert_eq!(status, 422);
+                assert!(message.contains("reasoning_effort"), "{message}");
+            }
+            other => panic!("고른 추론 단계가 원인이라고 알려야 합니다: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn other_failures_are_reported_as_they_are() {
+        // 빼고 보내도 거절되면 추론 단계 탓이 아니므로 두 번째 오류를 알립니다.
+        let (endpoint, server) = serve_sequence(&[
+            ("400 Bad Request", REJECTED),
+            ("400 Bad Request", r#"{"error":{"message":"bad model"}}"#),
+        ]);
+        let still_rejected = ApiProfile {
+            reasoning_effort: ReasoningEffort::Low,
+            ..profile("openai", &endpoint, "sk-test", "m")
+        };
+        let result = test_connection(&still_rejected, quick(), &CancelToken::new());
+        assert_eq!(server.join().unwrap().len(), 2);
+        assert_eq!(
+            result,
+            Err(LlmError::Http {
+                status: 400,
+                message: "bad model".into()
+            })
+        );
+
+        // 거절이 아닌 오류(인증 등)는 다시 보내지 않습니다. 가짜 서버는 요청 하나만 받습니다.
+        let (endpoint, server) =
+            serve_once("401 Unauthorized", r#"{"error":{"message":"invalid key"}}"#);
+        let wrong_key = ApiProfile {
+            reasoning_effort: ReasoningEffort::Low,
+            ..profile("openai", &endpoint, "sk-test", "m")
+        };
+        let result = chat(&wrong_key, "지시", "글", quick(), &CancelToken::new());
+        server.join().unwrap();
+        assert!(
+            matches!(result, Err(LlmError::Http { status: 401, .. })),
+            "{result:?}"
+        );
     }
 
     #[test]

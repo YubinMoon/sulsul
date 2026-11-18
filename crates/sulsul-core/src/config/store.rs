@@ -150,6 +150,7 @@ impl ConfigStore {
                 table.remove("api_profiles");
             }
         }
+        remove_default_profile_keys(&mut doc, config);
         for path in REMOVED_KEYS {
             remove_path(&mut doc, path);
         }
@@ -255,6 +256,30 @@ fn template_document() -> DocumentMut {
     DEFAULT_CONFIG_TOML
         .parse()
         .expect("default config template must be valid TOML")
+}
+
+/// 프로필(`[[stt.api_profiles]]`, `[[postprocess.api_profiles]]`)에서 기본값이라 직렬화를 생략한 키를
+/// 파일에서도 지웁니다. 병합은 파일에만 있는 키를 남기므로, 그대로 두면 기본값으로 되돌린 값이 다시 읽힙니다.
+///
+/// 병합한 배열 테이블은 설정의 프로필 순서를 따르므로 같은 자리끼리 맞춥니다.
+fn remove_default_profile_keys(doc: &mut DocumentMut, config: &Config) {
+    for (section, profiles) in [
+        ("stt", &config.stt.api_profiles),
+        ("postprocess", &config.postprocess.api_profiles),
+    ] {
+        let Some(array) = doc
+            .get_mut(section)
+            .and_then(|item| item.get_mut("api_profiles"))
+            .and_then(|item| item.as_array_of_tables_mut())
+        else {
+            continue;
+        };
+        for (table, profile) in array.iter_mut().zip(profiles) {
+            if profile.reasoning_effort.is_default() {
+                table.remove("reasoning_effort");
+            }
+        }
+    }
 }
 
 /// 바이트 위치를 1부터 시작하는 (줄, 칸)으로 바꿉니다.
@@ -385,6 +410,7 @@ mod tests {
                 endpoint: "https://api.openai.com/v1".into(),
                 api_key: "sk-1".into(),
                 model: "whisper-1".into(),
+                ..Default::default()
             },
             ApiProfile {
                 id: "p2".into(),
@@ -393,6 +419,7 @@ mod tests {
                 endpoint: "https://api.groq.com/openai/v1".into(),
                 api_key: "gsk-2".into(),
                 model: "whisper-large-v3-turbo".into(),
+                ..Default::default()
             },
         ];
         store.save(&config).unwrap();
@@ -425,7 +452,57 @@ mod tests {
             endpoint: "https://api.openai.com/v1".into(),
             api_key: "sk-1".into(),
             model: model.into(),
+            ..Default::default()
         }
+    }
+
+    /// 추론 단계는 고르면 파일에 쓰고, 기본값으로 되돌리면 파일에서도 지워야 합니다
+    /// (병합이 파일에만 있는 키를 남기므로 따로 지움).
+    #[test]
+    fn reasoning_effort_is_written_only_when_chosen() {
+        use crate::config::ReasoningEffort;
+
+        let (_dir, store) = store();
+        let mut config = store.load_or_create().unwrap().config;
+        config
+            .stt
+            .api_profiles
+            .push(llm_profile("stt-1", "whisper-1"));
+        config.postprocess.api_profiles = vec![llm_profile("a", "m1"), llm_profile("b", "m2")];
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(
+            !text.contains("reasoning_effort"),
+            "기본값은 파일에 쓰지 않아야 합니다:\n{text}"
+        );
+
+        config.postprocess.api_profiles[1].reasoning_effort = ReasoningEffort::None;
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert_eq!(
+            text.matches("reasoning_effort = \"none\"").count(),
+            1,
+            "{text}"
+        );
+        let loaded = store.load().unwrap().config;
+        assert_eq!(
+            loaded.postprocess.api_profiles[1].reasoning_effort,
+            ReasoningEffort::None
+        );
+        assert_eq!(
+            loaded.postprocess.api_profiles[0].reasoning_effort,
+            ReasoningEffort::Default
+        );
+
+        config.postprocess.api_profiles[1].reasoning_effort = ReasoningEffort::Default;
+        store.save(&config).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(
+            !text.contains("reasoning_effort"),
+            "기본값으로 되돌린 값이 파일에 남으면 다시 읽힙니다:\n{text}"
+        );
+        let loaded = store.load().unwrap().config;
+        assert_eq!(loaded.postprocess, config.postprocess);
     }
 
     fn position(text: &str, needle: &str) -> usize {

@@ -8,7 +8,7 @@
 
 use egui::Ui;
 use rust_i18n::t;
-use sulsul_core::config::ApiProfile;
+use sulsul_core::config::{ApiProfile, ReasoningEffort};
 use sulsul_core::stt::EngineContext;
 use sulsul_stt_cloud::ENGINE_ID as CLOUD_ENGINE_ID;
 
@@ -31,6 +31,7 @@ struct Fingerprint {
     endpoint: String,
     api_key: String,
     model: String,
+    reasoning_effort: ReasoningEffort,
 }
 
 impl Fingerprint {
@@ -40,6 +41,7 @@ impl Fingerprint {
             endpoint: profile.endpoint.clone(),
             api_key: profile.api_key.clone(),
             model: profile.model.clone(),
+            reasoning_effort: profile.reasoning_effort,
         }
     }
 }
@@ -433,11 +435,19 @@ mod tests {
         profile(&mut draft).name = "다른 이름".into();
         assert_eq!(draft.register_block(false), None);
 
-        // 주소·API 키·모델·공급자 중 하나라도 바뀌면 다시 테스트해야 합니다.
+        // 주소·API 키·모델·공급자·추론 단계 중 하나라도 바뀌면 다시 테스트해야 합니다.
         let tested_model = profile(&mut draft).model.clone();
         profile(&mut draft).model = "another-model".into();
         assert_eq!(draft.register_block(false), Some(RegisterBlock::Changed));
         profile(&mut draft).model = tested_model;
+        assert_eq!(draft.register_block(false), None);
+        profile(&mut draft).reasoning_effort = ReasoningEffort::None;
+        assert_eq!(
+            draft.register_block(false),
+            Some(RegisterBlock::Changed),
+            "추론 단계는 모델이 거절할 수 있어 바꾸면 다시 테스트해야 합니다"
+        );
+        profile(&mut draft).reasoning_effort = ReasoningEffort::Default;
         assert_eq!(draft.register_block(false), None);
         profile(&mut draft).api_key.push('x');
         assert_eq!(draft.register_block(false), Some(RegisterBlock::Changed));

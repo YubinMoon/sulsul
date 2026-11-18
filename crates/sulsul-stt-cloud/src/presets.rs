@@ -64,6 +64,7 @@ pub fn profile_from_preset(provider: &str, id: String, name: String) -> ApiProfi
         endpoint: preset.default_endpoint.to_owned(),
         api_key: String::new(),
         model: preset.default_model.to_owned(),
+        ..ApiProfile::default()
     }
 }
 

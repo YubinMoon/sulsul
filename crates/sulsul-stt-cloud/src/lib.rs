@@ -159,6 +159,7 @@ mod tests {
                     endpoint: "https://api.openai.com/v1".into(),
                     api_key: "sk-1".into(),
                     model: "whisper-1".into(),
+                    ..ApiProfile::default()
                 },
                 ApiProfile {
                     id: "p2".into(),
@@ -167,6 +168,7 @@ mod tests {
                     endpoint: "https://api.groq.com/openai/v1".into(),
                     api_key: "gsk-2".into(),
                     model: "whisper-large-v3-turbo".into(),
+                    ..ApiProfile::default()
                 },
             ],
             ..SttConfig::default()

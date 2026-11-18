@@ -8,7 +8,7 @@ use egui::{
     StrokeKind, TextEdit, Ui, WidgetInfo, vec2,
 };
 use rust_i18n::t;
-use sulsul_core::config::ApiProfile;
+use sulsul_core::config::{ApiProfile, ReasoningEffort};
 use sulsul_core::download::DownloadPhase;
 use sulsul_core::stt::{
     ComputeDevice, EngineKind, LanguageSupport, WHISPER_LANGUAGES, format_bytes,
@@ -24,7 +24,7 @@ use crate::theme::{self, Palette, radius, size};
 use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::card;
 use crate::widgets::confirm::{Answer, Confirm};
-use crate::widgets::controls;
+use crate::widgets::controls::{self, ComboItem};
 use crate::widgets::expander::Expander;
 use crate::widgets::language::language_name;
 use crate::widgets::row::{self, Row};
@@ -658,6 +658,7 @@ pub fn provider_row(ui: &mut Ui, category: Category, provider: &str) {
 }
 
 /// 제공자의 이름·주소·API 키·모델 입력 칸. 공급자는 부르는 쪽에서 따로 보여 줍니다.
+/// 글 다듬기 제공자면 모델 아래에 추론 단계도 보여 줍니다.
 ///
 /// 실제 요청 주소와 추천 모델, 모델 이름의 예시는 `category`(음성 인식인지 글 다듬기인지)를 따릅니다.
 /// `id_salt`는 입력 칸 ID가 다른 제공자의 것과 겹치지 않게 하는 값입니다(예: 제공자 ID).
@@ -761,6 +762,67 @@ pub fn profile_fields(
             });
         }
     });
+
+    if category == Category::Llm {
+        row::separator(ui);
+        reasoning_row(ui, id_salt, profile);
+    }
+}
+
+/// 글 다듬기 제공자의 추론 단계.
+///
+/// 공급자의 모델이 모두 받지 않는 단계는 꺼진 항목으로, 추론 단계를 바꿀 수 없는 공급자는 줄을 꺼서 보여 줍니다
+/// (그 규칙은 `sulsul_llm::presets::ReasoningSupport`에 있습니다).
+fn reasoning_row(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile) {
+    let support = sulsul_llm::presets::reasoning_support(&profile.provider);
+    let items: Vec<_> = ReasoningEffort::ALL
+        .into_iter()
+        .map(|effort| {
+            let item = ComboItem::new(effort, reasoning_label(effort));
+            if support.accepts(effort) || !support.adjustable() {
+                item
+            } else if effort == ReasoningEffort::None {
+                item.unavailable(t!("models.providers.field.reasoning_cannot_disable"))
+            } else {
+                item.unavailable(t!("models.providers.field.reasoning_unsupported"))
+            }
+        })
+        .collect();
+    let help = if !support.adjustable() {
+        t!("models.providers.field.reasoning_ignored")
+    } else {
+        match profile.reasoning_effort {
+            ReasoningEffort::Default => t!("models.providers.field.reasoning_default_help"),
+            ReasoningEffort::None => t!("models.providers.field.reasoning_none_help"),
+            _ => t!("models.providers.field.reasoning_level_help"),
+        }
+    };
+    Row::new(&t!("models.providers.field.reasoning"))
+        .help(&help)
+        .show(ui, |ui| {
+            ui.add_enabled_ui(support.adjustable(), |ui| {
+                // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
+                let width = row::CONTROL_WIDTH.min(ui.available_width());
+                controls::combo(
+                    ui,
+                    (id_salt, "reasoning"),
+                    width,
+                    &mut profile.reasoning_effort,
+                    &items,
+                    "",
+                );
+            });
+        });
+}
+
+fn reasoning_label(effort: ReasoningEffort) -> std::borrow::Cow<'static, str> {
+    match effort {
+        ReasoningEffort::Default => t!("models.providers.field.reasoning_default"),
+        ReasoningEffort::None => t!("models.providers.field.reasoning_none"),
+        ReasoningEffort::Low => t!("models.providers.field.reasoning_low"),
+        ReasoningEffort::Medium => t!("models.providers.field.reasoning_medium"),
+        ReasoningEffort::High => t!("models.providers.field.reasoning_high"),
+    }
 }
 
 /// 모델이 인식할 수 있는 언어를 배지에 넣을 만큼 짧게 적은 글

@@ -1,10 +1,11 @@
 //! 글 다듬기 외부 제공자 프리셋 (모두 OpenAI 호환 `/chat/completions`).
 //!
 //! 주소와 모델 이름은 각 제공자의 공식 문서에서 확인한 값입니다 (마지막 확인: 2026-11-16).
+//! 추론 단계를 받는 방법([`ReasoningSupport`])도 공식 문서에서 확인했습니다 (마지막 확인: 2026-11-18).
 //! 짧은 글 교정용이라 기본 모델은 빠르고 싼 것으로, 추천 목록에는 상위 모델도 함께 둡니다.
 //! 제공자를 더하면 `locales/*.yml`의 `processor.llm_cloud.providers.<ID>` 문구도 추가합니다.
 
-use sulsul_core::config::ApiProfile;
+use sulsul_core::config::{ApiProfile, ReasoningEffort};
 
 /// 외부 제공자 프리셋 하나
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,51 @@ pub struct LlmProviderPreset {
     pub requires_api_key: bool,
     /// Ollama·LM Studio처럼 이 PC에서 도는 서버
     pub runs_locally: bool,
+    /// 추론 단계(`reasoning_effort`)를 받는 방법
+    pub reasoning: ReasoningSupport,
+}
+
+/// 제공자가 추론 단계를 받는 방법
+///
+/// 같은 제공자 안에서도 모델마다 받는 단계가 달라(예: 생각하지 않는 모델은 아예 거절), 여기에는 제공자의
+/// 모든 모델이 받지 않는 단계만 적습니다. 모델이 거절한 단계는 요청할 때 빼고 다시 보냅니다
+/// ([`crate::client`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReasoningSupport {
+    pub style: ReasoningStyle,
+    /// 이 제공자의 모델이 받지 않는 단계. 화면에서 고를 수 없게 보여 줍니다.
+    pub unsupported: &'static [ReasoningEffort],
+}
+
+impl ReasoningSupport {
+    /// 맨 위 `reasoning_effort`로 모든 단계를 받는 제공자 (OpenAI 방식)
+    pub const EFFORT: Self = Self {
+        style: ReasoningStyle::Effort,
+        unsupported: &[],
+    };
+
+    /// 화면에서 추론 단계를 바꿀 수 있는지
+    pub fn adjustable(&self) -> bool {
+        self.style != ReasoningStyle::Ignored
+    }
+
+    /// 이 단계를 화면에서 고를 수 있는지 (제공자 기본값은 늘 고를 수 있음)
+    pub fn accepts(&self, effort: ReasoningEffort) -> bool {
+        effort.is_default() || (self.adjustable() && !self.unsupported.contains(&effort))
+    }
+}
+
+/// 추론 단계를 요청에 넣는 방법
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningStyle {
+    /// 맨 위 `reasoning_effort`에 단계 이름(`none`, `low`, `medium`, `high`)을 넣습니다.
+    Effort,
+    /// 끄기는 `thinking: {"type": "disabled"}`로, 나머지는 `reasoning_effort`로 보냅니다 (DeepSeek).
+    ThinkingType,
+    /// 끄기는 `reasoning: {"enabled": false}`로, 나머지는 `reasoning_effort`로 보냅니다 (Together).
+    ReasoningEnabled,
+    /// OpenAI 호환 주소가 추론 단계를 무시해서 바꿀 수 없습니다 (Anthropic). 아무것도 넣지 않습니다.
+    Ignored,
 }
 
 /// 직접 입력하는 OpenAI 호환 서버 (목록의 마지막 항목)
@@ -36,6 +82,7 @@ pub const MOCK_PRESET: LlmProviderPreset = LlmProviderPreset {
     model_suggestions: &["mock-small", "mock-large"],
     requires_api_key: false,
     runs_locally: true,
+    reasoning: ReasoningSupport::EFFORT,
 };
 
 /// 외부 제공자 프리셋 (화면 순서). 마지막 항목은 [`CUSTOM_PROVIDER_ID`]입니다.
@@ -49,6 +96,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://platform.claude.com/docs/en/api/openai-sdk
     LlmProviderPreset {
@@ -59,6 +107,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"],
         requires_api_key: true,
         runs_locally: false,
+        // 호환 주소는 `reasoning_effort`를 무시하고, 생각을 끄는 방법은 모델마다 달라 바꾸지 않습니다.
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::Ignored,
+            unsupported: &[],
+        },
     },
     // https://ai.google.dev/gemini-api/docs/openai
     LlmProviderPreset {
@@ -74,6 +127,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        // Gemini 3·4는 생각을 끌 수 없습니다 (가장 낮은 단계까지만).
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::Effort,
+            unsupported: &[ReasoningEffort::None],
+        },
     },
     // https://docs.x.ai/developers/models (Chat Completions는 문서상 legacy지만 계속 제공됨)
     LlmProviderPreset {
@@ -84,6 +142,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["grok-4.20-0309-non-reasoning", "grok-4.3", "grok-4.7"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://docs.mistral.ai/getting-started/models/models_overview/
     LlmProviderPreset {
@@ -98,6 +157,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://api-docs.deepseek.com/
     LlmProviderPreset {
@@ -108,6 +168,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["deepseek-flash", "deepseek-v4-pro"],
         requires_api_key: true,
         runs_locally: false,
+        // 생각은 기본으로 켜져 있고 `thinking`으로 끕니다. `reasoning_effort`에는 `none`이 없습니다.
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::ThinkingType,
+            unsupported: &[],
+        },
     },
     // https://console.groq.com/docs/models
     LlmProviderPreset {
@@ -122,6 +187,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://openrouter.ai/docs/quickstart, 모델 목록: https://openrouter.ai/api/v1/models
     LlmProviderPreset {
@@ -137,6 +203,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://docs.together.ai/docs/serverless-models
     LlmProviderPreset {
@@ -152,6 +219,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        // 생각을 켜고 끌 수 있는 모델은 `reasoning.enabled`로 끕니다.
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::ReasoningEnabled,
+            unsupported: &[],
+        },
     },
     // https://docs.fireworks.ai/tools-sdks/openai-compatibility, 모델: https://fireworks.ai/models
     LlmProviderPreset {
@@ -166,6 +238,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://inference-docs.cerebras.ai/models/overview
     LlmProviderPreset {
@@ -176,6 +249,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["gpt-oss-120b", "qwen-3.8-27b"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://docs.cohere.com/docs/compatibility-api, 모델: https://docs.cohere.com/docs/models
     LlmProviderPreset {
@@ -190,6 +264,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         ],
         requires_api_key: true,
         runs_locally: false,
+        // `reasoning_effort`는 `none`과 `high`만 받습니다.
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::Effort,
+            unsupported: &[ReasoningEffort::Low, ReasoningEffort::Medium],
+        },
     },
     // https://console.upstage.ai/docs/capabilities/chat
     LlmProviderPreset {
@@ -200,6 +279,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["solar-mini4", "solar-pro4"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://api.ncloud-docs.com/docs/clovastudio-openaicompatibility
     LlmProviderPreset {
@@ -210,6 +290,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["HCX-DASH-002", "HCX-005", "HCX-007"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope
     // 문서는 작업 공간별 주소(`https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`)를
@@ -222,6 +303,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["qwen3.8-flash", "qwen3.7-plus", "qwen3.8-max"],
         requires_api_key: true,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://platform.kimi.ai/docs/api/chat
     LlmProviderPreset {
@@ -232,6 +314,11 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
         requires_api_key: true,
         runs_locally: false,
+        // Kimi K3는 생각을 끌 수 없고 `low`·`high`·`max`만 받습니다.
+        reasoning: ReasoningSupport {
+            style: ReasoningStyle::Effort,
+            unsupported: &[ReasoningEffort::None, ReasoningEffort::Medium],
+        },
     },
     // https://docs.ollama.com/openai, 모델: https://ollama.com/library
     LlmProviderPreset {
@@ -242,6 +329,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["gemma4:e4b", "qwen3.5:4b", "qwen3.5:9b", "gemma4:12b"],
         requires_api_key: false,
         runs_locally: true,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // https://lmstudio.ai/docs/developer/openai-compat (모델 이름은 LM Studio에 보이는 식별자)
     LlmProviderPreset {
@@ -252,6 +340,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &["google/gemma-4-e4b", "qwen/qwen3.5-4b", "qwen/qwen3.5-9b"],
         requires_api_key: false,
         runs_locally: true,
+        reasoning: ReasoningSupport::EFFORT,
     },
     // llama.cpp `llama-server`(기본 포트 8080), vLLM 등 OpenAI 호환 서버를 직접 입력합니다.
     // 서버마다 모델 이름이 달라 기본 모델은 비워 두고 사용자가 채웁니다.
@@ -263,6 +352,7 @@ pub const PRESETS: &[LlmProviderPreset] = &[
         model_suggestions: &[],
         requires_api_key: false,
         runs_locally: false,
+        reasoning: ReasoningSupport::EFFORT,
     },
 ];
 
@@ -288,6 +378,11 @@ pub fn find_preset(id: &str) -> Option<&'static LlmProviderPreset> {
     PRESETS.iter().find(|preset| preset.id == id)
 }
 
+/// 공급자가 추론 단계를 받는 방법. 모르는 공급자(직접 입력한 호환 서버 등)는 OpenAI 방식으로 봅니다.
+pub fn reasoning_support(provider: &str) -> ReasoningSupport {
+    find_preset(provider).map_or(ReasoningSupport::EFFORT, |preset| preset.reasoning)
+}
+
 /// 고른 제공자 프리셋의 기본값으로 [`ApiProfile`]을 만듭니다. 모르는 제공자면 `custom`을 씁니다.
 pub fn profile_from_preset(provider: &str, id: String, name: String) -> ApiProfile {
     let preset = find_preset(provider).unwrap_or_else(custom_preset);
@@ -298,6 +393,7 @@ pub fn profile_from_preset(provider: &str, id: String, name: String) -> ApiProfi
         endpoint: preset.default_endpoint.to_owned(),
         api_key: String::new(),
         model: preset.default_model.to_owned(),
+        ..ApiProfile::default()
     }
 }
 
@@ -370,6 +466,26 @@ mod tests {
                 preset.id
             );
             assert_eq!(find_preset(preset.id), Some(preset));
+            let reasoning = preset.reasoning;
+            assert!(
+                !reasoning.unsupported.contains(&ReasoningEffort::Default),
+                "{}: 제공자 기본값은 늘 고를 수 있어야 합니다",
+                preset.id
+            );
+            assert!(
+                reasoning.adjustable() || reasoning.unsupported.is_empty(),
+                "{}: 바꿀 수 없는 제공자에 받지 않는 단계를 따로 적을 필요가 없습니다",
+                preset.id
+            );
+            assert!(
+                ReasoningEffort::ALL
+                    .iter()
+                    .filter(|effort| !effort.is_default())
+                    .any(|effort| reasoning.accepts(*effort))
+                    || !reasoning.adjustable(),
+                "{}: 바꿀 수 있는 제공자면 고를 단계가 하나는 있어야 합니다",
+                preset.id
+            );
             if preset.id == CUSTOM_PROVIDER_ID {
                 continue;
             }

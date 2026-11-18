@@ -201,6 +201,44 @@ pub struct ApiProfile {
     pub api_key: String,
     /// 사용할 모델 이름 (예: STT `whisper-1`, 글 다듬기 `gpt-6-luna`)
     pub model: String,
+    /// 생각하는 모델의 추론 단계. 글 다듬기에서만 씁니다.
+    ///
+    /// 기본값이면 파일에 쓰지 않고, 저장할 때 파일에 남은 예전 값도 지웁니다
+    /// ([`ConfigStore::save`]).
+    #[serde(skip_serializing_if = "ReasoningEffort::is_default")]
+    pub reasoning_effort: ReasoningEffort,
+}
+
+/// 생각하는 모델이 답하기 전에 얼마나 생각할지 (글 다듬기 외부 제공자 프로필의 `reasoning_effort`)
+///
+/// 짧은 글을 고치는 데는 생각이 거의 필요 없어, 주로 줄여서 빨리 받으려고 씁니다.
+/// 제공자마다 받는 매개변수가 달라 요청에 넣는 방법은 `sulsul-llm`이 정합니다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    /// 제공자·모델의 기본값. 요청에 아무것도 넣지 않습니다.
+    #[default]
+    Default,
+    /// 생각하지 않고 바로 답하기
+    None,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// 화면 순서
+    pub const ALL: [Self; 5] = [
+        Self::Default,
+        Self::None,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+    ];
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::Default
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
