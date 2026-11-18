@@ -254,22 +254,14 @@ impl RefineCard {
             if progress_row(ui, running.started, running.cancel.is_cancelled()) {
                 running.cancel.cancel();
             }
-            if super::dictation_busy(shared.dictation.state) {
-                ui.label(text::caption(ui, t!("test.dictation_waits")));
-            }
             return;
         }
-        let reason = blocker(&shared.paths, &post)
-            .or_else(|| gate.reason())
-            .or_else(|| {
-                self.input
-                    .trim()
-                    .is_empty()
-                    .then(|| t!("test.refine.need_input").into_owned())
-            });
+        // 다듬을 글이 비어 있으면 입력란의 안내 글이 보이므로 버튼 옆에는 적지 않습니다.
+        let has_input = !self.input.trim().is_empty();
+        let reason = blocker(&shared.paths, &post).or_else(|| gate.reason());
         ui.horizontal(|ui| {
             let clicked = ui
-                .add_enabled_ui(reason.is_none(), |ui| {
+                .add_enabled_ui(reason.is_none() && has_input, |ui| {
                     controls::primary_icon_button(ui, Icon::WandSparkles, t!("test.refine.run"))
                         .clicked()
                 })
@@ -351,10 +343,8 @@ fn blocker(paths: &AppPaths, post: &PostProcessConfig) -> Option<String> {
 fn result_ui(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
     let (refined, cold) = match &attempt.outcome {
         Outcome::Done { refined, cold } => (refined, *cold),
-        Outcome::Cancelled => {
-            Banner::new(Tone::Info).line(t!("test.cancelled")).show(ui);
-            return;
-        }
+        // 취소는 사용자가 한 일이라 따로 알리지 않습니다.
+        Outcome::Cancelled => return,
         Outcome::Failed(message) => {
             Banner::new(Tone::Error)
                 .title(&t!("test.refine.failed"))

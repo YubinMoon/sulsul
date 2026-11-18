@@ -472,11 +472,8 @@ pub fn test_outcome(ui: &mut Ui, last: Option<&TestOutcome>, target: &TestTarget
                 Banner::new(Tone::Warning).line(note).show(ui);
             }
         }
-        Err(TestFailure::Cancelled) => {
-            Banner::new(Tone::Info)
-                .line(t!("models.test.cancelled"))
-                .show(ui);
-        }
+        // 취소는 사용자가 한 일이라 따로 알리지 않습니다.
+        Err(TestFailure::Cancelled) => {}
         Err(TestFailure::Failed(message)) => {
             Banner::new(Tone::Error)
                 .line(t!("models.test.failed", message = message))
@@ -702,13 +699,10 @@ pub fn profile_fields(
                     t!("models.providers.field.endpoint_resolved", url = url),
                 ));
             }
-            Err(message) => {
+            Err(_) => {
                 ui.label(
-                    text::caption(
-                        ui,
-                        t!("models.providers.field.endpoint_invalid", message = message),
-                    )
-                    .color(palette.warning_text),
+                    text::caption(ui, t!("models.providers.field.endpoint_invalid"))
+                        .color(palette.warning_text),
                 );
             }
         }

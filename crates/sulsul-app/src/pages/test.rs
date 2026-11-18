@@ -76,7 +76,7 @@ impl TestPage {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        header(ui, &t!("test.title"), &t!("test.subtitle"));
+        header(ui, &t!("test.title"), None);
         let dictation = dictation_busy(cx.shared.dictation.state);
 
         let gate = step_gate(!self.stt.is_running() && !self.refine.is_running(), false);
@@ -155,7 +155,7 @@ fn copy_button(ui: &mut Ui, shared: &mut Shared, output: &str) {
         .inner;
     if clicked {
         ui.ctx().copy_text(output.to_owned());
-        shared.toasts.info(t!("test.copied"));
+        shared.toasts.info(t!("common.copied"));
     }
 }
 

@@ -39,7 +39,7 @@ use sulsul_core::config::{Config, PostProcessConfig, SttConfig};
 use sulsul_core::stt::{SttError, TranscribeError, TranscribeJob};
 use sulsul_llm::refine::RefineError;
 
-use self::paste::{Clipboard, ClipboardError, PasteGuard};
+use self::paste::{Clipboard, PasteGuard};
 use crate::clipboard::SystemClipboard;
 use crate::error_text;
 use crate::history::{Entry, Refinement};
@@ -79,24 +79,22 @@ impl DictationSettings {
     }
 }
 
-/// 화면에 알릴 일
+/// 화면에 알릴 일. 사용자가 알아야 할 실패만 알립니다.
+///
+/// 받아쓴 글을 클립보드에 넣었을 때는 완료음과 오버레이로, 앞의 받아쓰기를 처리하는 중에 다시 눌렀을 때는
+/// 실패음과 오버레이(인식 중 표시)로 알 수 있어 알림을 내지 않습니다.
 #[derive(Debug)]
 pub enum Notice {
-    /// 받아쓴 글을 클립보드에 넣음 (`refined`: 글 다듬기를 거쳤는지)
-    Copied {
-        refined: bool,
-    },
     /// 글 다듬기에 실패해 받아쓴 원문 대신 실패 원인을 클립보드에 넣음
     RefineFailed(RefineError),
     /// 인식된 말이 없음
     Empty,
     /// 녹음에 말소리가 없어 받아쓰지 않음
     NoSpeech,
-    /// 앞의 받아쓰기를 아직 처리하는 중
-    Busy,
     RecordFailed(AudioError),
     Failed(DictationError),
-    ClipboardFailed(ClipboardError),
+    /// 클립보드에 넣지 못함 (원인은 로그에 남김). 받아쓴 글은 기록에 남아 있습니다.
+    ClipboardFailed,
 }
 
 #[derive(Debug)]
@@ -686,12 +684,11 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
                     refined,
                     "dictation copied to the clipboard"
                 );
-                self.notices.push(Notice::Copied { refined });
                 self.cue(Cue::Done);
             }
             Err(error) => {
                 tracing::warn!("could not copy dictation to the clipboard: {error}");
-                self.fail(Notice::ClipboardFailed(error));
+                self.fail(Notice::ClipboardFailed);
             }
         }
     }
@@ -728,7 +725,7 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
             Ok(()) => self.fail(Notice::RefineFailed(error)),
             Err(clipboard) => {
                 tracing::warn!("could not copy the refinement error to the clipboard: {clipboard}");
-                self.fail(Notice::ClipboardFailed(clipboard));
+                self.fail(Notice::ClipboardFailed);
             }
         }
     }
@@ -784,8 +781,8 @@ impl<M: Microphone, C: Clipboard> Service<M, C> {
         self.paste.tick(now);
     }
 
+    /// 앞의 받아쓰기를 처리하는 중에 다시 눌렀습니다. 오버레이가 인식 중을 보여 주므로 실패음만 냅니다.
     fn busy(&mut self) {
-        self.notices.push(Notice::Busy);
         self.cue(Cue::Fail);
     }
 
@@ -1049,10 +1046,11 @@ mod tests {
         h.wait_until("클립보드에 복사", |h| {
             h.dictation.state() == DictationState::WaitingPaste
         });
-        assert!(matches!(
-            h.notices.as_slice(),
-            [Notice::Copied { refined: false }]
-        ));
+        assert!(
+            h.notices.is_empty(),
+            "복사는 완료음과 오버레이로 알리고 알림을 내지 않습니다: {:?}",
+            h.notices
+        );
         assert_eq!(
             h.clipboard.content(),
             ["text:안녕하세요"],
@@ -1093,7 +1091,9 @@ mod tests {
         let mut h = Harness::new("", Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
-        h.wait_until("복사", |h| !h.notices.is_empty());
+        h.wait_until("복사", |h| {
+            h.dictation.state() == DictationState::WaitingPaste
+        });
         let content = h.clipboard.content();
         let seconds: f64 = content[0]
             .split("s of audio")
@@ -1199,12 +1199,10 @@ mod tests {
         let mut h = Harness::with(refining_settings(" 안녕 하세요 ", ""), Mic::Speech);
         h.send(HotkeyEvent::Toggle);
         h.send(HotkeyEvent::Toggle);
-        h.wait_until("다듬은 글 복사", |h| !h.notices.is_empty());
-        assert!(
-            matches!(h.notices.as_slice(), [Notice::Copied { refined: true }]),
-            "{:?}",
-            h.notices
-        );
+        h.wait_until("다듬은 글 복사", |h| {
+            h.dictation.state() == DictationState::WaitingPaste
+        });
+        assert!(h.notices.is_empty(), "{:?}", h.notices);
         assert_eq!(h.clipboard.content(), ["text:[mock] 안녕 하세요"]);
         assert_eq!(h.cues(), [Cue::Start, Cue::Pop, Cue::Done]);
         assert_eq!(h.entries.len(), 1);
@@ -1246,8 +1244,9 @@ mod tests {
             copied.starts_with("[술술 오류]"),
             "받아쓴 글로 착각하지 않게 오류 안내임을 밝혀야 합니다: {copied}"
         );
+        // 가짜 제공자는 401(API 키 오류)을 돌려줍니다.
         assert!(
-            copied.contains("401"),
+            copied.contains("API 키"),
             "실패 원인이 들어 있어야 합니다: {copied}"
         );
         assert!(!copied.contains("고양이"), "원문은 넣지 않습니다: {copied}");
@@ -1259,7 +1258,7 @@ mod tests {
         match &h.entries[0].refine {
             Refinement::Failed { prompt, reason } => {
                 assert_eq!(prompt, "기본 다듬기");
-                assert!(reason.contains("401"), "실패 원인을 남깁니다: {reason}");
+                assert!(reason.contains("API 키"), "실패 원인을 남깁니다: {reason}");
             }
             other => panic!("다듬기 실패로 남아야 합니다: {other:?}"),
         }
@@ -1290,7 +1289,7 @@ mod tests {
         h.send(HotkeyEvent::Toggle);
         h.wait_until("복사 실패", |h| !h.notices.is_empty());
         assert!(
-            matches!(h.notices.as_slice(), [Notice::ClipboardFailed(_)]),
+            matches!(h.notices.as_slice(), [Notice::ClipboardFailed]),
             "{:?}",
             h.notices
         );

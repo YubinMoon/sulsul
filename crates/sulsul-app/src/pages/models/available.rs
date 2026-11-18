@@ -132,8 +132,6 @@ impl ModelsPage {
             }
             ui.add_space(8.0);
         }
-        unregistered_engines_banner(ui, cx);
-
         self.list
             .begin(|key| entries.iter().any(|entry| &entry.key == key));
         if entries.is_empty() {
@@ -205,7 +203,7 @@ impl ModelsPage {
         match &entry.kind {
             EntryKind::Provider(_) => self.provider_body(ui, cx, entry, languages),
             EntryKind::Variant(_) | EntryKind::Custom { .. } | EntryKind::Engine => {
-                local_body(ui, cx, entry, engine_name, languages);
+                local_body(ui, cx, entry, languages);
             }
         }
         self.entry_actions(ui, cx, entry, engine_name);
@@ -255,8 +253,6 @@ impl ModelsPage {
         if !shared_fields.is_empty() {
             parts::sub_title(ui, &t!("models.providers.shared.title"));
             engine_settings(ui, cx, CLOUD_ENGINE_ID, &shared_fields, languages);
-            ui.add_space(4.0);
-            ui.label(text::caption(ui, t!("models.providers.shared.note")));
             unknown_keys_warning(ui, cx, CLOUD_ENGINE_ID);
             ui.add_space(BODY_GAP);
         }
@@ -380,10 +376,9 @@ impl ModelsPage {
             .any(|entry| entry.key == key && entry.selected);
 
         match pending {
+            // 지운 항목은 목록에서 사라지므로 따로 알리지 않습니다. 실패만 알립니다.
             PendingConfirm::DeleteVariant {
-                engine_id,
-                variant,
-                label,
+                engine_id, variant, ..
             } => {
                 let catalog = cx
                     .shared
@@ -393,25 +388,15 @@ impl ModelsPage {
                 let deleted = delete_variant(&variant, &catalog, &cx.shared.paths.models_dir());
                 if let Err(error) = deleted {
                     tracing::warn!("could not delete model {engine_id}/{}: {error}", variant.id);
-                    cx.shared.toasts.error(t!(
-                        "models.remove.variant.failed",
-                        message = error.to_string()
-                    ));
+                    cx.shared.toasts.error(t!("models.remove.variant.failed"));
                     return;
                 }
-                cx.shared
-                    .toasts
-                    .info(t!("models.remove.variant.done", model = label));
             }
             PendingConfirm::ClearCustom { engine_id } => {
                 clear_custom_path(&mut cx.config.stt, &engine_id);
-                cx.shared.toasts.info(t!("models.remove.custom.done"));
             }
-            PendingConfirm::DeleteProfile { id, name } => {
+            PendingConfirm::DeleteProfile { id, .. } => {
                 remove_profile(&mut cx.config.stt, &id);
-                cx.shared
-                    .toasts
-                    .info(t!("models.remove.provider.done", name = name));
             }
         }
 
@@ -434,7 +419,6 @@ fn local_body(
     ui: &mut Ui,
     cx: &mut PageContext<'_>,
     entry: &Entry,
-    engine_name: &str,
     languages: Option<&LanguageSupport>,
 ) {
     let palette = Palette::of(ui);
@@ -458,10 +442,7 @@ fn local_body(
         }
         ui.label(text::caption(
             ui,
-            t!(
-                "models.available.custom.replaced_note",
-                engine = engine_name
-            ),
+            t!("models.available.custom.replaced_note"),
         ));
         ui.add_space(BODY_GAP);
     }
@@ -498,11 +479,6 @@ fn local_body(
         parts::sub_title(ui, &t!("models.available.settings.title"));
         if !fields.is_empty() {
             engine_settings(ui, cx, engine_id, &fields, languages);
-            ui.add_space(4.0);
-            ui.label(text::caption(
-                ui,
-                t!("models.available.settings.shared", engine = engine_name),
-            ));
         }
         unknown_keys_warning(ui, cx, engine_id);
         ui.add_space(BODY_GAP);
@@ -592,29 +568,6 @@ fn unknown_keys_warning(ui: &mut Ui, cx: &PageContext<'_>, engine_id: &str) {
         )
         .color(palette.warning_text),
     );
-}
-
-/// 설정 파일에 이 앱에 등록되지 않은 엔진의 설정 표가 있으면 알립니다
-/// (다른 빌드에서 쓰던 엔진이거나 오타).
-fn unregistered_engines_banner(ui: &mut Ui, cx: &PageContext<'_>) {
-    let orphaned: Vec<&str> = cx
-        .config
-        .stt
-        .engines
-        .keys()
-        .filter(|id| cx.shared.registry.descriptor(id).is_none())
-        .map(String::as_str)
-        .collect();
-    if orphaned.is_empty() {
-        return;
-    }
-    Banner::new(Tone::Warning)
-        .line(t!(
-            "models.available.unregistered_engines",
-            ids = orphaned.join(", ")
-        ))
-        .show(ui);
-    ui.add_space(8.0);
 }
 
 /// "인식 정확도 높이기" 묶음: 모든 모델이 함께 쓰는 용어 힌트(`stt.initial_prompt`).

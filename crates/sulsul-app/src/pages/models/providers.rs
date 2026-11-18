@@ -15,7 +15,7 @@ use sulsul_stt_cloud::ENGINE_ID as CLOUD_ENGINE_ID;
 use super::entries::{EntryKey, activate, available_entries, profile_test_config, selection_ready};
 use super::jobs::TestTarget;
 use super::parts::{self, TestClick, TestState};
-use super::profiles::{self, PresetKind, next_profile_id, profile_display_name};
+use super::profiles::{self, PresetKind, next_profile_id};
 use super::{Category, ModelsPage};
 use crate::i18n::tr;
 use crate::session::PageContext;
@@ -203,12 +203,11 @@ pub fn draft_form(
     test_state: TestState,
     add_test_status: impl FnOnce(&mut Ui),
 ) -> FormOutcome {
-    let help = match category {
-        Category::Stt => t!("models.providers.help.stt"),
-        Category::Llm => t!("models.providers.help.llm"),
-    };
-    ui.label(text::caption(ui, help));
-    ui.add_space(6.0);
+    // 음성 인식 갈래에는 직접 입력 공급자가 없어, 다른 호환 서버를 쓰는 법만 알립니다.
+    if category == Category::Stt {
+        ui.label(text::caption(ui, t!("models.providers.help.stt")));
+        ui.add_space(6.0);
+    }
 
     // 입력 칸 ID가 두 갈래에서 겹치지 않게 합니다.
     let id_salt = match category {
@@ -243,8 +242,6 @@ pub fn draft_form(
 
         let block = draft.register_block(locked);
         let Some(profile) = &mut draft.profile else {
-            ui.add_space(4.0);
-            ui.label(text::muted(ui, t!("models.providers.choose_hint")));
             return;
         };
         row::separator(ui);
@@ -269,8 +266,6 @@ pub fn draft_form(
         }
         add_test_status(ui);
     });
-    ui.add_space(6.0);
-    ui.label(text::caption(ui, t!("models.providers.note")));
     outcome
 }
 
@@ -332,8 +327,6 @@ impl ModelsPage {
         self.forget_test(&TestTarget::Draft);
 
         let key = EntryKey::provider(&profile.id);
-        let name = profile_display_name(&profile);
-
         // 지금 설정으로 받아쓰기를 할 수 없는 상태일 때만 새 제공자를 바로 켭니다.
         let engine_ctx = EngineContext {
             paths: cx.shared.paths.clone(),
@@ -348,9 +341,7 @@ impl ModelsPage {
             activate(&cx.shared.registry, &mut cx.config.stt, &key);
         }
 
-        cx.shared
-            .toasts
-            .info(t!("models.providers.registered", name = name));
+        // 등록한 카드를 펼쳐 보여 주므로 따로 알리지 않습니다.
         self.show_entry(key);
     }
 }

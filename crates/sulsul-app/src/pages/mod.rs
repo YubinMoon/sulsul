@@ -57,12 +57,14 @@ impl Page {
     }
 }
 
-/// 화면 맨 위의 제목과 한 줄 설명
-pub fn header(ui: &mut Ui, title: &str, subtitle: &str) {
+/// 화면 맨 위의 제목과 (있으면) 한 줄 설명
+pub fn header(ui: &mut Ui, title: &str, subtitle: Option<&str>) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
         ui.label(text::title(title));
-        ui.label(text::muted(ui, subtitle));
+        if let Some(subtitle) = subtitle {
+            ui.label(text::muted(ui, subtitle));
+        }
     });
     ui.add_space(SECTION_GAP);
 }

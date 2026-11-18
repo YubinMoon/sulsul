@@ -104,6 +104,12 @@ impl LlmPane {
             if test.target == LlmTestTarget::Draft {
                 self.draft.finish_test(result.is_ok());
             }
+            // 화면에는 짧은 원인만 보이므로 자세한 내용은 로그에 남깁니다.
+            if let Err(error) = &result
+                && !matches!(error, LlmError::Cancelled)
+            {
+                tracing::warn!("connection test failed: {error}");
+            }
             self.last_test = Some(LlmTestOutcome {
                 target: test.target,
                 result,
@@ -121,12 +127,6 @@ impl LlmPane {
                 });
             });
         ui.add_space(SECTION_GAP);
-
-        // 다듬지 못했을 때 클립보드에 무엇이 들어가는지 먼저 알립니다.
-        Banner::new(Tone::Info)
-            .line(t!("models.llm.failure_note"))
-            .show(ui);
-        ui.add_space(10.0);
 
         tab_bar(ui, &mut self.tab);
         match self.tab {
@@ -280,7 +280,7 @@ impl LlmPane {
         let remove_blocked = if cx.locked {
             Some(t!("models.available.remove_blocked.locked"))
         } else if downloading {
-            Some(t!("models.llm.remove_blocked.downloading"))
+            Some(t!("models.available.remove_blocked.downloading"))
         } else {
             None
         };
@@ -377,7 +377,7 @@ impl LlmPane {
             PendingRemoval::Variant { label, .. } => (
                 "confirm_delete_llm_model",
                 t!("models.remove.variant.title"),
-                t!("models.remove.llm_variant.body", model = label),
+                t!("models.remove.variant.body", model = label),
             ),
             PendingRemoval::Profile { name, .. } => (
                 "confirm_delete_llm_provider",
@@ -399,27 +399,19 @@ impl LlmPane {
             return;
         }
         match pending {
-            PendingRemoval::Variant { variant_id, label } => {
+            // 지운 항목은 목록에서 사라지므로 따로 알리지 않습니다. 실패만 알립니다.
+            PendingRemoval::Variant { variant_id, .. } => {
                 let deleted =
                     delete_local(&cx.shared.paths, &mut cx.config.postprocess, &variant_id);
                 if let Err(error) = deleted {
                     tracing::warn!("could not delete LLM model {variant_id}: {error}");
-                    cx.shared.toasts.error(t!(
-                        "models.remove.variant.failed",
-                        message = error.to_string()
-                    ));
+                    cx.shared.toasts.error(t!("models.remove.variant.failed"));
                     return;
                 }
-                cx.shared
-                    .toasts
-                    .info(t!("models.remove.variant.done", model = label));
                 self.list.forget(&LlmEntryKey::local(&variant_id));
             }
-            PendingRemoval::Profile { id, name } => {
+            PendingRemoval::Profile { id, .. } => {
                 remove_profile(&cx.shared.paths, &mut cx.config.postprocess, &id);
-                cx.shared
-                    .toasts
-                    .info(t!("models.remove.provider.done", name = name));
                 self.list.forget(&LlmEntryKey::provider(&id));
                 self.forget_test(&LlmTestTarget::Provider(id));
             }
@@ -456,8 +448,6 @@ impl LlmPane {
             .unwrap_or(first);
         self.picker.normalize(&family.variants);
 
-        ui.label(text::caption(ui, t!("models.download.help.llm")));
-        ui.add_space(6.0);
         let names: Vec<String> = families.iter().map(|f| tr(&f.name_key)).collect();
         let groups: Vec<PickerGroup<'_>> = families
             .iter()
@@ -573,11 +563,8 @@ impl LlmPane {
         };
         self.forget_test(&LlmTestTarget::Draft);
 
-        let name = profile_display_name(&profile);
+        // 등록한 카드를 펼쳐 보여 주므로 따로 알리지 않습니다.
         let key = register(&cx.shared.paths, &mut cx.config.postprocess, profile);
-        cx.shared
-            .toasts
-            .info(t!("models.providers.registered", name = name));
         self.show_entry(key);
     }
 
@@ -761,7 +748,7 @@ fn test_status(
         let local_server = profiles::find_preset(Category::Llm, &test.handle.profile().provider)
             .is_some_and(|preset| preset.runs_locally && !preset.is_mock(Category::Llm));
         if local_server {
-            ui.label(text::caption(ui, t!("models.llm.test.local_hint")));
+            ui.label(text::caption(ui, t!("models.test.first_run")));
         }
     }
 
@@ -790,11 +777,8 @@ fn test_status(
                 .line(detail)
                 .show(ui);
         }
-        Err(LlmError::Cancelled) => {
-            Banner::new(Tone::Info)
-                .line(t!("models.test.cancelled"))
-                .show(ui);
-        }
+        // 취소는 사용자가 한 일이라 따로 알리지 않습니다.
+        Err(LlmError::Cancelled) => {}
         Err(error) => {
             Banner::new(Tone::Error)
                 .line(t!("models.test.failed", message = error_text::llm(error)))

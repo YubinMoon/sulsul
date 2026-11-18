@@ -275,18 +275,14 @@ impl SttCard {
             if progress_row(ui, running.started, running.cancel.is_cancelled()) {
                 running.cancel.cancel();
             }
-            if super::dictation_busy(cx.shared.dictation.state) {
-                ui.label(text::caption(ui, t!("test.dictation_waits")));
-            }
             return;
         }
+        // 오디오가 없다는 것은 위의 입력 줄이 알리므로 버튼 옆에는 다른 단계를 기다리는 이유만 적습니다.
         let has_audio = self.audio().is_some();
-        let reason = gate
-            .reason()
-            .or_else(|| (!has_audio).then(|| t!("test.stt.need_audio").into_owned()));
+        let reason = gate.reason();
         ui.horizontal(|ui| {
             let clicked = ui
-                .add_enabled_ui(reason.is_none(), |ui| {
+                .add_enabled_ui(reason.is_none() && has_audio, |ui| {
                     controls::primary_icon_button(ui, Icon::Play, t!("test.stt.run")).clicked()
                 })
                 .inner;
@@ -339,7 +335,7 @@ fn engine_row(ui: &mut Ui, shared: &mut Shared, config: &Config) {
 fn setup_warning(shared: &Shared, config: &Config, engine_id: &str) -> Option<String> {
     let registry = &shared.registry;
     let Some(descriptor) = registry.descriptor(engine_id) else {
-        return Some(t!("stt.engine.unknown", id = engine_id).into_owned());
+        return Some(t!("error.stt.unknown_engine", engine = engine_id).into_owned());
     };
     if engine_id == sulsul_stt_cloud::ENGINE_ID {
         let ready = config.stt.active_api_profile().is_some_and(|profile| {
@@ -361,16 +357,14 @@ fn setup_warning(shared: &Shared, config: &Config, engine_id: &str) -> Option<St
         .ok()
         .flatten()
         .is_none_or(|model| model.is_installed());
-    (!installed).then(|| t!("test.stt.model_missing").into_owned())
+    (!installed).then(|| t!("error.model_missing").into_owned())
 }
 
 fn result_ui(ui: &mut Ui, shared: &mut Shared, attempt: &Attempt) {
     let success = match &attempt.outcome {
         Outcome::Done(success) => success,
-        Outcome::Cancelled => {
-            Banner::new(Tone::Info).line(t!("test.cancelled")).show(ui);
-            return;
-        }
+        // 취소는 사용자가 한 일이라 따로 알리지 않습니다.
+        Outcome::Cancelled => return,
         Outcome::Failed(message) => {
             Banner::new(Tone::Error)
                 .title(&t!("test.stt.failed"))

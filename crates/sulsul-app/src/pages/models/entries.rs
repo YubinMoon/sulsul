@@ -353,7 +353,7 @@ impl SelectionIssue {
             Self::ProviderIncomplete { name } => {
                 t!("models.available.issue.provider_incomplete", name = name)
             }
-            Self::UnknownEngine { id } => t!("models.available.issue.unknown_engine", id = id),
+            Self::UnknownEngine { id } => t!("error.stt.unknown_engine", engine = id),
         }
         .into_owned()
     }

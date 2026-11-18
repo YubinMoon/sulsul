@@ -6,6 +6,7 @@
 //! 내려받기([`Downloads`])는 음성 인식과 글 다듬기 갈래가 함께 씁니다. 글 다듬기 제공자의 연결
 //! 테스트는 `sulsul_llm::client::ConnectionTest`가 작업 스레드를 맡습니다.
 
+use std::cell::Cell;
 use std::fs;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -157,7 +158,10 @@ impl ActiveDownload {
                     if let Err(error) = download(&request, &bg_cancel, &mut on_progress) {
                         end = match error {
                             DownloadError::Cancelled => DownloadEnd::Cancelled,
-                            other => DownloadEnd::Failed(error_text::download(&other)),
+                            other => {
+                                tracing::warn!("model download failed: {other}");
+                                DownloadEnd::Failed(error_text::download(&other))
+                            }
                         };
                         break;
                     }
@@ -224,9 +228,21 @@ struct DownloadFailure {
 pub struct Downloads {
     active: Option<ActiveDownload>,
     failure: Option<DownloadFailure>,
+    /// 지난번 [`Downloads::take_card_shown`] 뒤로 진행 중인 내려받기의 카드를 화면에 그렸는지
+    card_shown: Cell<bool>,
 }
 
 impl Downloads {
+    /// 진행 중인 내려받기의 카드를 그렸다고 적어 둡니다. 카드를 보고 있으면 실패 원인이 카드에 바로 뜹니다.
+    pub fn mark_card_shown(&self) {
+        self.card_shown.set(true);
+    }
+
+    /// 지난번에 부른 뒤로 진행 중인 내려받기의 카드를 그렸는지 돌려주고 지웁니다. 매 프레임 부르세요.
+    pub fn take_card_shown(&self) -> bool {
+        self.card_shown.replace(false)
+    }
+
     /// 지금 진행 중인 내려받기
     pub fn active(&self) -> Option<&ActiveDownload> {
         self.active.as_ref()
@@ -370,9 +386,13 @@ impl ActiveTest {
                     .map_err(|error| match error {
                         TranscribeError::Stt(SttError::Cancelled) => TestFailure::Cancelled,
                         TranscribeError::Stt(e) => {
+                            tracing::warn!("engine test failed: {e}");
                             TestFailure::Failed(error_text::stt(&e, &registry))
                         }
-                        TranscribeError::Audio(e) => TestFailure::Failed(error_text::audio(&e)),
+                        TranscribeError::Audio(e) => {
+                            tracing::warn!("engine test failed: {e}");
+                            TestFailure::Failed(error_text::audio(&e))
+                        }
                     });
                 let _ = tx.send(outcome);
                 repaint_ctx.request_repaint();

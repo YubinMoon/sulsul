@@ -47,7 +47,6 @@ use self::parts::{ListState, TestState};
 use self::providers::Draft;
 use super::{SECTION_GAP, header};
 use crate::session::{PageContext, Shared};
-use crate::widgets::banner::{Banner, Tone};
 use crate::widgets::controls;
 use crate::widgets::tabs::underline_tabs;
 
@@ -122,6 +121,7 @@ impl ModelsPage {
 
     /// 내려받기와 테스트 작업 스레드가 끝났는지 확인합니다. 다른 화면을 보고 있을 때도 불립니다.
     pub fn tick(&mut self, shared: &mut Shared, ctx: &egui::Context) {
+        let card_shown = self.downloads.take_card_shown();
         if let Some((download, end)) = self.downloads.take_finished() {
             match end {
                 DownloadEnd::Done => {
@@ -130,13 +130,16 @@ impl ModelsPage {
                         .info(t!("models.download.done", model = download.variant_label));
                     self.downloaded = Some(download.target);
                 }
-                DownloadEnd::Cancelled => {
-                    shared.toasts.info(t!("models.download.cancelled"));
-                }
-                DownloadEnd::Failed(message) => {
-                    shared
-                        .toasts
-                        .error(t!("models.download.failed", message = message));
+                // 취소는 사용자가 한 일이라 알리지 않습니다.
+                DownloadEnd::Cancelled => {}
+                // 원인은 내려받기 카드에 남으므로, 카드를 보고 있었으면 알리지 않고
+                // 다른 곳을 보고 있었으면 어느 모델인지만 알립니다.
+                DownloadEnd::Failed(_) if card_shown => {}
+                DownloadEnd::Failed(_) => {
+                    shared.toasts.error(t!(
+                        "models.download.failed_named",
+                        model = download.variant_label
+                    ));
                 }
             }
         }
@@ -166,14 +169,8 @@ impl ModelsPage {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
         self.use_downloaded(cx);
 
-        header(ui, &t!("models.title"), &t!("models.subtitle"));
-
-        if cx.locked {
-            Banner::new(Tone::Warning)
-                .line(t!("models.locked"))
-                .show(ui);
-            ui.add_space(10.0);
-        }
+        // 설정 파일을 읽지 못해 잠겨 있으면 앱 위쪽 배너가 알리므로 여기서는 따로 알리지 않습니다.
+        header(ui, &t!("models.title"), None);
 
         let categories = [
             (Category::Stt, t!("models.category.stt").into_owned()),

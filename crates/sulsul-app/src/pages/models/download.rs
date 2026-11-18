@@ -246,6 +246,9 @@ pub fn variant_card(
     // 내려받다 만 조각이 있으면 이어받을 수 있습니다.
     let resumable = !installed && !is_downloading && partial_bytes(variant) > 0;
     let other_running = downloads.active().is_some() && !is_downloading;
+    if is_downloading {
+        downloads.mark_card_shown();
+    }
 
     let mut main_click = None;
     let mut open_folder = false;
@@ -362,10 +365,8 @@ pub fn variant_folder(variant: &ModelVariant, fallback: PathBuf) -> PathBuf {
 
 /// 폴더를 파일 관리자로 엽니다(없으면 만듭니다). 열지 못하면 알림으로 알립니다.
 pub fn open_folder(shared: &mut Shared, folder: &Path) {
-    if let Err(message) = system::open_dir(folder) {
-        shared
-            .toasts
-            .error(t!("common.open_failed", message = message));
+    if system::open_dir(folder).is_err() {
+        shared.toasts.error(t!("common.open_failed"));
     }
 }
 
@@ -420,8 +421,6 @@ impl ModelsPage {
             .unwrap_or(first);
         self.picker.normalize(&engine.catalog);
 
-        ui.label(text::caption(ui, t!("models.download.help.stt")));
-        ui.add_space(6.0);
         let groups: Vec<PickerGroup<'_>> = engines
             .iter()
             .map(|e| PickerGroup {
@@ -527,11 +526,6 @@ impl ModelsPage {
             |_| {},
             |ui| {
                 engine_settings(ui, cx, &engine.id, std::slice::from_ref(&field), None);
-                ui.add_space(4.0);
-                ui.label(text::caption(
-                    ui,
-                    t!("models.download.own_file.note", engine = engine.name),
-                ));
 
                 // 경로를 넣었으면 "사용 가능 모델" 목록에 직접 지정한 모델로 나옵니다.
                 let engine_ctx = EngineContext {
@@ -545,7 +539,7 @@ impl ModelsPage {
                 };
                 if !custom.ready {
                     ui.label(
-                        text::caption(ui, t!("models.download.own_file.missing"))
+                        text::caption(ui, t!("models.available.custom.missing"))
                             .color(palette.warning_text),
                     );
                 }

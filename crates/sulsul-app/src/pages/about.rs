@@ -17,7 +17,7 @@ use crate::widgets::row::{self, Row};
 use crate::widgets::{controls, text};
 
 pub fn ui(ui: &mut Ui, cx: &mut PageContext<'_>) {
-    header(ui, &t!("about.title"), &t!("about.subtitle"));
+    header(ui, &t!("about.title"), None);
 
     app_card(ui);
     ui.add_space(SECTION_GAP);
@@ -119,10 +119,8 @@ fn path_row(ui: &mut Ui, shared: &mut Shared, label: &str, path: &Path, is_dir: 
             } else {
                 system::open_path(path)
             };
-            if let Err(message) = result {
-                shared
-                    .toasts
-                    .error(t!("common.open_failed", message = message));
+            if result.is_err() {
+                shared.toasts.error(t!("common.open_failed"));
             }
         }
     });

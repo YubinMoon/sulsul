@@ -275,31 +275,30 @@ impl SulsulApp {
         let mut open_file = false;
 
         if let Some(problem) = self.sync.problem() {
-            let note = match problem.kind {
-                ProblemKind::Syntax => t!("config_banner.overwrite_note_syntax"),
-                ProblemKind::Value => t!("config_banner.overwrite_note_value"),
-                ProblemKind::Io => t!("config_banner.overwrite_note_io"),
-            };
-            Banner::new(Tone::Error)
-                .title(&t!("config_banner.title"))
+            let title = t!("config_banner.title");
+            let mut banner = Banner::new(Tone::Error)
+                .title(&title)
                 .line(error_text::config(&problem.error))
-                .line(t!("config_banner.locked"))
-                .line(note)
-                .show_with(ui, |ui| {
-                    if controls::icon_text_button(ui, Icon::RefreshCw, t!("config_banner.reload"))
-                        .clicked()
-                    {
-                        action = Some(SyncAction::Reload);
-                    }
-                    if controls::icon_text_button(ui, Icon::FilePen, t!("settings.file.open"))
-                        .clicked()
-                    {
-                        open_file = true;
-                    }
-                    if controls::danger_button(ui, t!("config_banner.overwrite")).clicked() {
-                        action = Some(SyncAction::Save);
-                    }
-                });
+                .line(t!("config_banner.locked"));
+            // 덮어쓰면 파일 전체를 새로 쓰는 경우에만 백업 위치를 알립니다.
+            // 값만 틀린 파일은 그 값만 고치고, 열 수 없는 파일은 버튼 이름대로 새로 씁니다.
+            if problem.kind == ProblemKind::Syntax {
+                banner = banner.line(t!("config_banner.overwrite_note_syntax"));
+            }
+            banner.show_with(ui, |ui| {
+                if controls::icon_text_button(ui, Icon::RefreshCw, t!("config_banner.reload"))
+                    .clicked()
+                {
+                    action = Some(SyncAction::Reload);
+                }
+                if controls::icon_text_button(ui, Icon::FilePen, t!("settings.file.open")).clicked()
+                {
+                    open_file = true;
+                }
+                if controls::danger_button(ui, t!("config_banner.overwrite")).clicked() {
+                    action = Some(SyncAction::Save);
+                }
+            });
             ui.add_space(pages::SECTION_GAP);
         }
 
@@ -320,8 +319,7 @@ impl SulsulApp {
             && let Some(error) = self.sync.watch_error()
         {
             Banner::new(Tone::Warning)
-                .title(&t!("config_banner.watch_failed_title"))
-                .line(error_text::config(error))
+                .title(&error_text::config(error))
                 .line(t!("config_banner.watch_failed_help"))
                 .show_with(ui, |ui| {
                     if controls::icon_text_button(ui, Icon::RefreshCw, t!("config_banner.reload"))
@@ -333,10 +331,8 @@ impl SulsulApp {
             ui.add_space(pages::SECTION_GAP);
         }
 
-        if open_file && let Err(message) = system::open_path(self.sync.path()) {
-            self.shared
-                .toasts
-                .error(t!("common.open_failed", message = message));
+        if open_file && system::open_path(self.sync.path()).is_err() {
+            self.shared.toasts.error(t!("common.open_failed"));
         }
         if action.is_some() {
             self.pending = action;

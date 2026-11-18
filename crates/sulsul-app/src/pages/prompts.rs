@@ -57,7 +57,7 @@ enum CardAction {
 
 impl PromptsPage {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>) {
-        header(ui, &t!("prompts.title"), &t!("prompts.subtitle"));
+        header(ui, &t!("prompts.title"), Some(&t!("prompts.subtitle")));
 
         if !cx.config.postprocess.enabled {
             Banner::new(Tone::Info)
@@ -105,9 +105,9 @@ impl PromptsPage {
         ui.add_space(8.0);
 
         if post.prompts.is_empty() {
+            // 되살린 프롬프트가 목록에 바로 보이므로 따로 알리지 않습니다.
             if empty_state(ui, locked) {
                 restore_defaults(post);
-                cx.shared.toasts.info(t!("prompts.empty.restored"));
             }
         } else {
             let action = self.list(ui, post, locked);
@@ -243,13 +243,12 @@ impl PromptsPage {
         .show(ui);
         match answer {
             Some(Answer::Confirm) => {
-                if !cx.locked && remove_prompt(&mut cx.config.postprocess, &pending.id).is_some() {
-                    if self.expanded.as_ref() == Some(&pending.id) {
-                        self.expanded = None;
-                    }
-                    cx.shared
-                        .toasts
-                        .info(t!("prompts.remove.done", name = pending.name.as_str()));
+                // 지운 프롬프트는 목록에서 사라지므로 따로 알리지 않습니다.
+                if !cx.locked
+                    && remove_prompt(&mut cx.config.postprocess, &pending.id).is_some()
+                    && self.expanded.as_ref() == Some(&pending.id)
+                {
+                    self.expanded = None;
                 }
                 self.confirm_remove = None;
             }
@@ -323,7 +322,6 @@ fn empty_state(ui: &mut Ui, locked: bool) -> bool {
     let mut restore = false;
     card::card(ui, |ui| {
         ui.label(text::strong(t!("prompts.empty.title")));
-        ui.label(text::muted(ui, t!("prompts.empty.body")));
         ui.add_space(8.0);
         ui.add_enabled_ui(!locked, |ui| {
             ui.horizontal_wrapped(|ui| {

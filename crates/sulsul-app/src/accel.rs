@@ -306,30 +306,27 @@ impl EngineAccel {
                 t!("models.accel.whisper.turned_off").into_owned()
             }
             (AccelRequest::Whisper { .. }, _) => t!("models.accel.whisper.gpu").into_owned(),
+            // DirectML 엔진(SenseVoice, Whisper ONNX)은 CPU로 인식하는 이유의 안내를 함께 씁니다.
             (AccelRequest::SenseVoice(_), why) => match why {
                 Why::Configured => t!("models.accel.sense_voice.chosen"),
                 Why::AutoNpu => t!("models.accel.sense_voice.auto_npu"),
                 Why::AutoGpu => t!("models.accel.sense_voice.auto_gpu"),
                 Why::AutoNone => t!("models.accel.sense_voice.auto_none"),
-                Why::TurnedOff => t!("models.accel.sense_voice.cpu_chosen"),
-                Why::NotBuilt => t!("models.accel.sense_voice.not_built"),
-                Why::NoGpu => t!(
-                    "models.accel.sense_voice.missing",
-                    device = DeviceKind::Gpu.label()
-                ),
-                Why::NoNpu => t!(
-                    "models.accel.sense_voice.missing",
-                    device = DeviceKind::Npu.label()
-                ),
+                Why::TurnedOff => t!("models.accel.cpu_chosen"),
+                Why::NotBuilt => t!("models.accel.not_built"),
+                Why::NoGpu => t!("models.accel.missing", device = DeviceKind::Gpu.label()),
+                Why::NoNpu => t!("models.accel.missing", device = DeviceKind::Npu.label()),
             }
             .into_owned(),
             (AccelRequest::WhisperOnnx(_), why) => match why {
                 Why::Configured => t!("models.accel.whisper_onnx.gpu_chosen"),
                 Why::AutoGpu | Why::AutoNpu => t!("models.accel.whisper_onnx.auto_gpu"),
                 Why::AutoNone => t!("models.accel.whisper_onnx.auto_none"),
-                Why::TurnedOff => t!("models.accel.whisper_onnx.cpu_chosen"),
-                Why::NotBuilt => t!("models.accel.whisper_onnx.not_built"),
-                Why::NoGpu | Why::NoNpu => t!("models.accel.whisper_onnx.gpu_missing"),
+                Why::TurnedOff => t!("models.accel.cpu_chosen"),
+                Why::NotBuilt => t!("models.accel.not_built"),
+                Why::NoGpu | Why::NoNpu => {
+                    t!("models.accel.missing", device = DeviceKind::Gpu.label())
+                }
             }
             .into_owned(),
         }
@@ -493,21 +490,7 @@ pub fn fallback_note(
 /// 가속 장치는 그 컴퓨터에서 처음 쓸 때 준비(셰이더 컴파일 등)가 오래 걸립니다.
 pub fn first_run_hint(request: AccelRequest, env: &AccelEnv) -> Option<String> {
     let planned = plan(request, env);
-    if planned.device == ComputeDevice::Cpu {
-        return None;
-    }
-    let vulkan = matches!(request, AccelRequest::Whisper { .. })
-        && env
-            .whisper_backend
-            .is_some_and(|backend| backend.eq_ignore_ascii_case("vulkan"));
-    Some(
-        if vulkan {
-            t!("models.test.first_run_vulkan")
-        } else {
-            t!("models.test.first_run_accel")
-        }
-        .into_owned(),
-    )
+    (planned.device != ComputeDevice::Cpu).then(|| t!("models.test.first_run").into_owned())
 }
 
 #[cfg(test)]
@@ -715,7 +698,7 @@ mod tests {
             assert!(note.contains("디코더") && note.contains("CPU"), "{note}");
         }
         let note = report(pick_gpu, &none).note(&registry);
-        assert!(note.contains("GPU를 골랐지만"), "{note}");
+        assert!(note.contains("GPU를 찾지 못해"), "{note}");
         assert!(first_run_hint(auto, &gpu_only).is_some());
         assert_eq!(first_run_hint(auto, &none), None);
     }
@@ -819,11 +802,10 @@ mod tests {
         let text = fallback_note(whisper(true), &cpu, &no_device).unwrap();
         assert!(text.contains("GPU를 찾지 못해"), "{text}");
         assert!(!text.contains("초기화"), "{text}");
-        // 상태 5: 장치는 있는데 CPU로 실행됨. 메모리 부족과 초기화 실패 가능성을 함께 알립니다.
+        // 상태 5: 장치는 있는데 CPU로 실행됨. 장치 이름과 메모리 부족 가능성을 알립니다.
         let text = fallback_note(whisper(true), &cpu, &usable).unwrap();
         assert!(text.contains(vulkan0), "{text}");
-        assert!(text.contains("VRAM"), "{text}");
-        assert!(text.contains("초기화"), "{text}");
+        assert!(text.contains("메모리"), "{text}");
 
         // SenseVoice: 직접 고른 장치를 쓰지 못했을 때
         let gpu_only = directml_env(true, false, true);
@@ -853,17 +835,16 @@ mod tests {
         rust_i18n::set_locale("ko");
         let vulkan = whisper_env(Some("Vulkan"), Some("Vulkan0 (RTX)"));
         let hint = first_run_hint(whisper(true), &vulkan).unwrap();
-        assert!(hint.contains("Vulkan"), "{hint}");
+        assert!(hint.contains("처음"), "{hint}");
         assert_eq!(first_run_hint(whisper(false), &vulkan), None);
         assert_eq!(
             first_run_hint(whisper(true), &whisper_env(Some("Vulkan"), None)),
             None
         );
 
-        // Vulkan이 아닌 가속은 일반 안내를 씁니다.
+        // 가속 방식과 관계없이 같은 안내를 씁니다.
         let cuda = whisper_env(Some("CUDA"), Some("CUDA0 (RTX)"));
-        let hint = first_run_hint(whisper(true), &cuda).unwrap();
-        assert!(!hint.contains("Vulkan"), "{hint}");
+        assert_eq!(first_run_hint(whisper(true), &cuda), Some(hint));
         let gpu_only = directml_env(true, false, true);
         assert!(first_run_hint(sense_voice(DevicePreference::Auto), &gpu_only).is_some());
         assert_eq!(

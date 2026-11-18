@@ -113,7 +113,7 @@ impl Desktop {
                     }
                 }
             }
-            None => (None, Some(t!("transcribe.error.crashed").into_owned())),
+            None => (None, Some(t!("dictation.hotkey_unavailable").into_owned())),
         };
 
         let tray_ctx = ctx.clone();
@@ -434,19 +434,18 @@ impl DictationSettings {
     }
 }
 
+/// 받아쓰기 알림을 토스트로 띄웁니다. 복사했을 때와 처리 중에 다시 눌렀을 때는 소리와 오버레이로 알 수 있어
+/// 받아쓰기 쪽에서 알림을 내지 않습니다.
 fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
     match notice {
-        Notice::Copied { refined: false } => shared.toasts.info(t!("dictation.copied")),
-        Notice::Copied { refined: true } => shared.toasts.info(t!("dictation.refined_copied")),
         Notice::RefineFailed(error) => {
             let message = error_text::refine(&error, &shared.paths, &config.postprocess);
             shared
                 .toasts
                 .error(t!("dictation.refine_failed", message = message));
         }
-        Notice::Empty => shared.toasts.warning(t!("dictation.empty")),
-        Notice::NoSpeech => shared.toasts.warning(t!("dictation.no_speech")),
-        Notice::Busy => shared.toasts.warning(t!("dictation.busy")),
+        // 녹음에 말소리가 없던 것과 엔진이 아무 말도 알아듣지 못한 것은 사용자에게 같은 뜻입니다.
+        Notice::Empty | Notice::NoSpeech => shared.toasts.warning(t!("dictation.no_speech")),
         Notice::RecordFailed(error) => shared.toasts.error(t!(
             "dictation.record_failed",
             message = error_text::audio(&error)
@@ -457,9 +456,6 @@ fn show_notice(shared: &mut Shared, config: &Config, notice: Notice) {
                 .toasts
                 .error(t!("dictation.failed", message = message));
         }
-        Notice::ClipboardFailed(error) => shared.toasts.error(t!(
-            "dictation.clipboard_failed",
-            message = error_text::clipboard(&error)
-        )),
+        Notice::ClipboardFailed => shared.toasts.error(t!("dictation.clipboard_failed")),
     }
 }

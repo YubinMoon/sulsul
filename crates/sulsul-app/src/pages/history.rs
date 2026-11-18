@@ -63,7 +63,7 @@ impl HistoryPage {
         header(
             ui,
             &t!("history.title"),
-            &t!("history.subtitle", max = MAX_ENTRIES),
+            Some(&t!("history.subtitle", max = MAX_ENTRIES)),
         );
 
         let history = &cx.shared.history;
@@ -123,7 +123,7 @@ impl HistoryPage {
         match action {
             Some(Action::Copy(text)) => {
                 ui.ctx().copy_text(text);
-                cx.shared.toasts.info(t!("history.copied"));
+                cx.shared.toasts.info(t!("common.copied"));
             }
             Some(Action::Remove(id)) => {
                 if cx.shared.history.remove(id) {

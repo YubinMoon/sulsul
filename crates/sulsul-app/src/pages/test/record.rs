@@ -525,22 +525,20 @@ fn result_ui(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
     );
 
     // 경고는 가장 중요한 것 하나만 보여 줍니다.
-    let warning = if silent {
-        Some((
-            t!("test.record.silent_title"),
-            t!("test.record.silent_body", hint = microphone_settings_hint()),
-        ))
-    } else if recorded.trim == SilenceTrim::NoSpeech {
-        Some((
-            t!("test.record.no_speech_title"),
-            t!("test.record.no_speech_body"),
-        ))
-    } else {
-        None
-    };
-    if let Some((title, body)) = warning {
+    if silent {
         ui.add_space(8.0);
-        Banner::new(Tone::Warning).title(&title).line(body).show(ui);
+        Banner::new(Tone::Warning)
+            .title(&t!("test.record.silent_title"))
+            .line(t!(
+                "test.record.silent_body",
+                hint = microphone_settings_hint()
+            ))
+            .show(ui);
+    } else if recorded.trim == SilenceTrim::NoSpeech {
+        ui.add_space(8.0);
+        Banner::new(Tone::Warning)
+            .line(t!("test.record.no_speech"))
+            .show(ui);
     }
     let mut notes = Vec::new();
     if recorded.trim == SilenceTrim::Unchecked {
@@ -562,11 +560,9 @@ fn result_ui(ui: &mut Ui, cx: &mut PageContext<'_>, recorded: &Recorded) {
             save_wav(cx, clip);
         }
         if controls::icon_text_button(ui, Icon::FolderOpen, t!("test.record.open_folder")).clicked()
-            && let Err(message) = system::open_dir(&cx.shared.paths.recordings_dir())
+            && system::open_dir(&cx.shared.paths.recordings_dir()).is_err()
         {
-            cx.shared
-                .toasts
-                .error(t!("common.open_failed", message = message));
+            cx.shared.toasts.error(t!("common.open_failed"));
         }
         ui.label(text::caption(ui, &recorded.device_name));
     });
@@ -593,12 +589,8 @@ fn save_wav(cx: &mut PageContext<'_>, clip: &AudioClip) {
     }
 
     match write_recording(&path, clip) {
-        Ok(()) => {
-            tracing::info!("saved recording to {}", path.display());
-            cx.shared
-                .toasts
-                .info(t!("test.record.saved", path = path.display()));
-        }
+        // 저장할 곳을 사용자가 방금 골랐으므로 성공은 따로 알리지 않습니다.
+        Ok(()) => tracing::info!("saved recording to {}", path.display()),
         Err(error) => {
             tracing::warn!("could not save recording: {error}");
             cx.shared.toasts.error(error_text::audio(&error));

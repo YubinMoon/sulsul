@@ -35,7 +35,7 @@ pub struct SettingsPage {
 impl SettingsPage {
     /// `issues`는 설정 파일을 읽으며 발견한 문제입니다.
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, issues: &[ConfigIssue]) {
-        header(ui, &t!("settings.title"), &t!("settings.subtitle"));
+        header(ui, &t!("settings.title"), Some(&t!("settings.subtitle")));
 
         if !issues.is_empty() {
             issues_banner(ui, issues);
@@ -67,9 +67,9 @@ impl SettingsPage {
             match answer {
                 Some(Answer::Confirm) => {
                     self.confirm_reset = false;
+                    // 바뀐 값이 화면에 바로 보이므로 따로 알리지 않습니다.
                     if !cx.locked {
                         reset_to_defaults(cx.config, &cx.shared.registry);
-                        cx.shared.toasts.info(t!("settings.reset.done"));
                     }
                 }
                 Some(Answer::Cancel) => self.confirm_reset = false,
@@ -82,23 +82,18 @@ impl SettingsPage {
         Section::new(Icon::FileCog, &t!("settings.file.title")).show(ui, |ui| {
             let path = cx.shared.paths.config_file();
             ui.add(text::path_label(ui, &path));
-            ui.label(text::caption(ui, t!("settings.file.help")));
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 if controls::icon_text_button(ui, Icon::FilePen, t!("settings.file.open")).clicked()
-                    && let Err(message) = system::open_path(&path)
+                    && system::open_path(&path).is_err()
                 {
-                    cx.shared
-                        .toasts
-                        .error(t!("common.open_failed", message = message));
+                    cx.shared.toasts.error(t!("common.open_failed"));
                 }
                 if controls::icon_text_button(ui, Icon::FolderOpen, t!("settings.file.open_folder"))
                     .clicked()
-                    && let Err(message) = system::open_dir(&cx.shared.paths.config_dir)
+                    && system::open_dir(&cx.shared.paths.config_dir).is_err()
                 {
-                    cx.shared
-                        .toasts
-                        .error(t!("common.open_failed", message = message));
+                    cx.shared.toasts.error(t!("common.open_failed"));
                 }
                 ui.add_enabled_ui(!cx.locked, |ui| {
                     if controls::icon_text_button(ui, Icon::RotateCcw, t!("settings.reset.button"))
@@ -120,7 +115,6 @@ fn issues_banner(ui: &mut Ui, issues: &[ConfigIssue]) {
                 .iter()
                 .map(|issue| format!("•  {}", error_text::config_issue(issue))),
         )
-        .line(t!("settings.issues.help"))
         .show(ui);
 }
 
@@ -190,7 +184,6 @@ fn hotkey_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
         // 전역 단축키를 쓸 수 없으면(등록 실패, 쓸 수 없는 키) 그 이유를 이 줄에서 알립니다.
         let label = t!("settings.hotkey.key");
         Row::new(&label)
-            .help(&t!("settings.hotkey.key_help"))
             .warning_opt(cx.shared.dictation.hotkey_error.as_deref())
             .show(ui, |ui| {
                 // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
@@ -233,16 +226,13 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
         let audio = &mut cx.config.audio;
         let devices = &cx.shared.devices;
 
-        // 도움말 아래에 고른 장치의 형식(시스템 기본이면 지금 어떤 장치인지)을 붙이고,
+        // 이름 아래에 고른 장치의 형식(시스템 기본이면 지금 어떤 장치인지)을 보여 주고,
         // 쓸 수 없는 장치면 그 이유를 경고로 보여 줍니다.
-        let mut help = t!("settings.audio.input_device_help").into_owned();
-        if let Some(details) = device_details(devices, &audio.input_device) {
-            help = format!("{help}\n{details}");
-        }
+        let details = device_details(devices, &audio.input_device);
         let problem = device_problem(devices, &audio.input_device);
         let mut refresh = false;
         Row::new(&t!("settings.audio.input_device"))
-            .help(&help)
+            .help_opt(details.as_deref())
             .warning_opt(problem.as_deref())
             .show(ui, |ui| {
                 // 좁은 창에서는 조작 영역이 기본 너비보다 좁아집니다.
@@ -267,22 +257,16 @@ fn audio_section(ui: &mut Ui, cx: &mut PageContext<'_>) {
         row::separator(ui);
 
         let (min, max) = MAX_RECORD_SECONDS;
-        Row::new(&t!("settings.audio.max_record_seconds"))
-            .help(&t!(
-                "settings.audio.max_record_seconds_help",
-                min = min,
-                max = max
-            ))
-            .show(ui, |ui| {
-                ui.add(
-                    DragValue::new(&mut audio.max_record_seconds)
-                        .range(min..=max)
-                        // 범위를 벗어난 값이 파일에 있어도 사용자가 고치기 전에는 그대로 둡니다.
-                        .clamp_existing_to_range(false)
-                        .speed(1.0)
-                        .suffix(t!("unit.seconds_suffix")),
-                );
-            });
+        Row::new(&t!("settings.audio.max_record_seconds")).show(ui, |ui| {
+            ui.add(
+                DragValue::new(&mut audio.max_record_seconds)
+                    .range(min..=max)
+                    // 범위를 벗어난 값이 파일에 있어도 사용자가 고치기 전에는 그대로 둡니다.
+                    .clamp_existing_to_range(false)
+                    .speed(1.0)
+                    .suffix(t!("unit.seconds_suffix")),
+            );
+        });
         row::separator(ui);
 
         let label = t!("settings.audio.feedback_sounds");
