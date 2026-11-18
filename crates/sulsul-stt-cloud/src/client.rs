@@ -12,6 +12,9 @@ use sulsul_core::stt::{
 
 static BOUNDARY_SEQ: AtomicU64 = AtomicU64::new(1);
 
+/// 오류 설명에서 가릴 API 키의 최소 글자 수
+const MIN_SECRET_CHARS: usize = 8;
+
 pub struct CloudConfig {
     pub endpoint: String,
     pub api_key: String,
@@ -104,7 +107,11 @@ impl SttEngine for CloudEngine {
             .map_err(|e| SttError::Backend(format!("API 응답을 읽지 못했습니다: {e}")))?;
 
         if !(200..300).contains(&status) {
-            return Err(SttError::Backend(format_http_error(status, &text)));
+            return Err(SttError::Backend(format_http_error(
+                status,
+                &text,
+                &self.api_key,
+            )));
         }
 
         parse_transcription_response(&text)
@@ -228,10 +235,15 @@ struct ApiErrorBody {
 }
 
 fn parse_transcription_response(raw: &str) -> Result<Transcript, SttError> {
+    // 성공 응답의 본문에는 받아쓴 글이 들어 있어, 오류(로그에 남음)에는 본문도 serde 오류 설명도 싣지 않습니다.
+    // serde 형식 오류(`invalid type: string "..."`)는 받은 값을 그대로 담기 때문입니다.
     let parsed: ApiResponse = serde_json::from_str(raw).map_err(|e| {
         SttError::Backend(format!(
-            "API 응답 JSON 형식을 해석하지 못했습니다 ({e}): {}",
-            truncate_for_log(raw)
+            "API 응답 JSON 형식을 해석하지 못했습니다 ({:?} error at line {} column {}; {} bytes)",
+            e.classify(),
+            e.line(),
+            e.column(),
+            raw.len()
         ))
     })?;
     let segments = parsed
@@ -250,12 +262,19 @@ fn parse_transcription_response(raw: &str) -> Result<Transcript, SttError> {
     })
 }
 
-fn format_http_error(status: u16, body: &str) -> String {
+/// 오류 응답을 설명으로 바꿉니다. 서버가 설명에 API 키(`api_key`)를 적어 보내도 로그에 남지 않게 가립니다.
+fn format_http_error(status: u16, body: &str, api_key: &str) -> String {
     let detail = serde_json::from_str::<ApiErrorEnvelope>(body)
         .ok()
         .map(|env| env.error.message.trim().to_owned())
         .filter(|msg| !msg.is_empty())
         .unwrap_or_else(|| truncate_for_log(body));
+    // 아주 짧은 값은 키가 아닐 수 있고, 가리면 설명의 보통 글자까지 지워집니다.
+    let detail = if api_key.chars().count() >= MIN_SECRET_CHARS && detail.contains(api_key) {
+        detail.replace(api_key, "***")
+    } else {
+        detail
+    };
 
     if detail.is_empty() {
         format!("API 오류 (HTTP {status})")
@@ -434,5 +453,35 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("401"));
         assert!(message.contains("Incorrect API key provided"));
+    }
+
+    #[test]
+    fn bad_transcription_json_does_not_copy_the_body_into_errors() {
+        // 오류는 로그에 남으므로, 받아쓴 글이 든 응답 본문을 옮겨 적으면 안 됩니다.
+        let secret = "비밀 받아쓰기";
+        for raw in [
+            r#"{"text": 5, "segments":[{"text":"비밀 받아쓰기"}]}"#,
+            r#"{"segments": "비밀 받아쓰기"}"#,
+            "비밀 받아쓰기",
+        ] {
+            let message = parse_transcription_response(raw).unwrap_err().to_string();
+            assert!(!message.contains(secret), "{raw} → {message}");
+            assert!(message.contains("bytes"), "{message}");
+        }
+    }
+
+    #[test]
+    fn http_errors_hide_the_api_key() {
+        let key = "sk-test-0123456789";
+        let body = format!(r#"{{"error":{{"message":"Incorrect API key provided: {key}"}}}}"#);
+        assert_eq!(
+            format_http_error(401, &body, key),
+            "API 오류 (HTTP 401): Incorrect API key provided: ***"
+        );
+        assert_eq!(
+            format_http_error(400, r#"{"error":{"message":"bad audio"}}"#, "bad"),
+            "API 오류 (HTTP 400): bad audio",
+            "짧은 값은 가리지 않습니다"
+        );
     }
 }

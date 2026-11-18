@@ -38,6 +38,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// 오류 본문을 메시지에 옮길 때의 최대 글자 수
 const MAX_ERROR_CHARS: usize = 300;
 
+/// 오류 설명에서 가릴 API 키의 최소 글자 수
+const MIN_SECRET_CHARS: usize = 8;
+
 /// 제공자 응답 (연결 테스트와 글 다듬기 공용)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionReply {
@@ -270,10 +273,19 @@ fn send_chat_request(
     if !(200..300).contains(&status) {
         return Err(LlmError::Http {
             status,
-            message: error_message(&text),
+            message: hide_secret(error_message(&text), api_key),
         });
     }
     parse_chat_response(&text)
+}
+
+/// 서버가 오류 설명에 API 키를 그대로 적어 보내도 로그에 남지 않게 가립니다.
+fn hide_secret(message: String, secret: &str) -> String {
+    // 아주 짧은 값은 키가 아닐 수 있고, 가리면 설명의 보통 글자까지 지워집니다.
+    if secret.chars().count() < MIN_SECRET_CHARS || !message.contains(secret) {
+        return message;
+    }
+    message.replace(secret, "***")
 }
 
 fn network_error(error: ureq::Error) -> LlmError {
@@ -305,15 +317,23 @@ struct ChatMessage {
 
 /// 성공 응답에서 텍스트와 모델 이름을 꺼냅니다.
 fn parse_chat_response(raw: &str) -> Result<(String, Option<String>), LlmError> {
-    let parsed: ChatResponse = serde_json::from_str(raw)
-        .map_err(|e| LlmError::BadResponse(format!("invalid JSON ({e}): {}", truncate(raw))))?;
+    // 성공 응답의 본문에는 다듬은 글이 들어 있을 수 있어, 오류(로그에 남음)에는 본문을 싣지 않습니다.
+    let parsed: ChatResponse = serde_json::from_str(raw).map_err(|e| {
+        LlmError::BadResponse(format!(
+            "invalid JSON ({}; {} bytes)",
+            crate::json_error_summary(&e),
+            raw.len()
+        ))
+    })?;
     let Some(choices) = parsed.choices else {
-        let detail = error_message(raw);
-        return Err(LlmError::BadResponse(if detail.is_empty() {
-            "response has no choices".into()
-        } else {
-            detail
-        }));
+        // 서버가 적은 오류 설명만 씁니다 (본문 앞부분으로 대신하지 않음).
+        let detail = serde_json::from_str::<Value>(raw)
+            .ok()
+            .and_then(|value| json_error_message(&value))
+            .map(|message| truncate(&message));
+        return Err(LlmError::BadResponse(
+            detail.unwrap_or_else(|| "response has no choices".into()),
+        ));
     };
     let text = choices
         .first()
@@ -733,6 +753,42 @@ mod tests {
         .unwrap_err();
         server.join().unwrap();
         assert!(matches!(err, LlmError::BadResponse(_)), "{err:?}");
+    }
+
+    #[test]
+    fn bad_success_responses_do_not_copy_the_body_into_errors() {
+        // 오류는 로그에 남으므로, 다듬은 글이 든 성공 응답 본문을 옮겨 적으면 안 됩니다.
+        let secret = "비밀 받아쓰기";
+        for raw in [
+            r#"{"model": 5, "choices":[{"message":{"content":"비밀 받아쓰기"}}]}"#,
+            r#"{"choices": "비밀 받아쓰기"}"#,
+            r#"{"message":{"role":"assistant","content":"비밀 받아쓰기"}}"#,
+            "비밀 받아쓰기",
+        ] {
+            let err = parse_chat_response(raw).unwrap_err();
+            assert!(matches!(err, LlmError::BadResponse(_)), "{err:?}");
+            assert!(!err.to_string().contains(secret), "{raw} → {err}");
+        }
+        assert_eq!(
+            parse_chat_response(r#"{"error":{"message":"overloaded"}}"#).unwrap_err(),
+            LlmError::BadResponse("overloaded".into()),
+            "서버가 적은 오류 설명은 그대로 씁니다"
+        );
+    }
+
+    #[test]
+    fn error_messages_hide_the_api_key() {
+        let key = "sk-test-0123456789";
+        assert_eq!(
+            hide_secret(format!("Incorrect API key provided: {key}."), key),
+            "Incorrect API key provided: ***."
+        );
+        assert_eq!(
+            hide_secret("bad key".into(), "bad"),
+            "bad key",
+            "짧은 값은 가리지 않습니다"
+        );
+        assert_eq!(hide_secret("Invalid API Key".into(), ""), "Invalid API Key");
     }
 
     #[test]

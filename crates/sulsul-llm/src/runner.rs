@@ -311,8 +311,14 @@ impl LocalRunner {
                 }
             }
         };
-        let reply: Reply = serde_json::from_str(&raw)
-            .map_err(|e| LocalError::Crashed(format!("invalid reply ({e}): {raw}")))?;
+        // 답에는 모델이 만든 글이 들어 있으므로 오류(로그에 남음)에는 답을 싣지 않습니다.
+        let reply: Reply = serde_json::from_str(&raw).map_err(|e| {
+            LocalError::Crashed(format!(
+                "invalid reply ({}; {} bytes)",
+                crate::json_error_summary(&e),
+                raw.len()
+            ))
+        })?;
         match reply {
             Reply::Failed { error } => Err(LocalError::Failed(error)),
             other => Ok(other),
@@ -320,8 +326,14 @@ impl LocalRunner {
     }
 }
 
+/// 요청과 맞지 않는 답. 답의 종류만 적습니다 (`Done`에는 모델이 만든 글이 있음).
 fn unexpected(reply: &Reply) -> LocalError {
-    LocalError::Crashed(format!("unexpected reply: {reply:?}"))
+    let kind = match reply {
+        Reply::Ready { .. } => "ready",
+        Reply::Done { .. } => "done",
+        Reply::Failed { .. } => "failed",
+    };
+    LocalError::Crashed(format!("unexpected '{kind}' reply"))
 }
 
 impl Drop for LocalRunner {

@@ -534,6 +534,7 @@ about:
     data: 데이터
     models: 모델
     recordings: 녹음
+    logs: 로그
     open: "%{name} 열기"
   engines:
     title: 음성 인식 엔진

@@ -9,6 +9,8 @@
 //!
 //! 명령줄 인자: `--background`(창 없이 트레이로 시작, 로그인할 때 자동 실행이 씀),
 //! `--home <폴더>`(설정·데이터 폴더, `SULSUL_HOME`과 같음).
+//!
+//! 로그는 표준 오류와 데이터 폴더의 로그 파일에 함께 남습니다 (`logging`).
 
 // 릴리스 빌드에서는 콘솔 창을 띄우지 않습니다.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -30,6 +32,7 @@ mod hotkey;
 mod i18n;
 mod icons;
 mod instance;
+mod logging;
 mod overlay;
 mod pages;
 mod refiner;
@@ -46,7 +49,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use rust_i18n::t;
-use sulsul_core::paths::HOME_ENV;
+use sulsul_core::paths::{HOME_ENV, PathsError};
 use sulsul_core::{AppPaths, ConfigStore};
 
 use crate::app::SulsulApp;
@@ -63,8 +66,15 @@ const WINDOW_SIZE: [f32; 2] = [960.0, 660.0];
 const WINDOW_MIN_SIZE: [f32; 2] = [780.0, 540.0];
 
 fn main() {
-    init_logging();
-    if let Err(error) = run() {
+    let args = LaunchArgs::parse(std::env::args_os().skip(1));
+    let home = home_dir(&args);
+    let paths = match &home {
+        Some(home) => Ok(AppPaths::under(home)),
+        None => AppPaths::resolve(),
+    };
+    // 폴더를 정하지 못하면 로그 파일 없이 표준 오류에만 씁니다 (그 오류는 `run`이 알립니다).
+    logging::init(paths.as_ref().ok().map(AppPaths::log_file).as_deref());
+    if let Err(error) = run(args, home, paths) {
         tracing::error!("{error:#}");
         // 릴리스 빌드에는 콘솔이 없으므로 대화상자로 알립니다.
         rfd::MessageDialog::new()
@@ -76,32 +86,25 @@ fn main() {
     }
 }
 
-fn init_logging() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "warn,sulsul=info".into());
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
-}
-
-fn run() -> anyhow::Result<()> {
-    let args = LaunchArgs::parse(std::env::args_os().skip(1));
-    // 설정·데이터 폴더: `--home`, `SULSUL_HOME`, OS 기본 위치 순서입니다.
-    // 자동 실행이 같은 폴더로 시작하도록 절대 경로로 바꿔 둡니다.
-    let home = args
-        .home
+/// 설정·데이터 폴더를 모을 폴더: `--home`, `SULSUL_HOME` 순서이고, 둘 다 없으면 OS 기본 위치를 씁니다(`None`).
+/// 자동 실행이 같은 폴더로 시작하도록 절대 경로로 바꿔 둡니다.
+fn home_dir(args: &LaunchArgs) -> Option<PathBuf> {
+    args.home
         .clone()
         .or_else(|| {
             std::env::var_os(HOME_ENV)
                 .filter(|home| !home.is_empty())
                 .map(PathBuf::from)
         })
-        .map(|home| std::path::absolute(&home).unwrap_or(home));
-    let paths = match &home {
-        Some(home) => AppPaths::under(home),
-        None => AppPaths::resolve().context("could not determine the app directories")?,
-    };
+        .map(|home| std::path::absolute(&home).unwrap_or(home))
+}
+
+fn run(
+    args: LaunchArgs,
+    home: Option<PathBuf>,
+    paths: Result<AppPaths, PathsError>,
+) -> anyhow::Result<()> {
+    let paths = paths.context("could not determine the app directories")?;
 
     // 같은 폴더를 쓰는 술술이 이미 떠 있으면 그 창을 보여 달라고 하고 끝냅니다.
     let requests = Arc::new(WindowRequests::default());
@@ -118,8 +121,10 @@ fn run() -> anyhow::Result<()> {
     i18n::apply_locale(&sync.config.general.ui_language);
     let registry = engines::registry();
     tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
         config = %paths.config_file().display(),
         data = %paths.data_dir.display(),
+        log = %paths.log_file().display(),
         engines = ?registry,
         background = args.background,
         "starting sulsul"

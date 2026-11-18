@@ -61,7 +61,7 @@ fn app_card(ui: &mut Ui) {
 fn paths_card(ui: &mut Ui, shared: &mut Shared) {
     Section::new(Icon::FolderOpen, &t!("about.paths.title")).show(ui, |ui| {
         let paths = shared.paths.clone();
-        let rows: [(String, std::path::PathBuf, bool); 4] = [
+        let rows: [(String, std::path::PathBuf, bool); 5] = [
             (
                 t!("about.paths.config").into_owned(),
                 paths.config_file(),
@@ -82,6 +82,8 @@ fn paths_card(ui: &mut Ui, shared: &mut Shared) {
                 paths.recordings_dir(),
                 true,
             ),
+            // 화면 알림에는 오류 원문을 싣지 않으므로, 원문을 볼 수 있는 로그 폴더를 엽니다.
+            (t!("about.paths.logs").into_owned(), paths.logs_dir(), true),
         ];
         for (index, (label, path, is_dir)) in rows.iter().enumerate() {
             if index > 0 {

@@ -28,3 +28,16 @@ pub const CLOUD_PROCESSOR_ID: &str = "llm_cloud";
 
 /// `[postprocess.processors.llm_local]`에서 고른 로컬 모델(변형 ID)을 담는 키
 pub const LOCAL_MODEL_KEY: &str = "model";
+
+/// JSON 오류를 받은 값 없이 종류와 위치만으로 줄입니다.
+///
+/// serde_json의 형식 오류(`invalid type: string "..."`)는 받은 값을 그대로 담습니다. 다듬기 요청·응답에는
+/// 받아쓴 글과 다듬은 글이 들어 있어, 그 오류를 그대로 로그에 남기면 글 본문도 함께 남습니다.
+pub fn json_error_summary(error: &serde_json::Error) -> String {
+    format!(
+        "{:?} error at line {} column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}

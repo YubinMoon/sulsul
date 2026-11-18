@@ -32,6 +32,7 @@ locales/                화면 문구 번역 파일 (ko.yml이 기본)
 | Windows | `%APPDATA%\sulsul\config\config.toml` | `%LOCALAPPDATA%\sulsul\data` |
 
 받아쓰기 기록은 데이터 폴더의 `history.json`에 남습니다.
+앱 로그는 데이터 폴더의 `logs\sulsul.log`에 남고(정보 화면에서 열기, 5MB를 넘으면 `sulsul.old.log`로 돌림), 기록 수준은 `RUST_LOG`로 바꿉니다.
 
 환경 변수 `SULSUL_HOME`을 지정하면 모든 파일을 그 폴더 아래에 둡니다(개발·테스트용).
 

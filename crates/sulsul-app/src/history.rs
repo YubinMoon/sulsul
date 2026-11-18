@@ -306,7 +306,8 @@ pub fn load(path: &Path) -> Vec<Entry> {
             tracing::warn!(
                 path = %path.display(),
                 backup = %backup.display(),
-                "the dictation history file is broken; starting with an empty history: {error}"
+                "the dictation history file is broken; starting with an empty history: {}",
+                json_error_summary(&error)
             );
             if let Err(error) = std::fs::rename(path, &backup) {
                 tracing::warn!("could not move the broken history file aside: {error}");
@@ -317,16 +318,33 @@ pub fn load(path: &Path) -> Vec<Entry> {
     let mut entries: Vec<Entry> = file
         .entries
         .into_iter()
-        .filter_map(|value| match serde_json::from_value(value) {
+        .enumerate()
+        .filter_map(|(index, value)| match serde_json::from_value(value) {
             Ok(entry) => Some(entry),
             Err(error) => {
-                tracing::warn!("skipped an unreadable dictation history entry: {error}");
+                // 값에서 읽은 오류에는 위치가 없어 종류만 적습니다.
+                tracing::warn!(
+                    index,
+                    "skipped an unreadable dictation history entry ({:?} error)",
+                    error.classify()
+                );
                 None
             }
         })
         .collect();
     trim(&mut entries);
     entries
+}
+
+/// JSON 오류를 받은 값 없이 종류와 위치만으로 줄입니다. serde 형식 오류(`invalid type: string "..."`)는
+/// 받은 값을 그대로 담아, 그대로 로그에 남기면 받아쓴 글이 함께 남을 수 있습니다.
+fn json_error_summary(error: &serde_json::Error) -> String {
+    format!(
+        "{:?} error at line {} column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
 }
 
 /// 기록을 파일에 씁니다. 임시 파일에 다 쓴 뒤 바꿔 넣으므로, 쓰다 멈춰도 원래 파일이 깨지지 않습니다.

@@ -12,6 +12,7 @@ pub const APP_ID: &str = "sulsul";
 pub const HOME_ENV: &str = "SULSUL_HOME";
 const CONFIG_FILE_NAME: &str = "config.toml";
 const HISTORY_FILE_NAME: &str = "history.json";
+const LOG_FILE_NAME: &str = "sulsul.log";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathsError {
@@ -60,12 +61,30 @@ impl AppPaths {
         self.data_dir.join("recordings")
     }
 
+    /// 앱 로그 폴더
     pub fn logs_dir(&self) -> PathBuf {
         self.data_dir.join("logs")
+    }
+
+    /// 앱 로그 파일 (로그 폴더 안). 커지면 같은 폴더의 `sulsul.old.log`로 돌리고 새로 시작합니다.
+    pub fn log_file(&self) -> PathBuf {
+        self.logs_dir().join(LOG_FILE_NAME)
     }
 
     /// 단축키 받아쓰기 기록 파일 (설정 파일과 따로 둡니다)
     pub fn history_file(&self) -> PathBuf {
         self.data_dir.join(HISTORY_FILE_NAME)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_file_sits_in_the_data_logs_folder() {
+        let paths = AppPaths::under("home");
+        assert_eq!(paths.logs_dir(), PathBuf::from("home/data/logs"));
+        assert_eq!(paths.log_file(), PathBuf::from("home/data/logs/sulsul.log"));
     }
 }

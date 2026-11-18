@@ -73,8 +73,9 @@ fn serve(input: impl BufRead, mut output: impl Write, engine: &mut impl Engine) 
         }
         let reply = match serde_json::from_str::<Request>(&line) {
             Ok(request) => handle(engine, &request),
+            // 요청에는 받아쓴 글이 들어 있으므로 오류(앱 로그에 남음)에는 받은 값을 싣지 않습니다.
             Err(error) => Reply::Failed {
-                error: Failure::BadRequest(error.to_string()),
+                error: Failure::BadRequest(sulsul_llm::json_error_summary(&error)),
             },
         };
         let mut text = serde_json::to_string(&reply).map_err(io::Error::other)?;
