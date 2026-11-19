@@ -14,7 +14,10 @@ use sulsul_core::{AppPaths, CancelToken};
 use sulsul_llm::catalog::find_variant;
 use sulsul_llm::entries::{chosen_local_model, selection_issue};
 use sulsul_llm::refine::{RefineError, Refined};
-use sulsul_llm::{CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_PROCESSOR_ID, codex};
+use sulsul_llm::{
+    CLAUDE_CLI_PROCESSOR_ID, CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_PROCESSOR_ID,
+    claude_cli, codex,
+};
 
 use super::{Gate, copy_button, output_box, progress_row};
 use crate::error_text;
@@ -317,6 +320,13 @@ fn model_name(paths: &AppPaths, post: &PostProcessConfig) -> Option<String> {
         CODEX_PROCESSOR_ID => {
             Some(t!("test.refine.codex", model = codex::chosen_model(post)).into_owned())
         }
+        CLAUDE_CLI_PROCESSOR_ID => Some(
+            t!(
+                "test.refine.claude_cli",
+                model = claude_cli::chosen_model(post)
+            )
+            .into_owned(),
+        ),
         "" => None,
         other => Some(other.to_owned()),
     }

@@ -66,7 +66,7 @@
 받아쓴 글을 프롬프트와 함께 언어 모델(LLM)에 보내고, 돌려받은 글을 받아쓴 글 대신 넣습니다.
 
 1. **모델 관리 → 글 다듬기**에서 **사용**을 켭니다.
-2. 다듬는 데 쓸 모델을 정합니다. 로컬 모델을 내려받거나, 외부 제공자를 등록하거나, **외부 제공자** 탭의 **Codex 로그인**에서 ChatGPT 계정으로 로그인합니다.
+2. 다듬는 데 쓸 모델을 정합니다. 로컬 모델을 내려받거나, 외부 제공자를 등록하거나, **외부 제공자** 탭의 **Codex 로그인**에서 ChatGPT 계정으로 로그인하거나, 같은 탭의 **Claude Code CLI**를 추가합니다.
 3. **프롬프트** 화면에서 쓸 프롬프트를 켭니다. 처음에는 **기본 다듬기**가 켜져 있습니다.
 
 ### 모델
@@ -75,10 +75,12 @@
 |---|---|
 | 로컬 모델 | Qwen3.5, Gemma 4, EXAONE 3.5(비상업적 용도 전용). `추천` 표시는 Qwen3.5 4B(약 2.7 GB)에 붙어 있습니다. |
 | Codex 로그인 | ChatGPT 계정으로 로그인해 Codex가 쓰는 모델(gpt-6-luna 등)로 다듬습니다. API 키가 필요 없고, 사용량은 그 계정의 ChatGPT 요금제에서 차감됩니다. |
+| Claude Code CLI | 이 PC에 설치하고 로그인해 둔 Claude Code CLI(`claude`)로 다듬습니다(sonnet, opus, haiku, fable 등). API 키가 필요 없고, 사용량은 CLI에 로그인한 Claude 계정의 요금제에서 차감됩니다. 다듬을 때마다 CLI를 새로 띄워 한 번에 몇 초 더 걸립니다. |
 | 외부 제공자 | OpenAI, Anthropic, Google Gemini, xAI, Mistral AI, DeepSeek, Groq, OpenRouter, Together AI, Fireworks AI, Cerebras, Cohere, Upstage, 네이버 CLOVA Studio, Alibaba Cloud Model Studio, Moonshot AI (Kimi), Ollama, LM Studio, 그 밖의 OpenAI 호환 서버 |
 
 - 외부 제공자는 주소, API 키, 모델 이름을 넣고 **연결 테스트**를 통과한 뒤 **등록**을 누릅니다.
 - Codex 로그인은 **외부 제공자** 탭 아래쪽의 **Codex 로그인** 카드에서 **브라우저에서 로그인**을 누르고 열린 브라우저에서 로그인을 마칩니다. 로그인하면 **사용 가능 모델**에 Codex 카드가 생기고, 카드에서 모델과 추론 단계를 고릅니다. 로그인 정보는 Codex CLI와 따로 저장해서, 술술에서 로그아웃해도 Codex CLI는 로그인된 채로 남습니다.
+- Claude Code CLI는 **외부 제공자** 탭 맨 아래의 **Claude Code CLI** 카드에서 위치·판·로그인 상태를 확인하고 **사용 가능 모델에 추가**를 누릅니다. CLI는 PATH와 흔한 설치 위치에서 찾고, 못 찾으면 **CLI 위치**에 `claude` 실행 파일의 경로를 적습니다. 로그인은 술술이 아니라 터미널에서 `claude`를 실행해 `/login`으로 합니다. 다듬을 때는 도구·MCP 서버·CLAUDE.md 같은 사용자 설정을 끄고 실행합니다.
 - 생각하는 모델은 답이 늦을 수 있습니다. **추론 단계**를 낮추거나 끄면 더 빨리 받습니다. 제공자에 따라 고를 수 없는 단계도 있습니다.
 - 다듬은 결과는 모델마다 다릅니다. **테스트** 화면에서 몇 문장 다듬어 보고 고르세요.
 - 소스에서 빌드해 쓸 때 로컬 모델을 돌리려면 실행기(`sulsul-llm-runner`)를 따로 빌드해야 합니다. 명령은 [개발 안내](development.md#명령)에 있습니다.

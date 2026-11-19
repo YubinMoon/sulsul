@@ -153,6 +153,8 @@ pub fn llm(error: &LlmError) -> String {
         LlmError::ReasoningRejected { .. } => t!("error.llm.reasoning_rejected").into_owned(),
         LlmError::ModelNotFound(_) => t!("error.llm.model_not_found").into_owned(),
         LlmError::SignedOut => t!("error.codex.signed_out").into_owned(),
+        LlmError::CliNotFound => t!("error.claude_cli.not_found").into_owned(),
+        LlmError::CliFailed(_) => t!("error.claude_cli.failed").into_owned(),
         LlmError::Network(_) => t!("error.llm.network").into_owned(),
         LlmError::BadResponse(_) => t!("error.llm.bad_response").into_owned(),
         LlmError::Cancelled => t!("error.llm.cancelled").into_owned(),
@@ -175,7 +177,35 @@ pub fn codex(error: &LlmError) -> String {
         LlmError::Network(_) => t!("error.codex.network").into_owned(),
         LlmError::BadResponse(_) => t!("error.codex.bad_response").into_owned(),
         // 주소·API 키는 Codex 로그인에 쓰지 않습니다.
-        LlmError::InvalidEndpoint(_) | LlmError::MissingApiKey | LlmError::Cancelled => llm(error),
+        LlmError::InvalidEndpoint(_)
+        | LlmError::MissingApiKey
+        | LlmError::CliNotFound
+        | LlmError::CliFailed(_)
+        | LlmError::Cancelled => llm(error),
+    }
+}
+
+/// 이 PC의 Claude Code CLI로 다듬다 난 오류.
+///
+/// 로그인과 사용 한도는 CLI가 로그인한 Claude 계정의 것이라, 고칠 곳으로 터미널의 `claude`를 알립니다.
+pub fn claude_cli(error: &LlmError) -> String {
+    match error {
+        LlmError::CliNotFound => t!("error.claude_cli.not_found").into_owned(),
+        LlmError::CliFailed(_) => t!("error.claude_cli.failed").into_owned(),
+        LlmError::SignedOut => t!("error.claude_cli.signed_out").into_owned(),
+        LlmError::Http { status, .. } => match status {
+            401 | 403 => t!("error.claude_cli.auth").into_owned(),
+            429 => t!("error.claude_cli.rate_limited").into_owned(),
+            _ => t!("error.claude_cli.http", status = status).into_owned(),
+        },
+        LlmError::ModelNotFound(_) => t!("error.claude_cli.model_not_found").into_owned(),
+        // CLI 요청에서 네트워크 오류는 CLI가 제때 끝나지 않은 경우뿐입니다(CLI 안의 연결 오류는 CliFailed).
+        LlmError::Network(_) => t!("error.claude_cli.timed_out").into_owned(),
+        LlmError::BadResponse(_) => t!("error.claude_cli.bad_response").into_owned(),
+        LlmError::InvalidEndpoint(_)
+        | LlmError::MissingApiKey
+        | LlmError::ReasoningRejected { .. }
+        | LlmError::Cancelled => llm(error),
     }
 }
 
@@ -215,6 +245,7 @@ pub fn refine(error: &RefineError, paths: &AppPaths, config: &PostProcessConfig)
         }
         RefineError::Cloud(error) => llm(error),
         RefineError::Codex(error) => codex(error),
+        RefineError::ClaudeCli(error) => claude_cli(error),
         RefineError::Local(error) => local_llm(error),
         RefineError::EmptyOutput => t!("error.refine.empty_output").into_owned(),
     }
@@ -302,6 +333,8 @@ mod tests {
             },
             LlmError::ModelNotFound("no such model".into()),
             LlmError::SignedOut,
+            LlmError::CliNotFound,
+            LlmError::CliFailed("exit code 1".into()),
             LlmError::Network("timed out".into()),
             LlmError::BadResponse("no choices".into()),
             LlmError::Cancelled,
@@ -394,6 +427,62 @@ mod tests {
                 &PostProcessConfig::default()
             ),
             texts[0]
+        );
+    }
+
+    #[test]
+    fn claude_cli_errors_point_to_the_cli() {
+        rust_i18n::set_locale("ko");
+        let errors = [
+            LlmError::CliNotFound,
+            LlmError::CliFailed("API Error: Connection error.".into()),
+            LlmError::SignedOut,
+            LlmError::Http {
+                status: 401,
+                message: "OAuth token has expired".into(),
+            },
+            LlmError::Http {
+                status: 429,
+                message: "usage limit".into(),
+            },
+            LlmError::Http {
+                status: 529,
+                message: "overloaded".into(),
+            },
+            LlmError::ModelNotFound("There's an issue with the selected model".into()),
+            LlmError::Network("no response within 180 seconds".into()),
+            LlmError::BadResponse("no result".into()),
+            LlmError::Cancelled,
+        ];
+        let texts: Vec<String> = errors.iter().map(claude_cli).collect();
+        for (error, text) in errors.iter().zip(&texts) {
+            assert!(
+                !text.starts_with("error.") && !text.contains("%{"),
+                "{error:?}: 번역이 빠졌거나 자리 표시가 남았습니다 ({text})"
+            );
+            assert!(
+                !text.contains("API 키") && !text.contains("Codex"),
+                "Claude Code CLI 오류에 다른 방식의 안내가 섞였습니다: {text}"
+            );
+        }
+        let mut unique = texts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "{texts:#?}");
+        assert!(texts[5].contains("529"), "{}", texts[5]);
+        for raw in ["Connection error", "OAuth", "overloaded", "selected model"] {
+            assert!(
+                texts.iter().all(|text| !text.contains(raw)),
+                "'{raw}'이(가) 화면 문구에 들어갔습니다: {texts:#?}"
+            );
+        }
+        assert_eq!(
+            refine(
+                &RefineError::ClaudeCli(LlmError::SignedOut),
+                &AppPaths::under("unused"),
+                &PostProcessConfig::default()
+            ),
+            texts[2]
         );
     }
 

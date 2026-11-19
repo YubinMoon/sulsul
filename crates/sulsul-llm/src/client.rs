@@ -19,12 +19,12 @@ use serde_json::{Map, Value, json};
 use sulsul_core::config::{ApiProfile, ReasoningEffort};
 use sulsul_core::{AppPaths, CancelToken};
 
-use crate::codex;
 use crate::job::Job;
 use crate::presets::{
     MOCK_PROVIDER_ID, ReasoningStyle, chat_completions_url, find_preset, reasoning_support,
     requires_api_key,
 };
+use crate::{claude_cli, codex};
 
 /// 외부 서버 연결 테스트의 기본 제한 시간 (생각하는 모델도 짧은 답은 이 안에 끝납니다)
 pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -83,12 +83,19 @@ pub enum LlmError {
         /// 거절한 응답 본문에서 뽑은 오류 설명 (없으면 빈 문자열)
         message: String,
     },
-    /// Codex 로그인 정보가 없거나, 만료돼 다시 받을 수 없습니다. 다시 로그인해야 합니다.
-    #[error("not signed in to Codex; sign in again")]
+    /// 로그인 정보가 없거나 만료됐습니다. 다시 로그인해야 합니다
+    /// (Codex: 다시 받을 수 없는 로그인, Claude Code CLI: CLI가 로그인하지 않음).
+    #[error("not signed in; sign in again")]
     SignedOut,
     /// 제공자가 고른 모델을 쓸 수 없다고 답했습니다 (Codex: 이 계정에서 쓸 수 없는 모델).
     #[error("model is not available: {0}")]
     ModelNotFound(String),
+    /// Claude Code CLI(`claude`)를 찾지 못했습니다.
+    #[error("Claude Code CLI not found")]
+    CliNotFound,
+    /// Claude Code CLI를 띄우지 못했거나 결과 없이 오류로 끝났습니다.
+    #[error("Claude Code CLI failed: {0}")]
+    CliFailed(String),
     #[error("network error: {0}")]
     Network(String),
     #[error("unexpected response: {0}")]
@@ -588,7 +595,8 @@ pub(crate) fn truncate(raw: &str) -> String {
 
 /// 작업 스레드에서 연결 테스트를 돌리는 손잡이. 화면 스레드는 [`poll`](Self::poll)만 부릅니다.
 ///
-/// 외부 제공자([`test_connection`])와 Codex 로그인([`codex::client::test_connection`])을 테스트합니다.
+/// 외부 제공자([`test_connection`]), Codex 로그인([`codex::client::test_connection`]),
+/// Claude Code CLI([`claude_cli::test_connection`])를 테스트합니다.
 /// 버리면 테스트를 취소합니다.
 pub struct ConnectionTest {
     /// 테스트하는 외부 제공자 (Codex면 `None`)
@@ -636,7 +644,31 @@ impl ConnectionTest {
         Ok(Self { profile: None, job })
     }
 
-    /// 테스트하는 외부 제공자 (시작할 때의 값). Codex 테스트면 `None`입니다.
+    /// 이 PC의 Claude Code CLI로 `model`에 짧은 요청을 보내는 테스트를 작업 스레드에서 시작합니다.
+    pub fn start_claude_cli(
+        paths: AppPaths,
+        cli: std::path::PathBuf,
+        model: String,
+        effort: ReasoningEffort,
+        on_finish: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let job = Job::start(
+            "sulsul-llm-connection-test",
+            Err(LlmError::Cancelled),
+            on_finish,
+            move |cancel| {
+                let target = claude_cli::CliTarget {
+                    cli: &cli,
+                    model: &model,
+                    effort,
+                };
+                claude_cli::test_connection(&paths, target, claude_cli::REQUEST_TIMEOUT, cancel)
+            },
+        )?;
+        Ok(Self { profile: None, job })
+    }
+
+    /// 테스트하는 외부 제공자 (시작할 때의 값). Codex·Claude Code CLI 테스트면 `None`입니다.
     pub fn profile(&self) -> Option<&ApiProfile> {
         self.profile.as_ref()
     }

@@ -4,6 +4,7 @@
 //! - [`presets`]: OpenAI 호환 `/chat/completions`를 제공하는 외부 제공자 프리셋
 //! - [`client`]: 외부 제공자 요청 (연결 테스트, 다듬기)
 //! - [`codex`]: Codex 로그인(ChatGPT 계정)으로 다듬기. 브라우저 로그인, 로그인 정보 저장, 요청
+//! - [`claude_cli`]: 이 PC에 설치된 Claude Code CLI(`claude -p`)로 다듬기
 //! - [`job`]: 연결 테스트·로그인처럼 작업 스레드에서 도는 일의 손잡이
 //! - [`entries`]: "사용 가능 모델" 목록과 고르기·지우기 규칙
 //! - [`chat`]: 다듬기 요청의 모양(로컬 모델 채팅 형식)과 응답 정리
@@ -16,6 +17,7 @@
 
 pub mod catalog;
 pub mod chat;
+pub mod claude_cli;
 pub mod client;
 pub mod codex;
 pub mod entries;
@@ -34,6 +36,9 @@ pub const CLOUD_PROCESSOR_ID: &str = "llm_cloud";
 
 /// Codex 로그인(ChatGPT 계정)으로 다듬는 후처리기 ID (`[postprocess] processor`)
 pub const CODEX_PROCESSOR_ID: &str = "llm_codex";
+
+/// 이 PC의 Claude Code CLI로 다듬는 후처리기 ID (`[postprocess] processor`)
+pub const CLAUDE_CLI_PROCESSOR_ID: &str = "llm_claude_cli";
 
 /// `[postprocess.processors.llm_local]`에서 고른 로컬 모델(변형 ID)을 담는 키
 pub const LOCAL_MODEL_KEY: &str = "model";

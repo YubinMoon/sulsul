@@ -285,6 +285,8 @@ pub enum ListGroup {
     Local,
     /// Codex 로그인 (글 다듬기에만 있음)
     Codex,
+    /// Claude Code CLI (글 다듬기에만 있음)
+    ClaudeCli,
     /// 외부 제공자
     Providers,
 }
@@ -304,6 +306,7 @@ pub fn list_group(ui: &mut Ui, previous: &mut Option<ListGroup>, group: ListGrou
     let title = match group {
         ListGroup::Local => t!("models.available.group.local"),
         ListGroup::Codex => t!("models.available.group.codex"),
+        ListGroup::ClaudeCli => t!("models.available.group.claude_cli"),
         ListGroup::Providers => t!("models.available.group.providers"),
     };
     group_title(ui, &title);

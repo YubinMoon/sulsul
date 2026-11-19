@@ -1,7 +1,8 @@
 //! 글 다듬기 갈래: 다듬는 데 쓸 로컬 모델과 외부 제공자, Codex 로그인을 고르고, 내려받고, 등록합니다.
 //!
 //! 음성 인식 갈래와 같은 탭 세 개를 같은 화면 조각(`parts`, `download`, `providers`)으로 그립니다.
-//! "외부 제공자" 탭에는 등록 칸 아래에 Codex 로그인 카드(`codex`)를 더 둡니다.
+//! "외부 제공자" 탭에는 등록 칸 아래에 Codex 로그인 카드(`codex`)와 Claude Code CLI 카드(`claude_cli`)를
+//! 더 둡니다.
 //! 목록에 무엇이 들어가고 어느 것이 골라져 있는지는 `sulsul_llm::entries`가 정하고, 값은 설정의
 //! `[postprocess]`에 들어갑니다.
 //!
@@ -14,13 +15,14 @@ use sulsul_core::config::{ApiProfile, PostProcessConfig};
 use sulsul_core::stt::{ModelVariant, delete_variant, format_bytes};
 use sulsul_llm::catalog::{LlmFamily, families, find_variant, models_root};
 use sulsul_llm::client::{ConnectionReply, ConnectionTest, LlmError};
-use sulsul_llm::codex;
 use sulsul_llm::entries::{
-    CodexEntry, LlmEntry, LlmEntryKey, LlmEntryKind, SelectionIssue, activate, available_entries,
-    chosen_local_model, on_codex_signed_out, on_local_removed, remove_profile, selection_issue,
-    selection_ready,
+    ClaudeCliEntry, CodexEntry, LlmEntry, LlmEntryKey, LlmEntryKind, SelectionIssue, activate,
+    add_claude_cli, available_entries, chosen_local_model, on_codex_signed_out, on_local_removed,
+    remove_claude_cli, remove_profile, selection_issue, selection_ready,
 };
+use sulsul_llm::{claude_cli, codex};
 
+use super::claude_cli::{ClaudeAction, ClaudeCliPane};
 use super::codex::{CodexAction, CodexPane};
 
 use super::download::{
@@ -61,6 +63,8 @@ enum LlmTestTarget {
     Draft,
     /// Codex 로그인
     Codex,
+    /// Claude Code CLI
+    ClaudeCli,
 }
 
 /// 진행 중인 연결 테스트. 한 번에 하나만 돌립니다.
@@ -98,17 +102,20 @@ pub struct LlmPane {
     confirm: Option<PendingRemoval>,
     /// 외부 제공자 탭의 Codex 로그인 카드와 사용 가능 모델의 Codex 카드
     codex: CodexPane,
+    /// 외부 제공자 탭의 Claude Code CLI 카드와 사용 가능 모델의 Claude 카드
+    claude: ClaudeCliPane,
 }
 
 impl LlmPane {
     /// 연결 테스트나 Codex 로그인이 진행 중이면 `true`입니다. (내려받기는 두 갈래가 함께 쓰는 쪽에서 봅니다)
     pub fn is_busy(&self) -> bool {
-        self.test.is_some() || self.codex.is_busy()
+        self.test.is_some() || self.codex.is_busy() || self.claude.is_busy()
     }
 
     /// 연결 테스트와 Codex 로그인이 끝났는지 확인합니다. 다른 화면을 보고 있을 때도 불립니다.
     pub fn tick(&mut self, shared: &mut Shared) {
         self.codex.tick(shared);
+        self.claude.tick();
         let finished = self.test.as_ref().and_then(|test| test.handle.poll());
         if let Some(result) = finished
             && let Some(test) = self.test.take()
@@ -174,7 +181,9 @@ impl LlmPane {
             match issue {
                 SelectionIssue::NoProvider
                 | SelectionIssue::ProviderIncomplete { .. }
-                | SelectionIssue::CodexSignedOut => {
+                | SelectionIssue::CodexSignedOut
+                | SelectionIssue::ClaudeCliNotAdded
+                | SelectionIssue::ClaudeCliMissing => {
                     Banner::new(Tone::Warning).line(message).show(ui);
                 }
                 _ => parts::model_notice(ui, &message),
@@ -198,6 +207,7 @@ impl LlmPane {
             let group = match entry.key {
                 LlmEntryKey::Local { .. } => ListGroup::Local,
                 LlmEntryKey::Codex => ListGroup::Codex,
+                LlmEntryKey::ClaudeCli => ListGroup::ClaudeCli,
                 LlmEntryKey::Provider { .. } => ListGroup::Providers,
             };
             parts::list_group(ui, &mut previous_group, group);
@@ -227,6 +237,7 @@ impl LlmPane {
         let head = match &entry.kind {
             LlmEntryKind::Local { family, variant } => local_head(family, variant),
             LlmEntryKind::Codex(codex_entry) => super::codex::entry_head(codex_entry),
+            LlmEntryKind::ClaudeCli(claude_entry) => super::claude_cli::entry_head(claude_entry),
             LlmEntryKind::Provider(profile) => {
                 parts::provider_head(Category::Llm, profile, entry.ready)
             }
@@ -245,6 +256,7 @@ impl LlmPane {
                     self.local_body(ui, cx, downloads, family, variant);
                 }
                 LlmEntryKind::Codex(codex_entry) => self.codex_body(ui, cx, codex_entry),
+                LlmEntryKind::ClaudeCli(claude_entry) => self.claude_body(ui, cx, claude_entry),
                 LlmEntryKind::Provider(profile) => self.provider_body(ui, cx, profile),
             },
         );
@@ -356,6 +368,32 @@ impl LlmPane {
             None => {}
         }
         self.codex_action(action);
+    }
+
+    /// Claude Code CLI: CLI 위치·로그인, 모델·추론 단계 편집, 연결 테스트와 제거
+    fn claude_body(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, entry: &ClaudeCliEntry) {
+        let target = LlmTestTarget::ClaudeCli;
+        let test_state = self.test_state(&target);
+        let (test, last_test) = (self.test.as_ref(), self.last_test.as_ref());
+        let (test_click, action) = self.claude.entry_body(ui, cx, entry, test_state, |ui| {
+            test_status(ui, test, last_test, &target);
+        });
+        match test_click {
+            Some(TestClick::Start) => {
+                if let Some(cli) = entry.cli.clone() {
+                    // 설정에 저장된 값이 아니라 지금 카드에 적힌 값으로 테스트합니다.
+                    let model = claude_cli::chosen_model(&cx.config.postprocess).to_owned();
+                    let effort = claude_cli::chosen_effort(&cx.config.postprocess);
+                    let paths = cx.shared.paths.clone();
+                    self.start_test(ui.ctx(), cx.shared, target, |on_finish| {
+                        ConnectionTest::start_claude_cli(paths, cli, model, effort, on_finish)
+                    });
+                }
+            }
+            Some(TestClick::Cancel) => self.cancel_test(),
+            None => {}
+        }
+        self.claude_action(cx, action);
     }
 
     /// 외부 제공자: 이름·주소·API 키·모델 편집, 연결 테스트와 제거
@@ -491,6 +529,23 @@ impl LlmPane {
         cx.shared.toasts.info(t!("models.codex.signed_out"));
     }
 
+    fn claude_action(&mut self, cx: &mut PageContext<'_>, action: Option<ClaudeAction>) {
+        match action {
+            Some(ClaudeAction::Add) if !cx.locked => {
+                // 추가한 카드를 펼쳐 보여 주므로 따로 알리지 않습니다.
+                let key = add_claude_cli(&cx.shared.paths, &mut cx.config.postprocess);
+                self.show_entry(key);
+            }
+            Some(ClaudeAction::ShowEntry) => self.show_entry(LlmEntryKey::ClaudeCli),
+            Some(ClaudeAction::Remove) if !cx.locked => {
+                remove_claude_cli(&cx.shared.paths, &mut cx.config.postprocess);
+                self.list.forget(&LlmEntryKey::ClaudeCli);
+                self.forget_test(&LlmTestTarget::ClaudeCli);
+            }
+            Some(ClaudeAction::Add | ClaudeAction::Remove) | None => {}
+        }
+    }
+
     fn codex_action(&mut self, action: Option<CodexAction>) {
         match action {
             Some(CodexAction::ShowEntry) => self.show_entry(LlmEntryKey::Codex),
@@ -621,6 +676,11 @@ impl LlmPane {
         ui.add_space(SECTION_GAP);
         let action = self.codex.login_card(ui, cx.shared);
         self.codex_action(action);
+
+        // 이 PC에 설치한 Claude Code CLI도 그 아래에 둡니다.
+        ui.add_space(SECTION_GAP);
+        let action = self.claude.add_card(ui, cx);
+        self.claude_action(cx, action);
 
         match outcome.test {
             Some(TestClick::Start) => {
@@ -824,6 +884,8 @@ pub(crate) fn issue_text(
             t!("models.available.issue.provider_incomplete", name = name)
         }
         SelectionIssue::CodexSignedOut => t!("models.llm.issue.codex_signed_out"),
+        SelectionIssue::ClaudeCliNotAdded => t!("models.llm.issue.claude_cli_not_added"),
+        SelectionIssue::ClaudeCliMissing => t!("models.llm.issue.claude_cli_missing"),
         SelectionIssue::UnknownProcessor { id } => {
             t!("models.llm.issue.unknown_processor", id = id)
         }
@@ -882,6 +944,7 @@ fn test_status(
         Err(error) => {
             let message = match target {
                 LlmTestTarget::Codex => error_text::codex(error),
+                LlmTestTarget::ClaudeCli => error_text::claude_cli(error),
                 LlmTestTarget::Provider(_) | LlmTestTarget::Draft => error_text::llm(error),
             };
             Banner::new(Tone::Error)
@@ -1030,6 +1093,8 @@ mod tests {
                 profile_id: "work".into(),
             },
             SelectionIssue::CodexSignedOut,
+            SelectionIssue::ClaudeCliNotAdded,
+            SelectionIssue::ClaudeCliMissing,
             SelectionIssue::UnknownProcessor {
                 id: "no_such_processor".into(),
             },

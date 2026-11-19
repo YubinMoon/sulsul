@@ -116,6 +116,17 @@ error:
     reasoning_rejected: 이 모델은 고른 추론 단계를 받지 않습니다. 다른 단계나 모델 기본값을 고르세요.
     network: ChatGPT 서버에 연결하지 못했습니다.
     bad_response: ChatGPT 서버의 응답을 읽지 못했습니다.
+  # 이 PC의 Claude Code CLI로 다듬다 난 오류
+  claude_cli:
+    not_found: "Claude Code CLI(claude)를 찾지 못했습니다. '외부 제공자' 탭의 Claude Code CLI에서 위치를 확인하세요."
+    failed: Claude Code CLI가 오류로 끝났습니다. 터미널에서 claude를 실행해 확인하세요.
+    signed_out: Claude Code CLI에 로그인하지 않았습니다. 터미널에서 claude를 실행해 /login으로 로그인하세요.
+    auth: Claude 계정 로그인이 거절됐습니다. 터미널에서 claude를 실행해 다시 로그인하세요.
+    rate_limited: Claude 요금제의 사용 한도에 닿았습니다. 한도가 풀린 뒤 다시 하세요.
+    http: "Claude 서버 오류입니다 (HTTP %{status})."
+    model_not_found: Claude Code CLI가 고른 모델을 쓸 수 없다고 답했습니다. 모델 이름을 확인하세요.
+    timed_out: Claude Code CLI가 제때 답하지 않아 기다리기를 멈췄습니다.
+    bad_response: Claude Code CLI의 출력을 읽지 못했습니다.
   # 브라우저로 Codex에 로그인하지 못한 이유
   codex_login:
     ports_busy: "로그인에 쓰는 포트(%{ports})를 다른 프로그램이 쓰고 있습니다. Codex CLI의 로그인을 마치거나 닫고 다시 하세요."
@@ -429,6 +440,7 @@ test:
     no_model: 고른 모델이 없습니다
     provider: "%{name} · %{model}"
     codex: "Codex · %{model}"
+    claude_cli: "Claude Code · %{model}"
     dictation_off: 단축키 받아쓰기에서는 꺼져 있습니다.
     prompt: 프롬프트
     prompt_help: 이 화면에서만 씁니다.
@@ -594,6 +606,8 @@ models:
       unknown_model: "'%{id}' 모델은 이 앱에 없습니다."
       unknown_processor: "'%{id}' 다듬기 방식은 이 앱에 없습니다."
       codex_signed_out: "Codex에 로그인하지 않았습니다. '외부 제공자' 탭의 Codex 로그인에서 ChatGPT 계정으로 로그인하세요."
+      claude_cli_not_added: "Claude Code CLI를 목록에서 뺐습니다. '외부 제공자' 탭의 Claude Code CLI에서 다시 추가하세요."
+      claude_cli_missing: "Claude Code CLI를 찾지 못했습니다. '외부 제공자' 탭의 Claude Code CLI에서 위치를 확인하세요."
     info:
       family: 모델
       file_size: 파일 크기
@@ -651,6 +665,38 @@ models:
       success_body: 이 창을 닫고 술술로 돌아가세요.
       failure_title: 로그인하지 못했습니다
       failure_body: 술술로 돌아가 다시 로그인하세요. 이 창은 닫아도 됩니다.
+  # 글 다듬기 갈래의 Claude Code CLI (이 PC에 설치하고 로그인해 둔 claude로 다듬기)
+  claude_cli:
+    title: Claude Code CLI
+    card_name: Claude Code (이 PC의 CLI)
+    added_badge: 추가됨
+    missing_badge: CLI 없음
+    body: 이 PC에 설치한 Claude Code CLI(claude)로 다듬습니다. 사용량은 CLI에 로그인한 Claude 계정(Pro·Max 요금제 등)에서 차감됩니다.
+    latency_note: 다듬을 때마다 CLI를 새로 띄우므로 한 번에 몇 초 더 걸립니다.
+    checking: Claude Code CLI를 확인하는 중…
+    not_found: Claude Code CLI를 찾지 못했습니다. 설치했으면 아래 CLI 위치에 claude 실행 파일의 경로를 적으세요.
+    check_failed: "확인하지 못했습니다. %{message}"
+    recheck: 다시 확인
+    add: 사용 가능 모델에 추가
+    show_entry: 사용 가능 모델에서 보기
+    path: CLI 위치
+    path_hint: 비우면 PATH에서 claude를 찾습니다
+    unknown: 알 수 없음
+    fact:
+      path: 위치
+      version: 판
+      login: 로그인
+    login:
+      logged_in: 로그인됨
+      logged_in_plan: "로그인됨 · %{plan}"
+      logged_out: 로그인하지 않음
+      unknown: 확인하지 못함
+      hint: 터미널에서 claude를 실행해 /login으로 로그인하세요.
+    model_hint: "비우면 %{model}"
+    models: 모델 별명
+    reasoning_default: CLI 기본값
+    reasoning_default_help: Claude Code CLI의 기본 설정대로 생각합니다. 낮출수록 빨리 답합니다.
+    reasoning_cannot_disable: Claude Code CLI는 생각을 끌 수 없습니다.
   tab:
     available: 사용 가능 모델
     download: 로컬 모델 내려받기
@@ -661,6 +707,7 @@ models:
     group:
       local: 로컬 모델
       codex: Codex 로그인
+      claude_cli: Claude Code CLI
       providers: 외부 제공자
     use: "%{name} 사용"
     empty:

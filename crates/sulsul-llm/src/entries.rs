@@ -11,10 +11,16 @@ use sulsul_core::config::{ApiProfile, PostProcessConfig, ReasoningEffort};
 use sulsul_core::stt::ModelVariant;
 use sulsul_core::toml::Value;
 
+use std::path::PathBuf;
+
 use crate::catalog::{LlmFamily, families, find_variant};
+use crate::claude_cli;
 use crate::codex::{self, auth::CodexAccount};
 use crate::presets::{chat_completions_url, requires_api_key};
-use crate::{CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_MODEL_KEY, LOCAL_PROCESSOR_ID};
+use crate::{
+    CLAUDE_CLI_PROCESSOR_ID, CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_MODEL_KEY,
+    LOCAL_PROCESSOR_ID,
+};
 
 /// 목록의 항목 하나를 가리키는 키
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -23,6 +29,8 @@ pub enum LlmEntryKey {
     Local { variant_id: String },
     /// Codex 로그인 (ChatGPT 계정). 로그인은 하나뿐입니다.
     Codex,
+    /// 이 PC의 Claude Code CLI. 하나뿐입니다.
+    ClaudeCli,
     /// 등록한 외부 제공자 (API 프로필)
     Provider { profile_id: String },
 }
@@ -49,7 +57,19 @@ pub enum LlmEntryKind {
         variant: ModelVariant,
     },
     Codex(CodexEntry),
+    ClaudeCli(ClaudeCliEntry),
     Provider(ApiProfile),
+}
+
+/// Claude Code CLI 항목의 내용
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeCliEntry {
+    /// 찾은 CLI 파일 (찾지 못했으면 `None`, 그러면 쓸 수 없음)
+    pub cli: Option<PathBuf>,
+    /// 고른 모델 ([`claude_cli::chosen_model`])
+    pub model: String,
+    /// 고른 추론 단계
+    pub effort: ReasoningEffort,
 }
 
 /// Codex 로그인 항목의 내용
@@ -85,7 +105,7 @@ pub fn chosen_local_model(config: &PostProcessConfig) -> &str {
 }
 
 /// 실제로 쓸 수 있는 항목 목록: 설치된 로컬 모델(카탈로그 순), Codex 로그인(로그인했을 때),
-/// 등록된 제공자(등록 순)
+/// Claude Code CLI(목록에 추가했을 때), 등록된 제공자(등록 순)
 pub fn available_entries(paths: &AppPaths, config: &PostProcessConfig) -> Vec<LlmEntry> {
     let processor = config.processor.trim();
     let local_active = processor == LOCAL_PROCESSOR_ID;
@@ -115,6 +135,20 @@ pub fn available_entries(paths: &AppPaths, config: &PostProcessConfig) -> Vec<Ll
                 account,
                 model: codex::chosen_model(config).to_owned(),
                 effort: codex::chosen_effort(config),
+            }),
+        });
+    }
+
+    if claude_cli::is_registered(config) {
+        let cli = claude_cli::find_cli(config);
+        entries.push(LlmEntry {
+            key: LlmEntryKey::ClaudeCli,
+            selected: processor == CLAUDE_CLI_PROCESSOR_ID,
+            ready: cli.is_some(),
+            kind: LlmEntryKind::ClaudeCli(ClaudeCliEntry {
+                cli,
+                model: claude_cli::chosen_model(config).to_owned(),
+                effort: claude_cli::chosen_effort(config),
             }),
         });
     }
@@ -163,10 +197,42 @@ pub fn activate(config: &mut PostProcessConfig, key: &LlmEntryKey) {
             let model = codex::chosen_model(config).to_owned();
             codex::set_model(config, &model);
         }
+        LlmEntryKey::ClaudeCli => {
+            config.processor = CLAUDE_CLI_PROCESSOR_ID.to_owned();
+            let model = claude_cli::chosen_model(config).to_owned();
+            claude_cli::set_model(config, &model);
+        }
         LlmEntryKey::Provider { profile_id } => {
             config.processor = CLOUD_PROCESSOR_ID.to_owned();
             config.api_profile.clone_from(profile_id);
         }
+    }
+}
+
+/// Claude Code CLI를 목록에 추가하고 그 항목의 키를 돌려줍니다.
+/// 지금 설정으로 다듬는 데 쓸 수 있는 것이 없을 때만 바로 고릅니다.
+pub fn add_claude_cli(paths: &AppPaths, config: &mut PostProcessConfig) -> LlmEntryKey {
+    let usable = selection_ready(&available_entries(paths, config));
+    claude_cli::set_registered(config, true);
+    let key = LlmEntryKey::ClaudeCli;
+    if !usable {
+        let ready = available_entries(paths, config)
+            .iter()
+            .any(|entry| entry.key == key && entry.ready);
+        if ready {
+            activate(config, &key);
+        }
+    }
+    key
+}
+
+/// Claude Code CLI를 목록에서 뺍니다. 그걸로 다듬고 있었으면 준비된 첫 항목으로 바꾸거나 선택을 비웁니다.
+/// 고른 모델·추론 단계·CLI 위치는 다시 추가할 때를 위해 남깁니다.
+pub fn remove_claude_cli(paths: &AppPaths, config: &mut PostProcessConfig) {
+    claude_cli::set_registered(config, false);
+    if config.processor.trim() == CLAUDE_CLI_PROCESSOR_ID {
+        let entries = available_entries(paths, config);
+        activate_first_ready(&entries, config);
     }
 }
 
@@ -246,6 +312,10 @@ pub enum SelectionIssue {
     ProviderIncomplete { profile_id: String },
     /// Codex를 쓰도록 되어 있는데 로그인하지 않았습니다 (로그아웃했거나 로그인이 만료됨).
     CodexSignedOut,
+    /// Claude Code CLI를 쓰도록 되어 있는데 목록에서 뺐습니다.
+    ClaudeCliNotAdded,
+    /// Claude Code CLI를 찾지 못했습니다 (지웠거나, 적어 둔 위치에 없음).
+    ClaudeCliMissing,
     /// 알 수 없는 후처리기 ID입니다.
     UnknownProcessor { id: String },
 }
@@ -279,6 +349,12 @@ pub fn selection_issue(paths: &AppPaths, config: &PostProcessConfig) -> Option<S
         CODEX_PROCESSOR_ID => codex::auth::account(paths)
             .is_none()
             .then_some(SelectionIssue::CodexSignedOut),
+        CLAUDE_CLI_PROCESSOR_ID if !claude_cli::is_registered(config) => {
+            Some(SelectionIssue::ClaudeCliNotAdded)
+        }
+        CLAUDE_CLI_PROCESSOR_ID => claude_cli::find_cli(config)
+            .is_none()
+            .then_some(SelectionIssue::ClaudeCliMissing),
         other => Some(SelectionIssue::UnknownProcessor {
             id: other.to_owned(),
         }),
@@ -862,6 +938,83 @@ mod tests {
         assert_eq!(
             codex::chosen_effort(&reloaded.postprocess),
             ReasoningEffort::None
+        );
+    }
+
+    /// Claude Code CLI 자리에 빈 파일을 두고 그 위치를 설정에 적습니다 (실제 설치와 상관없이 시험).
+    fn fake_claude_cli(fixture: &Fixture, config: &mut PostProcessConfig) -> PathBuf {
+        let cli = fixture.paths.data_dir.join("fake-claude.exe");
+        std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        std::fs::write(&cli, b"").unwrap();
+        claude_cli::set_path(config, &cli.to_string_lossy());
+        cli
+    }
+
+    #[test]
+    fn claude_cli_is_listed_once_added_and_chosen_only_when_nothing_usable_is_chosen() {
+        let fixture = Fixture::new();
+        let mut config = PostProcessConfig::default();
+        let cli = fake_claude_cli(&fixture, &mut config);
+        assert!(
+            fixture.entries(&config).is_empty(),
+            "추가하기 전에는 CLI가 있어도 목록에 없어야 합니다"
+        );
+
+        let key = add_claude_cli(&fixture.paths, &mut config);
+        assert_eq!(key, LlmEntryKey::ClaudeCli);
+        let entries = fixture.entries(&config);
+        assert_eq!(selected_keys(&entries), [&LlmEntryKey::ClaudeCli]);
+        let LlmEntryKind::ClaudeCli(entry) = &entries[0].kind else {
+            panic!("Claude Code CLI 항목이어야 합니다: {entries:?}");
+        };
+        assert_eq!(entry.cli.as_deref(), Some(cli.as_path()));
+        assert_eq!(entry.model, claude_cli::DEFAULT_MODEL);
+        assert_eq!(selection_issue(&fixture.paths, &config), None);
+
+        // 이미 쓸 수 있는 것을 골라 두었으면 추가해도 바꾸지 않습니다.
+        let mut config = PostProcessConfig::default();
+        fake_claude_cli(&fixture, &mut config);
+        config.api_profiles.push(profile("openai"));
+        activate(&mut config, &LlmEntryKey::provider("openai"));
+        add_claude_cli(&fixture.paths, &mut config);
+        assert_eq!(config.processor, CLOUD_PROCESSOR_ID);
+        assert_eq!(fixture.entries(&config).len(), 2);
+    }
+
+    #[test]
+    fn claude_cli_problems_are_explained_and_removal_moves_the_selection() {
+        let fixture = Fixture::new();
+        fixture.install(SMALL);
+        let mut config = PostProcessConfig::default();
+        let cli = fake_claude_cli(&fixture, &mut config);
+        add_claude_cli(&fixture.paths, &mut config);
+        activate(&mut config, &LlmEntryKey::ClaudeCli);
+        assert_eq!(config.processor, CLAUDE_CLI_PROCESSOR_ID);
+
+        // CLI를 지우면 목록에는 남지만 쓸 수 없습니다.
+        std::fs::remove_file(&cli).unwrap();
+        let _ = claude_cli::find_cli_now(&config);
+        assert_eq!(
+            selection_issue(&fixture.paths, &config),
+            Some(SelectionIssue::ClaudeCliMissing)
+        );
+        let entries = fixture.entries(&config);
+        let entry = entries
+            .iter()
+            .find(|entry| entry.key == LlmEntryKey::ClaudeCli)
+            .unwrap();
+        assert!(!entry.ready);
+
+        // 목록에서 빼면 준비된 첫 항목을 고릅니다.
+        remove_claude_cli(&fixture.paths, &mut config);
+        assert_eq!(
+            selected_keys(&fixture.entries(&config)),
+            [&LlmEntryKey::local(SMALL)]
+        );
+        config.processor = CLAUDE_CLI_PROCESSOR_ID.into();
+        assert_eq!(
+            selection_issue(&fixture.paths, &config),
+            Some(SelectionIssue::ClaudeCliNotAdded)
         );
     }
 

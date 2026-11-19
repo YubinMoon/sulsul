@@ -2,6 +2,7 @@
 //!
 //! - 외부 제공자(`llm_cloud`)는 [`crate::client::chat`]으로 `/chat/completions`에 보냅니다.
 //! - Codex 로그인(`llm_codex`)은 [`crate::codex::client::chat`]으로 ChatGPT의 Codex 백엔드에 보냅니다.
+//! - Claude Code CLI(`llm_claude_cli`)는 [`crate::claude_cli::chat`]으로 이 PC의 `claude -p`를 실행합니다.
 //! - 로컬 모델(`llm_local`)은 실행기 프로세스([`crate::runner`])에서 돌립니다. 실행기는 모델을 올려 둔 채
 //!   남겨 두었다가 [`LOCAL_KEEP_LOADED`] 동안 쓰지 않으면 [`Refiner::unload_if_idle`]로 끝냅니다.
 //!
@@ -16,10 +17,10 @@ use sulsul_core::{AppPaths, CancelToken};
 use crate::catalog::find_variant;
 use crate::chat::{ChatFormat, clean_output};
 use crate::client::{self, LlmError};
-use crate::codex;
 use crate::entries::{SelectionIssue, chosen_local_model, selection_issue};
 use crate::runner::{LocalError, LocalRunner};
-use crate::{CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_PROCESSOR_ID};
+use crate::{CLAUDE_CLI_PROCESSOR_ID, CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_PROCESSOR_ID};
+use crate::{claude_cli, codex};
 
 /// 로컬 모델을 쓰지 않고 이만큼 지나면 실행기를 끝내 메모리를 돌려줍니다 (음성 인식 모델의 기본 유지 시간과 같음).
 pub const LOCAL_KEEP_LOADED: Duration = Duration::from_secs(5 * 60);
@@ -59,6 +60,9 @@ pub enum RefineError {
     /// Codex 로그인으로 요청하다 난 오류
     #[error(transparent)]
     Codex(LlmError),
+    /// Claude Code CLI로 요청하다 난 오류
+    #[error(transparent)]
+    ClaudeCli(LlmError),
     #[error(transparent)]
     Local(LocalError),
     /// 모델이 빈 글을 돌려주었습니다.
@@ -73,6 +77,7 @@ impl RefineError {
             self,
             Self::Cloud(LlmError::Cancelled)
                 | Self::Codex(LlmError::Cancelled)
+                | Self::ClaudeCli(LlmError::Cancelled)
                 | Self::Local(LocalError::Cancelled)
         )
     }
@@ -86,6 +91,11 @@ enum Target<'a> {
     },
     Cloud(&'a ApiProfile),
     Codex {
+        model: String,
+        effort: ReasoningEffort,
+    },
+    ClaudeCli {
+        cli: PathBuf,
         model: String,
         effort: ReasoningEffort,
     },
@@ -173,6 +183,23 @@ impl Refiner {
                 .map_err(RefineError::Codex)?
                 .text
             }
+            Target::ClaudeCli { cli, model, effort } => {
+                let target = claude_cli::CliTarget {
+                    cli: &cli,
+                    model: &model,
+                    effort,
+                };
+                claude_cli::chat(
+                    &self.paths,
+                    target,
+                    &prompt.text,
+                    text,
+                    claude_cli::REQUEST_TIMEOUT,
+                    cancel,
+                )
+                .map_err(RefineError::ClaudeCli)?
+                .text
+            }
             Target::Local { model, format } => {
                 let rendered = format.render(&prompt.text, text);
                 let runner = self.runner()?;
@@ -247,6 +274,13 @@ impl Refiner {
                 model: codex::chosen_model(config).to_owned(),
                 effort: codex::chosen_effort(config),
             }),
+            CLAUDE_CLI_PROCESSOR_ID => claude_cli::find_cli(config)
+                .map(|cli| Target::ClaudeCli {
+                    cli,
+                    model: claude_cli::chosen_model(config).to_owned(),
+                    effort: claude_cli::chosen_effort(config),
+                })
+                .ok_or(RefineError::Selection(SelectionIssue::ClaudeCliMissing)),
             // 고르지 않았습니다(알 수 없는 ID는 위의 selection_issue가 걸러 냄).
             _ => Err(RefineError::NoModel),
         }
