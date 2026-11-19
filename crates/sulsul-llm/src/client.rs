@@ -11,15 +11,16 @@
 //! 고른 단계가 원인이라고 알립니다([`LlmError::ReasoningRejected`]).
 
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use sulsul_core::CancelToken;
 use sulsul_core::config::{ApiProfile, ReasoningEffort};
+use sulsul_core::{AppPaths, CancelToken};
 
+use crate::codex;
+use crate::job::Job;
 use crate::presets::{
     MOCK_PROVIDER_ID, ReasoningStyle, chat_completions_url, find_preset, reasoning_support,
     requires_api_key,
@@ -32,7 +33,7 @@ pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LOCAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// 연결 테스트로 보내는 질문
-const TEST_PROMPT: &str = "Reply with the single word OK.";
+pub(crate) const TEST_PROMPT: &str = "Reply with the single word OK.";
 
 /// 가짜 제공자가 답하기까지 기다리는 시간
 const MOCK_DELAY: Duration = Duration::from_millis(800);
@@ -41,7 +42,7 @@ const MOCK_DELAY: Duration = Duration::from_millis(800);
 const MOCK_FAIL_KEY: &str = "fail";
 
 /// 취소·제한 시간을 확인하는 간격
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// 오류 본문을 메시지에 옮길 때의 최대 글자 수
 const MAX_ERROR_CHARS: usize = 300;
@@ -82,6 +83,12 @@ pub enum LlmError {
         /// 거절한 응답 본문에서 뽑은 오류 설명 (없으면 빈 문자열)
         message: String,
     },
+    /// Codex 로그인 정보가 없거나, 만료돼 다시 받을 수 없습니다. 다시 로그인해야 합니다.
+    #[error("not signed in to Codex; sign in again")]
+    SignedOut,
+    /// 제공자가 고른 모델을 쓸 수 없다고 답했습니다 (Codex: 이 계정에서 쓸 수 없는 모델).
+    #[error("model is not available: {0}")]
+    ModelNotFound(String),
     #[error("network error: {0}")]
     Network(String),
     #[error("unexpected response: {0}")]
@@ -170,7 +177,7 @@ pub fn chat(
 
 /// 고른 추론 단계를 제공자가 거절했을 때 할 일
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WhenRejected {
+pub(crate) enum WhenRejected {
     /// 추론 단계를 빼고 다시 보내 그 답을 씁니다 (글 다듬기).
     SendWithout,
     /// 추론 단계를 빼고 다시 보내 보고, 통하면 [`LlmError::ReasoningRejected`]로 알립니다 (연결 테스트).
@@ -178,7 +185,7 @@ enum WhenRejected {
 }
 
 /// 추론 단계를 넣은 요청을 거절할 때 제공자가 쓰는 상태 코드 (잘못된 값, 모르는 매개변수)
-fn is_rejection(status: u16) -> bool {
+pub(crate) fn is_rejection(status: u16) -> bool {
     matches!(status, 400 | 422)
 }
 
@@ -205,7 +212,7 @@ fn reasoning_fields(profile: &ApiProfile) -> Map<String, Value> {
 }
 
 /// `reasoning_effort`에 넣는 단계 이름. 제공자 기본값이면 `None`입니다.
-fn effort_value(effort: ReasoningEffort) -> Option<&'static str> {
+pub(crate) fn effort_value(effort: ReasoningEffort) -> Option<&'static str> {
     match effort {
         ReasoningEffort::Default => None,
         ReasoningEffort::None => Some("none"),
@@ -304,6 +311,29 @@ fn post(
     timeout: Duration,
     cancel: &CancelToken,
 ) -> Result<ConnectionReply, LlmError> {
+    let (url, api_key, body) = (url.to_owned(), api_key.to_owned(), body.to_string());
+    run_with_deadline(started, timeout, cancel, move |remaining| {
+        send_chat_request(&url, &api_key, &body, remaining)
+            .inspect_err(|e| tracing::debug!("LLM chat request failed: {e}"))
+    })
+    .map(|(text, model)| ConnectionReply {
+        text,
+        elapsed: started.elapsed(),
+        model,
+    })
+}
+
+/// `job`을 따로 돌리고 답을 기다립니다. `started`부터 `timeout`이 지나거나 `cancel`이 켜지면
+/// `job`이 끝나기를 기다리지 않고 바로 돌아옵니다.
+///
+/// ureq 요청은 중간에 끊을 수 없으므로 따로 돌리고, 여기서는 취소·제한 시간만 지켜봅니다.
+/// `job`은 남은 시간을 받아 요청의 제한 시간으로 씁니다.
+pub(crate) fn run_with_deadline<T: Send + 'static>(
+    started: Instant,
+    timeout: Duration,
+    cancel: &CancelToken,
+    job: impl FnOnce(Duration) -> Result<T, LlmError> + Send + 'static,
+) -> Result<T, LlmError> {
     if cancel.is_cancelled() {
         return Err(LlmError::Cancelled);
     }
@@ -311,13 +341,11 @@ fn post(
     if remaining.is_zero() {
         return Err(timeout_error(timeout));
     }
-    let (url, api_key, body) = (url.to_owned(), api_key.to_owned(), body.to_string());
     let (tx, rx) = mpsc::channel();
-    // ureq 요청은 중간에 끊을 수 없으므로 따로 돌리고, 여기서는 취소·제한 시간만 지켜봅니다.
     thread::Builder::new()
         .name("sulsul-llm-request".into())
         .spawn(move || {
-            let _ = tx.send(send_chat_request(&url, &api_key, &body, remaining));
+            let _ = tx.send(job(remaining));
         })
         .map_err(|e| LlmError::Network(format!("failed to start request thread: {e}")))?;
 
@@ -326,16 +354,7 @@ fn post(
             return Err(LlmError::Cancelled);
         }
         match rx.recv_timeout(POLL_INTERVAL) {
-            Ok(result) => {
-                let elapsed = started.elapsed();
-                return result
-                    .map(|(text, model)| ConnectionReply {
-                        text,
-                        elapsed,
-                        model,
-                    })
-                    .inspect_err(|e| tracing::debug!("LLM chat request failed: {e}"));
-            }
+            Ok(result) => return result,
             Err(RecvTimeoutError::Timeout) if started.elapsed() >= timeout => {
                 return Err(timeout_error(timeout));
             }
@@ -349,7 +368,7 @@ fn post(
     }
 }
 
-fn timeout_error(timeout: Duration) -> LlmError {
+pub(crate) fn timeout_error(timeout: Duration) -> LlmError {
     LlmError::Network(format!(
         "no response within {} seconds",
         timeout.as_secs().max(1)
@@ -420,7 +439,7 @@ fn send_chat_request(
 }
 
 /// 서버가 오류 설명에 API 키를 그대로 적어 보내도 로그에 남지 않게 가립니다.
-fn hide_secret(message: String, secret: &str) -> String {
+pub(crate) fn hide_secret(message: String, secret: &str) -> String {
     // 아주 짧은 값은 키가 아닐 수 있고, 가리면 설명의 보통 글자까지 지워집니다.
     if secret.chars().count() < MIN_SECRET_CHARS || !message.contains(secret) {
         return message;
@@ -428,7 +447,7 @@ fn hide_secret(message: String, secret: &str) -> String {
     message.replace(secret, "***")
 }
 
-fn network_error(error: ureq::Error) -> LlmError {
+pub(crate) fn network_error(error: ureq::Error) -> LlmError {
     match error {
         ureq::Error::Timeout(_) => LlmError::Network("request timed out".into()),
         other => LlmError::Network(other.to_string()),
@@ -512,7 +531,7 @@ fn content_text(content: &Value) -> String {
 /// - `{"error": "..."}` (xAI), `{"message": "..."}` (Cerebras), `{"detail": "..."}` (Mistral)
 ///
 /// JSON이 아니면 본문 앞부분을, 본문이 비어 있으면 빈 문자열을 돌려줍니다.
-fn error_message(body: &str) -> String {
+pub(crate) fn error_message(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -558,7 +577,7 @@ fn json_error_message(value: &Value) -> Option<String> {
     }
 }
 
-fn truncate(raw: &str) -> String {
+pub(crate) fn truncate(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.chars().count() <= MAX_ERROR_CHARS {
         return trimmed.to_owned();
@@ -567,35 +586,18 @@ fn truncate(raw: &str) -> String {
     format!("{prefix}...")
 }
 
-/// 작업 스레드에서 [`test_connection`]을 돌리는 손잡이. 화면 스레드는 [`poll`](Self::poll)만 부릅니다.
+/// 작업 스레드에서 연결 테스트를 돌리는 손잡이. 화면 스레드는 [`poll`](Self::poll)만 부릅니다.
 ///
+/// 외부 제공자([`test_connection`])와 Codex 로그인([`codex::client::test_connection`])을 테스트합니다.
 /// 버리면 테스트를 취소합니다.
 pub struct ConnectionTest {
-    profile: ApiProfile,
-    started: Instant,
-    cancel: CancelToken,
-    state: Arc<Mutex<TestState>>,
-}
-
-#[derive(Default)]
-struct TestState {
-    result: Option<Result<ConnectionReply, LlmError>>,
-    /// 끝났을 때까지 걸린 시간
-    finished_after: Option<Duration>,
-}
-
-impl TestState {
-    /// 아직 결과가 없을 때만 결과를 적습니다.
-    fn finish(&mut self, result: Result<ConnectionReply, LlmError>, after: Duration) {
-        if self.result.is_none() {
-            self.result = Some(result);
-            self.finished_after = Some(after);
-        }
-    }
+    /// 테스트하는 외부 제공자 (Codex면 `None`)
+    profile: Option<ApiProfile>,
+    job: Job<Result<ConnectionReply, LlmError>>,
 }
 
 impl ConnectionTest {
-    /// 연결 테스트를 작업 스레드에서 시작합니다. 제한 시간은 [`default_timeout`]을 따릅니다.
+    /// 외부 제공자 연결 테스트를 작업 스레드에서 시작합니다. 제한 시간은 [`default_timeout`]을 따릅니다.
     ///
     /// `on_finish`는 끝났을 때 작업 스레드에서 한 번 불립니다 (앱은 egui repaint 요청을 넘김).
     pub fn start(
@@ -603,65 +605,56 @@ impl ConnectionTest {
         on_finish: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self> {
         let timeout = default_timeout(&profile);
-        let cancel = CancelToken::new();
-        let state = Arc::new(Mutex::new(TestState::default()));
-        let started = Instant::now();
-
         let worker_profile = profile.clone();
-        let worker_cancel = cancel.clone();
-        let worker_state = Arc::clone(&state);
-        thread::Builder::new()
-            .name("sulsul-llm-connection-test".into())
-            .spawn(move || {
-                let result = test_connection(&worker_profile, timeout, &worker_cancel);
-                worker_state
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .finish(result, started.elapsed());
-                on_finish();
-            })?;
-
+        let job = Job::start(
+            "sulsul-llm-connection-test",
+            Err(LlmError::Cancelled),
+            on_finish,
+            move |cancel| test_connection(&worker_profile, timeout, cancel),
+        )?;
         Ok(Self {
-            profile,
-            started,
-            cancel,
-            state,
+            profile: Some(profile),
+            job,
         })
     }
 
-    /// 테스트하는 프로필 (시작할 때의 값)
-    pub fn profile(&self) -> &ApiProfile {
-        &self.profile
+    /// Codex 로그인으로 `model`에 짧은 요청을 보내는 테스트를 작업 스레드에서 시작합니다.
+    pub fn start_codex(
+        paths: AppPaths,
+        model: String,
+        effort: ReasoningEffort,
+        on_finish: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let job = Job::start(
+            "sulsul-llm-connection-test",
+            Err(LlmError::Cancelled),
+            on_finish,
+            move |cancel| {
+                codex::client::test_connection(&paths, &model, effort, REMOTE_TIMEOUT, cancel)
+            },
+        )?;
+        Ok(Self { profile: None, job })
+    }
+
+    /// 테스트하는 외부 제공자 (시작할 때의 값). Codex 테스트면 `None`입니다.
+    pub fn profile(&self) -> Option<&ApiProfile> {
+        self.profile.as_ref()
     }
 
     /// 시작한 뒤 지난 시간. 끝났으면 끝날 때까지 걸린 시간입니다.
     pub fn elapsed(&self) -> Duration {
-        self.lock()
-            .finished_after
-            .unwrap_or_else(|| self.started.elapsed())
+        self.job.elapsed()
     }
 
     /// 끝났으면 결과를 돌려줍니다 (부를 때마다 같은 결과).
     /// [`cancel`](Self::cancel) 뒤에는 요청이 아직 안 끝났어도 바로 `Some(Err(Cancelled))`입니다.
     pub fn poll(&self) -> Option<Result<ConnectionReply, LlmError>> {
-        self.lock().result.clone()
+        self.job.poll()
     }
 
     /// 테스트를 멈춥니다. 이미 끝났으면 결과를 그대로 둡니다.
     pub fn cancel(&self) {
-        self.cancel.cancel();
-        self.lock()
-            .finish(Err(LlmError::Cancelled), self.started.elapsed());
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, TestState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Drop for ConnectionTest {
-    fn drop(&mut self) {
-        self.cancel.cancel();
+        self.job.cancel();
     }
 }
 
@@ -669,6 +662,7 @@ impl Drop for ConnectionTest {
 mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -1286,7 +1280,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap();
-        assert_eq!(test.profile(), &mock);
+        assert_eq!(test.profile(), Some(&mock));
         assert!(test.poll().is_none(), "가짜 제공자는 바로 끝나지 않습니다");
 
         let reply = wait_for(&test).unwrap();

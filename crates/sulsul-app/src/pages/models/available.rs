@@ -20,7 +20,7 @@ use super::entries::{
     model_path_field, remove_profile, selection_issue, variant_label,
 };
 use super::jobs::{DownloadTarget, TestTarget};
-use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, TestClick};
+use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, ListGroup, TestClick};
 use super::profiles::profile_display_name;
 use super::{Category, ModelsPage, Tab};
 use crate::accel::{AccelEnv, EngineAccel};
@@ -143,9 +143,14 @@ impl ModelsPage {
         }
 
         let mut turn_on = None;
-        let mut previous_local = None;
+        let mut previous_group = None;
         for entry in &entries {
-            parts::list_group(ui, &mut previous_local, entry.key.is_local());
+            let group = if entry.key.is_local() {
+                ListGroup::Local
+            } else {
+                ListGroup::Providers
+            };
+            parts::list_group(ui, &mut previous_group, group);
             if self.entry_card(ui, cx, entry) {
                 turn_on = Some(entry.key.clone());
             }

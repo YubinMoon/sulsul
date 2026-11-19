@@ -1,4 +1,4 @@
-//! OS 기본 앱으로 파일·폴더 열기.
+//! OS 기본 앱으로 파일·폴더·웹 주소 열기.
 
 use std::path::Path;
 
@@ -6,6 +6,15 @@ use std::path::Path;
 pub fn open_path(path: &Path) -> Result<(), String> {
     opener::open(path).map_err(|e| {
         tracing::warn!("failed to open {}: {e}", path.display());
+        e.to_string()
+    })
+}
+
+/// 웹 주소를 기본 브라우저로 엽니다.
+pub fn open_url(url: &str) -> Result<(), String> {
+    opener::open_browser(url).map_err(|e| {
+        // 주소에는 로그인에 쓰는 값이 들어 있을 수 있어 로그에 남기지 않습니다.
+        tracing::warn!("failed to open the browser: {e}");
         e.to_string()
     })
 }

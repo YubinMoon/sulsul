@@ -3,6 +3,8 @@
 //! - [`catalog`]: 이 PC에 내려받아 쓰는 로컬 LLM(GGUF) 목록
 //! - [`presets`]: OpenAI 호환 `/chat/completions`를 제공하는 외부 제공자 프리셋
 //! - [`client`]: 외부 제공자 요청 (연결 테스트, 다듬기)
+//! - [`codex`]: Codex 로그인(ChatGPT 계정)으로 다듬기. 브라우저 로그인, 로그인 정보 저장, 요청
+//! - [`job`]: 연결 테스트·로그인처럼 작업 스레드에서 도는 일의 손잡이
 //! - [`entries`]: "사용 가능 모델" 목록과 고르기·지우기 규칙
 //! - [`chat`]: 다듬기 요청의 모양(로컬 모델 채팅 형식)과 응답 정리
 //! - [`runner`]: 로컬 모델 실행기(`sulsul-llm-runner`) 프로세스와 주고받는 말
@@ -15,16 +17,23 @@
 pub mod catalog;
 pub mod chat;
 pub mod client;
+pub mod codex;
 pub mod entries;
+pub mod job;
 pub mod presets;
 pub mod refine;
 pub mod runner;
+#[cfg(test)]
+mod test_server;
 
 /// 이 PC에 내려받은 모델로 다듬는 후처리기 ID (`[postprocess] processor`)
 pub const LOCAL_PROCESSOR_ID: &str = "llm_local";
 
 /// 외부 제공자로 다듬는 후처리기 ID (`[postprocess] processor`)
 pub const CLOUD_PROCESSOR_ID: &str = "llm_cloud";
+
+/// Codex 로그인(ChatGPT 계정)으로 다듬는 후처리기 ID (`[postprocess] processor`)
+pub const CODEX_PROCESSOR_ID: &str = "llm_codex";
 
 /// `[postprocess.processors.llm_local]`에서 고른 로컬 모델(변형 ID)을 담는 키
 pub const LOCAL_MODEL_KEY: &str = "model";

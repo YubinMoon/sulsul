@@ -74,6 +74,8 @@ winresource.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# 테스트에서 Codex 로그인 파일을 꾸밀 때 씁니다.
+base64.workspace = true
 
 [lints]
 workspace = true

@@ -278,22 +278,33 @@ pub fn empty_state(ui: &mut Ui) -> bool {
     go_download
 }
 
-/// 목록에서 "로컬 모델"과 "외부 제공자" 묶음이 시작되는 자리에 묶음 제목을 놓습니다.
+/// "사용 가능 모델" 목록의 묶음
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListGroup {
+    /// 로컬 모델
+    Local,
+    /// Codex 로그인 (글 다듬기에만 있음)
+    Codex,
+    /// 외부 제공자
+    Providers,
+}
+
+/// 목록에서 묶음("로컬 모델", "외부 제공자" 등)이 시작되는 자리에 묶음 제목을 놓습니다.
 ///
-/// 카드를 그리기 전에 항목마다 부릅니다. `previous`는 앞 항목이 로컬 모델이었는지를 기억하는
-/// 값이고, 목록을 그리기 시작할 때 `None`으로 둡니다.
-pub fn list_group(ui: &mut Ui, previous: &mut Option<bool>, local: bool) {
-    if *previous == Some(local) {
+/// 카드를 그리기 전에 항목마다 부릅니다. `previous`는 앞 항목의 묶음을 기억하는 값이고,
+/// 목록을 그리기 시작할 때 `None`으로 둡니다.
+pub fn list_group(ui: &mut Ui, previous: &mut Option<ListGroup>, group: ListGroup) {
+    if *previous == Some(group) {
         return;
     }
     if previous.is_some() {
         ui.add_space(SECTION_GAP - CARD_GAP);
     }
-    *previous = Some(local);
-    let title = if local {
-        t!("models.available.group.local")
-    } else {
-        t!("models.available.group.providers")
+    *previous = Some(group);
+    let title = match group {
+        ListGroup::Local => t!("models.available.group.local"),
+        ListGroup::Codex => t!("models.available.group.codex"),
+        ListGroup::Providers => t!("models.available.group.providers"),
     };
     group_title(ui, &title);
 }
@@ -815,7 +826,8 @@ fn reasoning_row(ui: &mut Ui, id_salt: &str, profile: &mut ApiProfile) {
         });
 }
 
-fn reasoning_label(effort: ReasoningEffort) -> std::borrow::Cow<'static, str> {
+/// 추론 단계의 이름 (예: "낮음")
+pub fn reasoning_label(effort: ReasoningEffort) -> std::borrow::Cow<'static, str> {
     match effort {
         ReasoningEffort::Default => t!("models.providers.field.reasoning_default"),
         ReasoningEffort::None => t!("models.providers.field.reasoning_none"),

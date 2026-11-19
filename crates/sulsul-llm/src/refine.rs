@@ -1,6 +1,7 @@
 //! 받아쓴 글 다듬기: 설정에서 고른 모델에 고른 프롬프트와 받아쓴 글을 보내 다듬은 글을 받습니다.
 //!
 //! - 외부 제공자(`llm_cloud`)는 [`crate::client::chat`]으로 `/chat/completions`에 보냅니다.
+//! - Codex 로그인(`llm_codex`)은 [`crate::codex::client::chat`]으로 ChatGPT의 Codex 백엔드에 보냅니다.
 //! - 로컬 모델(`llm_local`)은 실행기 프로세스([`crate::runner`])에서 돌립니다. 실행기는 모델을 올려 둔 채
 //!   남겨 두었다가 [`LOCAL_KEEP_LOADED`] 동안 쓰지 않으면 [`Refiner::unload_if_idle`]로 끝냅니다.
 //!
@@ -9,15 +10,16 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sulsul_core::config::{ApiProfile, PostProcessConfig};
+use sulsul_core::config::{ApiProfile, PostProcessConfig, ReasoningEffort};
 use sulsul_core::{AppPaths, CancelToken};
 
 use crate::catalog::find_variant;
 use crate::chat::{ChatFormat, clean_output};
 use crate::client::{self, LlmError};
+use crate::codex;
 use crate::entries::{SelectionIssue, chosen_local_model, selection_issue};
 use crate::runner::{LocalError, LocalRunner};
-use crate::{CLOUD_PROCESSOR_ID, LOCAL_PROCESSOR_ID};
+use crate::{CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_PROCESSOR_ID};
 
 /// 로컬 모델을 쓰지 않고 이만큼 지나면 실행기를 끝내 메모리를 돌려줍니다 (음성 인식 모델의 기본 유지 시간과 같음).
 pub const LOCAL_KEEP_LOADED: Duration = Duration::from_secs(5 * 60);
@@ -54,6 +56,9 @@ pub enum RefineError {
     EmptyPrompt { name: String },
     #[error(transparent)]
     Cloud(LlmError),
+    /// Codex 로그인으로 요청하다 난 오류
+    #[error(transparent)]
+    Codex(LlmError),
     #[error(transparent)]
     Local(LocalError),
     /// 모델이 빈 글을 돌려주었습니다.
@@ -66,15 +71,24 @@ impl RefineError {
     pub fn is_cancelled(&self) -> bool {
         matches!(
             self,
-            Self::Cloud(LlmError::Cancelled) | Self::Local(LocalError::Cancelled)
+            Self::Cloud(LlmError::Cancelled)
+                | Self::Codex(LlmError::Cancelled)
+                | Self::Local(LocalError::Cancelled)
         )
     }
 }
 
 /// 설정에서 고른 다듬기 대상
 enum Target<'a> {
-    Local { model: PathBuf, format: ChatFormat },
+    Local {
+        model: PathBuf,
+        format: ChatFormat,
+    },
     Cloud(&'a ApiProfile),
+    Codex {
+        model: String,
+        effort: ReasoningEffort,
+    },
 }
 
 /// 다듬기를 실행합니다. 로컬 실행기를 올려 둔 채 다음 요청에 다시 씁니다.
@@ -146,6 +160,19 @@ impl Refiner {
                     .map_err(RefineError::Cloud)?
                     .text
             }
+            Target::Codex { model, effort } => {
+                codex::client::chat(
+                    &self.paths,
+                    &model,
+                    effort,
+                    &prompt.text,
+                    text,
+                    client::REMOTE_TIMEOUT,
+                    cancel,
+                )
+                .map_err(RefineError::Codex)?
+                .text
+            }
             Target::Local { model, format } => {
                 let rendered = format.render(&prompt.text, text);
                 let runner = self.runner()?;
@@ -216,6 +243,10 @@ impl Refiner {
                 .active_api_profile()
                 .map(Target::Cloud)
                 .ok_or(RefineError::Selection(SelectionIssue::NoProvider)),
+            CODEX_PROCESSOR_ID => Ok(Target::Codex {
+                model: codex::chosen_model(config).to_owned(),
+                effort: codex::chosen_effort(config),
+            }),
             // 고르지 않았습니다(알 수 없는 ID는 위의 selection_issue가 걸러 냄).
             _ => Err(RefineError::NoModel),
         }
@@ -355,6 +386,26 @@ mod tests {
                 name: "빈 지시문".into()
             })
         );
+    }
+
+    #[test]
+    fn codex_needs_a_sign_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = refiner(dir.path());
+        let config = PostProcessConfig {
+            enabled: true,
+            processor: CODEX_PROCESSOR_ID.into(),
+            ..PostProcessConfig::default()
+        };
+        assert_eq!(
+            r.refine(&config, "글", &CancelToken::new()),
+            Err(RefineError::Selection(SelectionIssue::CodexSignedOut))
+        );
+        // 녹음하는 동안 미리 준비할 때도 외부 제공자처럼 같은 이유로 알립니다.
+        assert!(matches!(
+            r.prepare(&config, &CancelToken::new()),
+            Err(RefineError::Selection(SelectionIssue::CodexSignedOut))
+        ));
     }
 
     fn local_config(variant_id: &str) -> PostProcessConfig {

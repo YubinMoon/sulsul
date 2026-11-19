@@ -102,9 +102,31 @@ error:
     http: "제공자 오류입니다 (HTTP %{status})."
     # 연결 테스트에서 추론 단계를 넣은 요청만 거절됐을 때. 받아쓰기 때는 추론 단계를 빼고 다시 보냅니다.
     reasoning_rejected: 이 모델은 고른 추론 단계를 받지 않습니다. 다른 단계나 제공자 기본값을 고르세요.
+    model_not_found: 제공자가 이 모델을 쓸 수 없다고 답했습니다. 모델 이름을 확인하세요.
     network: 제공자에 연결하지 못했습니다.
     bad_response: 제공자의 응답을 읽지 못했습니다.
     cancelled: 취소했습니다.
+  # Codex 로그인(ChatGPT 계정)으로 요청하다 난 오류
+  codex:
+    signed_out: "Codex 로그인이 만료됐습니다. 모델 관리 '외부 제공자' 탭의 Codex 로그인에서 다시 로그인하세요."
+    auth: "ChatGPT 서버가 로그인을 받지 않았습니다. '외부 제공자' 탭의 Codex 로그인에서 다시 로그인하세요."
+    rate_limited: ChatGPT 요금제의 Codex 사용 한도에 닿았습니다. 한도가 풀린 뒤 다시 하세요.
+    http: "ChatGPT 서버 오류입니다 (HTTP %{status})."
+    model_not_found: 이 계정으로는 고른 모델을 쓸 수 없습니다. 다른 모델을 고르세요.
+    reasoning_rejected: 이 모델은 고른 추론 단계를 받지 않습니다. 다른 단계나 모델 기본값을 고르세요.
+    network: ChatGPT 서버에 연결하지 못했습니다.
+    bad_response: ChatGPT 서버의 응답을 읽지 못했습니다.
+  # 브라우저로 Codex에 로그인하지 못한 이유
+  codex_login:
+    ports_busy: "로그인에 쓰는 포트(%{ports})를 다른 프로그램이 쓰고 있습니다. Codex CLI의 로그인을 마치거나 닫고 다시 하세요."
+    start: 로그인을 시작하지 못했습니다.
+    refused: 로그인 페이지에서 로그인을 마치지 못했습니다. 다시 하세요.
+    network: 로그인을 마무리하다 ChatGPT 서버에 연결하지 못했습니다. 인터넷 연결을 확인하세요.
+    exchange: 로그인을 마무리하지 못했습니다. 다시 하세요.
+    no_account: 이 계정에는 ChatGPT 작업 공간이 없습니다. ChatGPT를 쓰는 계정으로 로그인하세요.
+    save: 로그인 정보를 저장하지 못했습니다. 저장 공간과 권한을 확인하세요.
+    timed_out: "%{minutes}분 안에 로그인을 마치지 않아 기다리기를 멈췄습니다."
+    interrupted: 다른 프로그램(Codex CLI 등)이 로그인을 시작해 기다리기를 멈췄습니다.
   # 글 다듬기에 실패한 이유 (외부 제공자 오류는 위의 llm.*을 씀)
   refine:
     no_prompts: 프롬프트가 없습니다. 프롬프트 화면에서 추가하세요.
@@ -406,6 +428,7 @@ test:
     model: 모델
     no_model: 고른 모델이 없습니다
     provider: "%{name} · %{model}"
+    codex: "Codex · %{model}"
     dictation_off: 단축키 받아쓰기에서는 꺼져 있습니다.
     prompt: 프롬프트
     prompt_help: 이 화면에서만 씁니다.
@@ -570,6 +593,7 @@ models:
       no_model: 글 다듬기에 쓸 모델을 고르세요.
       unknown_model: "'%{id}' 모델은 이 앱에 없습니다."
       unknown_processor: "'%{id}' 다듬기 방식은 이 앱에 없습니다."
+      codex_signed_out: "Codex에 로그인하지 않았습니다. '외부 제공자' 탭의 Codex 로그인에서 ChatGPT 계정으로 로그인하세요."
     info:
       family: 모델
       file_size: 파일 크기
@@ -582,6 +606,51 @@ models:
       model: "응답한 모델: %{model}"
       empty_reply: 응답은 비었지만 연결은 정상입니다.
       not_started: 테스트를 시작하지 못했습니다.
+  # 글 다듬기 갈래의 Codex 로그인 (ChatGPT 계정으로 로그인해 그 계정의 Codex 사용량으로 다듬기)
+  codex:
+    # "외부 제공자" 탭의 로그인 카드 제목
+    title: Codex 로그인
+    card_name: Codex (ChatGPT 계정)
+    plan_badge: "ChatGPT %{plan}"
+    usage_note: 사용량은 API 요금이 아니라 이 계정의 ChatGPT 요금제에서 차감되고, 요금제의 Codex 사용 한도를 함께 씁니다.
+    signed_in: "%{account} 계정으로 Codex에 로그인했습니다."
+    signed_out: Codex에서 로그아웃했습니다.
+    sign_out: 로그아웃
+    sign_out_blocked: 테스트가 끝나면 로그아웃할 수 있습니다.
+    sign_out_failed: 로그인 정보를 지우지 못했습니다. 권한을 확인하세요.
+    sign_out_confirm:
+      title: Codex에서 로그아웃할까요?
+      body: 술술에 저장한 로그인 정보를 지웁니다. Codex CLI 등 다른 프로그램의 로그인은 그대로입니다.
+    sign_in:
+      body: Codex를 쓰는 ChatGPT 계정으로 로그인하면 API 키 없이 Codex의 모델로 글을 다듬을 수 있습니다.
+      button: 브라우저에서 로그인
+      waiting: "브라우저에서 로그인을 마치세요… %{elapsed}"
+      no_browser: 브라우저가 열리지 않았으면 로그인 주소를 복사해 브라우저에 붙여 넣으세요.
+      reopen: 브라우저 다시 열기
+      copy_url: 로그인 주소 복사
+      copied: 로그인 주소를 복사했습니다.
+      open_failed: 브라우저를 열지 못했습니다. 로그인 주소를 복사해 브라우저에 붙여 넣으세요.
+    account:
+      signed_in_badge: 로그인됨
+      email: 계정
+      plan: 요금제
+      unknown: 알 수 없음
+      # 이메일을 알 수 없을 때 로그인 알림의 계정 자리에 넣는 이름
+      fallback_name: ChatGPT
+      show_entry: 사용 가능 모델에서 보기
+    model_hint: "비우면 %{model}"
+    models: 쓸 수 있는 모델
+    models_loading: 쓸 수 있는 모델 목록을 받는 중…
+    models_failed: "모델 목록을 받지 못했습니다. %{message}"
+    models_retry: 다시 받기
+    reasoning_default: 모델 기본값
+    reasoning_default_help: 모델의 기본 설정대로 생각합니다. 생각을 끄면 더 빨리 답합니다.
+    # 로그인을 마친 브라우저에 보여 주는 페이지
+    browser:
+      success_title: 술술에 로그인했습니다
+      success_body: 이 창을 닫고 술술로 돌아가세요.
+      failure_title: 로그인하지 못했습니다
+      failure_body: 술술로 돌아가 다시 로그인하세요. 이 창은 닫아도 됩니다.
   tab:
     available: 사용 가능 모델
     download: 로컬 모델 내려받기
@@ -591,6 +660,7 @@ models:
   available:
     group:
       local: 로컬 모델
+      codex: Codex 로그인
       providers: 외부 제공자
     use: "%{name} 사용"
     empty:

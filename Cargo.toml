@@ -51,6 +51,11 @@ rustfft = "6"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.11"
 
+# Codex 로그인 (OAuth PKCE, 로그인 토큰 읽기)
+base64 = "0.23"
+getrandom = "0.3"
+url = "2"
+
 # 명령줄
 clap = { version = "4", features = ["derive"] }
 

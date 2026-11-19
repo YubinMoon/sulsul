@@ -13,6 +13,7 @@ use sulsul_core::download::DownloadError;
 use sulsul_core::settings::{SettingIssue, SettingProblem};
 use sulsul_core::stt::{SttError, SttRegistry};
 use sulsul_llm::client::LlmError;
+use sulsul_llm::codex::login::{LOGIN_TIMEOUT, LoginError};
 use sulsul_llm::refine::RefineError;
 use sulsul_llm::runner::{Failure, LocalError};
 
@@ -150,9 +151,53 @@ pub fn llm(error: &LlmError) -> String {
             _ => t!("error.llm.http", status = status).into_owned(),
         },
         LlmError::ReasoningRejected { .. } => t!("error.llm.reasoning_rejected").into_owned(),
+        LlmError::ModelNotFound(_) => t!("error.llm.model_not_found").into_owned(),
+        LlmError::SignedOut => t!("error.codex.signed_out").into_owned(),
         LlmError::Network(_) => t!("error.llm.network").into_owned(),
         LlmError::BadResponse(_) => t!("error.llm.bad_response").into_owned(),
         LlmError::Cancelled => t!("error.llm.cancelled").into_owned(),
+    }
+}
+
+/// Codex 로그인(ChatGPT 계정)으로 요청하다 난 오류.
+///
+/// 외부 제공자와 달리 API 키가 아니라 로그인이 문제이고, 사용 한도는 ChatGPT 요금제의 한도입니다.
+pub fn codex(error: &LlmError) -> String {
+    match error {
+        LlmError::SignedOut => t!("error.codex.signed_out").into_owned(),
+        LlmError::Http { status, .. } => match status {
+            401 | 403 => t!("error.codex.auth").into_owned(),
+            429 => t!("error.codex.rate_limited").into_owned(),
+            _ => t!("error.codex.http", status = status).into_owned(),
+        },
+        LlmError::ModelNotFound(_) => t!("error.codex.model_not_found").into_owned(),
+        LlmError::ReasoningRejected { .. } => t!("error.codex.reasoning_rejected").into_owned(),
+        LlmError::Network(_) => t!("error.codex.network").into_owned(),
+        LlmError::BadResponse(_) => t!("error.codex.bad_response").into_owned(),
+        // 주소·API 키는 Codex 로그인에 쓰지 않습니다.
+        LlmError::InvalidEndpoint(_) | LlmError::MissingApiKey | LlmError::Cancelled => llm(error),
+    }
+}
+
+/// 브라우저로 Codex에 로그인하지 못한 이유
+pub fn codex_login(error: &LoginError) -> String {
+    match error {
+        LoginError::PortsBusy(ports) => {
+            t!("error.codex_login.ports_busy", ports = ports).into_owned()
+        }
+        LoginError::Start(_) => t!("error.codex_login.start").into_owned(),
+        LoginError::Refused(_) => t!("error.codex_login.refused").into_owned(),
+        LoginError::Exchange(LlmError::Network(_)) => t!("error.codex_login.network").into_owned(),
+        LoginError::Exchange(_) => t!("error.codex_login.exchange").into_owned(),
+        LoginError::NoAccount => t!("error.codex_login.no_account").into_owned(),
+        LoginError::Save(_) => t!("error.codex_login.save").into_owned(),
+        LoginError::TimedOut => t!(
+            "error.codex_login.timed_out",
+            minutes = (LOGIN_TIMEOUT.as_secs() / 60).max(1)
+        )
+        .into_owned(),
+        LoginError::Interrupted => t!("error.codex_login.interrupted").into_owned(),
+        LoginError::Cancelled => t!("error.llm.cancelled").into_owned(),
     }
 }
 
@@ -169,6 +214,7 @@ pub fn refine(error: &RefineError, paths: &AppPaths, config: &PostProcessConfig)
             t!("error.refine.empty_prompt", name = name).into_owned()
         }
         RefineError::Cloud(error) => llm(error),
+        RefineError::Codex(error) => codex(error),
         RefineError::Local(error) => local_llm(error),
         RefineError::EmptyOutput => t!("error.refine.empty_output").into_owned(),
     }
@@ -254,6 +300,8 @@ mod tests {
                 status: 400,
                 message: "unsupported value".into(),
             },
+            LlmError::ModelNotFound("no such model".into()),
+            LlmError::SignedOut,
             LlmError::Network("timed out".into()),
             LlmError::BadResponse("no choices".into()),
             LlmError::Cancelled,
@@ -288,6 +336,112 @@ mod tests {
             message: String::new(),
         };
         assert_eq!(llm(&forbidden), texts[2], "403도 401과 같은 뜻입니다");
+    }
+
+    #[test]
+    fn codex_errors_speak_of_the_sign_in_and_the_plan() {
+        rust_i18n::set_locale("ko");
+        let errors = [
+            LlmError::SignedOut,
+            LlmError::Http {
+                status: 401,
+                message: "Could not parse your authentication token.".into(),
+            },
+            LlmError::Http {
+                status: 429,
+                message: "usage limit".into(),
+            },
+            LlmError::Http {
+                status: 502,
+                message: String::new(),
+            },
+            LlmError::ModelNotFound("The 'x' model is not supported".into()),
+            LlmError::ReasoningRejected {
+                status: 400,
+                message: "unsupported value".into(),
+            },
+            LlmError::Network("timed out".into()),
+            LlmError::BadResponse("no completion".into()),
+            LlmError::Cancelled,
+        ];
+        let texts: Vec<String> = errors.iter().map(codex).collect();
+        for (error, text) in errors.iter().zip(&texts) {
+            assert!(
+                !text.starts_with("error.") && !text.contains("%{"),
+                "{error:?}: 번역이 빠졌거나 자리 표시가 남았습니다 ({text})"
+            );
+            assert!(
+                !text.contains("API 키"),
+                "Codex 로그인에는 API 키가 없습니다: {text}"
+            );
+        }
+        let mut unique = texts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "{texts:#?}");
+        assert!(texts[3].contains("502"), "{}", texts[3]);
+        // 서버의 설명(영어)은 화면에 옮기지 않습니다.
+        assert!(texts.iter().all(|text| !text.contains("authentication")));
+        let forbidden = LlmError::Http {
+            status: 403,
+            message: String::new(),
+        };
+        assert_eq!(codex(&forbidden), texts[1], "403도 401과 같은 뜻입니다");
+        assert_eq!(
+            refine(
+                &RefineError::Codex(LlmError::SignedOut),
+                &AppPaths::under("unused"),
+                &PostProcessConfig::default()
+            ),
+            texts[0]
+        );
+    }
+
+    #[test]
+    fn codex_login_errors_have_their_own_wording() {
+        rust_i18n::set_locale("ko");
+        let errors = [
+            LoginError::PortsBusy("1455, 1457".into()),
+            LoginError::Start("no random source".into()),
+            LoginError::Refused("access_denied".into()),
+            LoginError::Exchange(LlmError::Network("dns".into())),
+            LoginError::Exchange(LlmError::Http {
+                status: 400,
+                message: "invalid_grant".into(),
+            }),
+            LoginError::NoAccount,
+            LoginError::Save("denied".into()),
+            LoginError::TimedOut,
+            LoginError::Interrupted,
+            LoginError::Cancelled,
+        ];
+        let texts: Vec<String> = errors.iter().map(codex_login).collect();
+        for (error, text) in errors.iter().zip(&texts) {
+            assert!(
+                !text.starts_with("error.") && !text.contains("%{"),
+                "{error:?}: 번역이 빠졌거나 자리 표시가 남았습니다 ({text})"
+            );
+        }
+        let mut unique = texts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), texts.len(), "{texts:#?}");
+        assert!(
+            texts[0].contains("1455"),
+            "어느 포트인지 알려야 합니다: {}",
+            texts[0]
+        );
+        assert!(
+            texts[7].contains("10"),
+            "기다린 시간을 알려야 합니다: {}",
+            texts[7]
+        );
+        for raw in ["access_denied", "invalid_grant", "dns", "denied"] {
+            assert!(
+                texts.iter().all(|text| !text.contains(raw)),
+                "'{raw}'이(가) 화면 문구에 들어갔습니다: {texts:#?}"
+            );
+        }
     }
 
     #[test]

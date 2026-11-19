@@ -39,6 +39,7 @@ api_profile = ""
 
 [postprocess]
 enabled = false
+# 다듬는 방법: llm_local(로컬 모델), llm_cloud(외부 제공자), llm_codex(Codex 로그인). 모델 관리 화면에서 고릅니다.
 processor = ""
 api_profile = ""
 prompt = "default"

@@ -19,7 +19,7 @@ M5 VAD·환각 필터·오버레이 → M6 배포. 지금 어디까지 왔는지
 | `sulsul-stt-whisper-onnx` | 로컬 Whisper ONNX(sherpa-onnx 내보내기, `ort`) 엔진, Windows는 인코더만 DirectML 가속 |
 | `sulsul-stt-sensevoice` | 로컬 SenseVoice(ONNX, `ort`) 엔진, Windows는 DirectML 가속 |
 | `sulsul-stt-cloud` | OpenAI 호환 `/audio/transcriptions` 클라우드 엔진 |
-| `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·요청, 모델 선택 규칙, 다듬기 실행(`Refiner`)과 로컬 실행기 프로토콜 |
+| `sulsul-llm` | 글 다듬기(LLM) 로컬 모델 카탈로그, 외부 제공자(OpenAI 호환 `/chat/completions`) 프리셋·요청, Codex 로그인(ChatGPT 계정 OAuth, Codex 백엔드 `/responses` 요청), 모델 선택 규칙, 다듬기 실행(`Refiner`)과 로컬 실행기 프로토콜 |
 | `sulsul-llm-runner` | 글 다듬기 로컬 모델 실행기(llama.cpp, `llama-cpp-2`). 앱이 띄우고 표준 입출력 JSON으로 주고받는 별도 실행 파일 |
 | `sulsul-vad` | 말소리 찾기(Silero VAD, `ort`). 녹음 앞뒤 무음 자르기와 말소리 없는 녹음 가려내기. 모델은 실행 파일에 넣음 |
 | `sulsul-app` | 데스크톱 앱(eframe/egui), 실행 파일 이름은 `sulsul` |

@@ -1,6 +1,7 @@
-//! 글 다듬기 갈래: 다듬는 데 쓸 로컬 모델과 외부 제공자를 고르고, 내려받고, 등록합니다.
+//! 글 다듬기 갈래: 다듬는 데 쓸 로컬 모델과 외부 제공자, Codex 로그인을 고르고, 내려받고, 등록합니다.
 //!
 //! 음성 인식 갈래와 같은 탭 세 개를 같은 화면 조각(`parts`, `download`, `providers`)으로 그립니다.
+//! "외부 제공자" 탭에는 등록 칸 아래에 Codex 로그인 카드(`codex`)를 더 둡니다.
 //! 목록에 무엇이 들어가고 어느 것이 골라져 있는지는 `sulsul_llm::entries`가 정하고, 값은 설정의
 //! `[postprocess]`에 들어갑니다.
 //!
@@ -13,10 +14,14 @@ use sulsul_core::config::{ApiProfile, PostProcessConfig};
 use sulsul_core::stt::{ModelVariant, delete_variant, format_bytes};
 use sulsul_llm::catalog::{LlmFamily, families, find_variant, models_root};
 use sulsul_llm::client::{ConnectionReply, ConnectionTest, LlmError};
+use sulsul_llm::codex;
 use sulsul_llm::entries::{
-    LlmEntry, LlmEntryKey, LlmEntryKind, SelectionIssue, activate, available_entries,
-    chosen_local_model, on_local_removed, remove_profile, selection_issue, selection_ready,
+    CodexEntry, LlmEntry, LlmEntryKey, LlmEntryKind, SelectionIssue, activate, available_entries,
+    chosen_local_model, on_codex_signed_out, on_local_removed, remove_profile, selection_issue,
+    selection_ready,
 };
+
+use super::codex::{CodexAction, CodexPane};
 
 use super::download::{
     Picker, PickerGroup, VariantClick, axis_name_key, open_folder, other_download, picker_row,
@@ -24,7 +29,9 @@ use super::download::{
 };
 use super::entries::variant_label;
 use super::jobs::{DownloadTarget, Downloads};
-use super::parts::{self, BODY_GAP, Badge, CARD_GAP, CardHead, ListState, TestClick, TestState};
+use super::parts::{
+    self, BODY_GAP, Badge, CARD_GAP, CardHead, ListGroup, ListState, TestClick, TestState,
+};
 use super::profiles::{self, profile_display_name};
 use super::providers::{Draft, draft_form};
 use super::{Category, Tab, tab_bar};
@@ -52,6 +59,8 @@ enum LlmTestTarget {
     Provider(String),
     /// "외부 제공자" 탭에서 입력 중인 초안
     Draft,
+    /// Codex 로그인
+    Codex,
 }
 
 /// 진행 중인 연결 테스트. 한 번에 하나만 돌립니다.
@@ -87,16 +96,19 @@ pub struct LlmPane {
     test: Option<LlmTest>,
     last_test: Option<LlmTestOutcome>,
     confirm: Option<PendingRemoval>,
+    /// 외부 제공자 탭의 Codex 로그인 카드와 사용 가능 모델의 Codex 카드
+    codex: CodexPane,
 }
 
 impl LlmPane {
-    /// 연결 테스트가 진행 중이면 `true`입니다. (내려받기는 두 갈래가 함께 쓰는 쪽에서 봅니다)
+    /// 연결 테스트나 Codex 로그인이 진행 중이면 `true`입니다. (내려받기는 두 갈래가 함께 쓰는 쪽에서 봅니다)
     pub fn is_busy(&self) -> bool {
-        self.test.is_some()
+        self.test.is_some() || self.codex.is_busy()
     }
 
-    /// 연결 테스트가 끝났는지 확인합니다. 다른 화면을 보고 있을 때도 불립니다.
-    pub fn tick(&mut self) {
+    /// 연결 테스트와 Codex 로그인이 끝났는지 확인합니다. 다른 화면을 보고 있을 때도 불립니다.
+    pub fn tick(&mut self, shared: &mut Shared) {
+        self.codex.tick(shared);
         let finished = self.test.as_ref().and_then(|test| test.handle.poll());
         if let Some(result) = finished
             && let Some(test) = self.test.take()
@@ -128,6 +140,14 @@ impl LlmPane {
             });
         ui.add_space(SECTION_GAP);
 
+        // 방금 Codex에 로그인했으면, 쓸 수 있는 것을 골라 두지 않았을 때 Codex를 고르고 카드를 보여 줍니다.
+        if self.codex.take_signed_in() {
+            if !cx.locked {
+                use_codex(&cx.shared.paths, &mut cx.config.postprocess);
+            }
+            self.show_entry(LlmEntryKey::Codex);
+        }
+
         tab_bar(ui, &mut self.tab);
         match self.tab {
             Tab::Available => self.available_tab(ui, cx, downloads),
@@ -152,7 +172,9 @@ impl LlmPane {
         {
             let message = issue_text(&cx.shared.paths, &cx.config.postprocess, &issue);
             match issue {
-                SelectionIssue::NoProvider | SelectionIssue::ProviderIncomplete { .. } => {
+                SelectionIssue::NoProvider
+                | SelectionIssue::ProviderIncomplete { .. }
+                | SelectionIssue::CodexSignedOut => {
                     Banner::new(Tone::Warning).line(message).show(ui);
                 }
                 _ => parts::model_notice(ui, &message),
@@ -171,10 +193,14 @@ impl LlmPane {
         }
 
         let mut turn_on = None;
-        let mut previous_local = None;
+        let mut previous_group = None;
         for entry in &entries {
-            let local = matches!(entry.key, LlmEntryKey::Local { .. });
-            parts::list_group(ui, &mut previous_local, local);
+            let group = match entry.key {
+                LlmEntryKey::Local { .. } => ListGroup::Local,
+                LlmEntryKey::Codex => ListGroup::Codex,
+                LlmEntryKey::Provider { .. } => ListGroup::Providers,
+            };
+            parts::list_group(ui, &mut previous_group, group);
             if self.entry_card(ui, cx, downloads, entry) {
                 turn_on = Some(entry.key.clone());
             }
@@ -200,6 +226,7 @@ impl LlmPane {
     ) -> bool {
         let head = match &entry.kind {
             LlmEntryKind::Local { family, variant } => local_head(family, variant),
+            LlmEntryKind::Codex(codex_entry) => super::codex::entry_head(codex_entry),
             LlmEntryKind::Provider(profile) => {
                 parts::provider_head(Category::Llm, profile, entry.ready)
             }
@@ -217,6 +244,7 @@ impl LlmPane {
                 LlmEntryKind::Local { family, variant } => {
                     self.local_body(ui, cx, downloads, family, variant);
                 }
+                LlmEntryKind::Codex(codex_entry) => self.codex_body(ui, cx, codex_entry),
                 LlmEntryKind::Provider(profile) => self.provider_body(ui, cx, profile),
             },
         );
@@ -306,6 +334,30 @@ impl LlmPane {
         }
     }
 
+    /// Codex 로그인: 계정, 모델·추론 단계 편집, 연결 테스트와 로그아웃
+    fn codex_body(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, entry: &CodexEntry) {
+        let target = LlmTestTarget::Codex;
+        let test_state = self.test_state(&target);
+        let (test, last_test) = (self.test.as_ref(), self.last_test.as_ref());
+        let (test_click, action) = self.codex.entry_body(ui, cx, entry, test_state, |ui| {
+            test_status(ui, test, last_test, &target);
+        });
+        match test_click {
+            Some(TestClick::Start) => {
+                // 설정에 저장된 값이 아니라 지금 카드에 적힌 값으로 테스트합니다.
+                let model = codex::chosen_model(&cx.config.postprocess).to_owned();
+                let effort = codex::chosen_effort(&cx.config.postprocess);
+                let paths = cx.shared.paths.clone();
+                self.start_test(ui.ctx(), cx.shared, target, |on_finish| {
+                    ConnectionTest::start_codex(paths, model, effort, on_finish)
+                });
+            }
+            Some(TestClick::Cancel) => self.cancel_test(),
+            None => {}
+        }
+        self.codex_action(action);
+    }
+
     /// 외부 제공자: 이름·주소·API 키·모델 편집, 연결 테스트와 제거
     fn provider_body(&mut self, ui: &mut Ui, cx: &mut PageContext<'_>, shown: &ApiProfile) {
         let profile_id = shown.id.as_str();
@@ -355,7 +407,9 @@ impl LlmPane {
             Some(TestClick::Start) => {
                 // 설정에 저장된 값이 아니라 지금 카드에 적힌 값으로 테스트합니다.
                 let profile = cx.config.postprocess.api_profiles[index].clone();
-                self.start_test(ui.ctx(), cx.shared, target, profile);
+                self.start_test(ui.ctx(), cx.shared, target, |on_finish| {
+                    ConnectionTest::start(profile, on_finish)
+                });
             }
             Some(TestClick::Cancel) => self.cancel_test(),
             None => {}
@@ -368,8 +422,11 @@ impl LlmPane {
         }
     }
 
-    /// 제거 확인 창을 띄우고, 확인을 받으면 제거합니다.
+    /// 제거·로그아웃 확인 창을 띄우고, 확인을 받으면 제거하거나 로그아웃합니다.
     pub fn confirm_modal(&mut self, ui: &Ui, cx: &mut PageContext<'_>) {
+        if self.codex.confirm_sign_out_modal(ui) {
+            self.sign_out_codex(cx);
+        }
         let Some(pending) = self.confirm.take() else {
             return;
         };
@@ -415,6 +472,30 @@ impl LlmPane {
                 self.list.forget(&LlmEntryKey::provider(&id));
                 self.forget_test(&LlmTestTarget::Provider(id));
             }
+        }
+    }
+
+    /// Codex에서 로그아웃합니다. Codex로 다듬고 있었으면 준비된 첫 항목을 대신 고르거나 선택을 비웁니다.
+    fn sign_out_codex(&mut self, cx: &mut PageContext<'_>) {
+        if let Err(error) = codex::auth::sign_out(&cx.shared.paths) {
+            tracing::warn!("could not sign out of Codex: {error}");
+            cx.shared.toasts.error(t!("models.codex.sign_out_failed"));
+            return;
+        }
+        if !cx.locked {
+            on_codex_signed_out(&cx.shared.paths, &mut cx.config.postprocess);
+        }
+        self.list.forget(&LlmEntryKey::Codex);
+        self.forget_test(&LlmTestTarget::Codex);
+        self.codex.forget_account();
+        cx.shared.toasts.info(t!("models.codex.signed_out"));
+    }
+
+    fn codex_action(&mut self, action: Option<CodexAction>) {
+        match action {
+            Some(CodexAction::ShowEntry) => self.show_entry(LlmEntryKey::Codex),
+            Some(CodexAction::SignOut) => self.codex.ask_sign_out(),
+            None => {}
         }
     }
 
@@ -536,11 +617,18 @@ impl LlmPane {
             |ui| test_status(ui, self.test.as_ref(), self.last_test.as_ref(), &target),
         );
 
+        // API 키 없이 ChatGPT 계정으로 쓰는 Codex 로그인은 등록 칸 아래에 따로 둡니다.
+        ui.add_space(SECTION_GAP);
+        let action = self.codex.login_card(ui, cx.shared);
+        self.codex_action(action);
+
         match outcome.test {
             Some(TestClick::Start) => {
                 // 초안의 값으로 테스트합니다. 설정은 바꾸지 않습니다.
                 if let Some(profile) = self.draft.profile().cloned()
-                    && self.start_test(ui.ctx(), cx.shared, target, profile)
+                    && self.start_test(ui.ctx(), cx.shared, target, |on_finish| {
+                        ConnectionTest::start(profile, on_finish)
+                    })
                 {
                     self.draft.begin_test();
                 }
@@ -581,21 +669,21 @@ impl LlmPane {
         }
     }
 
-    /// `profile`의 값으로 연결 테스트를 작업 스레드에서 시작합니다.
+    /// 연결 테스트를 작업 스레드에서 시작합니다. `start`는 끝났을 때 부를 함수를 받아 테스트를 띄웁니다.
     /// 테스트는 한 번에 하나만 돌립니다. 시작했으면 `true`를 돌려줍니다.
     fn start_test(
         &mut self,
         egui_ctx: &egui::Context,
         shared: &mut Shared,
         target: LlmTestTarget,
-        profile: ApiProfile,
+        start: impl FnOnce(Box<dyn Fn() + Send>) -> std::io::Result<ConnectionTest>,
     ) -> bool {
         if self.test.is_some() {
             return false;
         }
         self.last_test = None;
         let repaint_ctx = egui_ctx.clone();
-        match ConnectionTest::start(profile, move || repaint_ctx.request_repaint()) {
+        match start(Box::new(move || repaint_ctx.request_repaint())) {
             Ok(handle) => {
                 self.test = Some(LlmTest { target, handle });
                 true
@@ -649,6 +737,14 @@ fn delete_local(
     }
     on_local_removed(paths, config, variant_id);
     Ok(())
+}
+
+/// 방금 Codex에 로그인했을 때 부릅니다. 지금 설정으로 다듬는 데 쓸 수 있는 것이 없으면 Codex를 고릅니다.
+fn use_codex(paths: &AppPaths, config: &mut PostProcessConfig) {
+    let entries = available_entries(paths, config);
+    if !selection_ready(&entries) {
+        activate(config, &LlmEntryKey::Codex);
+    }
 }
 
 /// 새 제공자를 설정에 넣고 그 항목의 키를 돌려줍니다.
@@ -727,6 +823,7 @@ pub(crate) fn issue_text(
                 .map_or_else(|| profile_id.clone(), profile_display_name);
             t!("models.available.issue.provider_incomplete", name = name)
         }
+        SelectionIssue::CodexSignedOut => t!("models.llm.issue.codex_signed_out"),
         SelectionIssue::UnknownProcessor { id } => {
             t!("models.llm.issue.unknown_processor", id = id)
         }
@@ -745,7 +842,10 @@ fn test_status(
         let elapsed = format::seconds_text(test.handle.elapsed());
         parts::progress_line(ui, &t!("models.test.requesting", elapsed = elapsed));
         // 이 PC에서 도는 서버는 첫 요청에서 모델을 올리느라 오래 걸리기도 합니다.
-        let local_server = profiles::find_preset(Category::Llm, &test.handle.profile().provider)
+        let local_server = test
+            .handle
+            .profile()
+            .and_then(|profile| profiles::find_preset(Category::Llm, &profile.provider))
             .is_some_and(|preset| preset.runs_locally && !preset.is_mock(Category::Llm));
         if local_server {
             ui.label(text::caption(ui, t!("models.test.first_run")));
@@ -780,8 +880,12 @@ fn test_status(
         // 취소는 사용자가 한 일이라 따로 알리지 않습니다.
         Err(LlmError::Cancelled) => {}
         Err(error) => {
+            let message = match target {
+                LlmTestTarget::Codex => error_text::codex(error),
+                LlmTestTarget::Provider(_) | LlmTestTarget::Draft => error_text::llm(error),
+            };
             Banner::new(Tone::Error)
-                .line(t!("models.test.failed", message = error_text::llm(error)))
+                .line(t!("models.test.failed", message = message))
                 .show(ui);
         }
     }
@@ -925,6 +1029,7 @@ mod tests {
             SelectionIssue::ProviderIncomplete {
                 profile_id: "work".into(),
             },
+            SelectionIssue::CodexSignedOut,
             SelectionIssue::UnknownProcessor {
                 id: "no_such_processor".into(),
             },
@@ -948,6 +1053,46 @@ mod tests {
         let (_, variant) = find_variant(&fixture.paths, SMALL).unwrap();
         assert!(texts[0].contains(&variant_label(&variant)), "{}", texts[0]);
         assert!(texts[4].contains("이름 work"), "{}", texts[4]);
+    }
+
+    #[test]
+    fn signing_in_to_codex_chooses_it_only_when_nothing_usable_is_chosen() {
+        let fixture = Fixture::new();
+        // 로그인을 마친 것처럼 로그인 파일을 둡니다.
+        let account_file = codex::auth::auth_file(&fixture.paths);
+        fs::create_dir_all(account_file.parent().unwrap()).unwrap();
+        let claims = r#"{"email":"me@example.com","https://api.openai.com/auth":{"chatgpt_account_id":"acc-1","chatgpt_plan_type":"plus"}}"#;
+        let jwt = |claims: &str| {
+            use base64::Engine;
+            let encode = |part: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(part);
+            format!("{}.{}.sig", encode(r#"{"alg":"none"}"#), encode(claims))
+        };
+        let login = serde_json::json!({
+            "tokens": {
+                "id_token": jwt(claims),
+                "access_token": jwt(r#"{"exp":4000000000}"#),
+                "refresh_token": "rt",
+                "account_id": "acc-1",
+            },
+            "last_refresh": 0,
+        });
+        fs::write(&account_file, login.to_string()).unwrap();
+        assert!(
+            codex::auth::account(&fixture.paths).is_some(),
+            "로그인 파일을 읽지 못했습니다"
+        );
+
+        // 아무것도 고르지 않았으면 Codex를 고릅니다.
+        let mut config = PostProcessConfig::default();
+        use_codex(&fixture.paths, &mut config);
+        assert_eq!(config.processor, sulsul_llm::CODEX_PROCESSOR_ID);
+        assert_eq!(codex::chosen_model(&config), codex::DEFAULT_MODEL);
+
+        // 이미 쓸 수 있는 제공자를 골라 두었으면 바꾸지 않습니다.
+        let mut config = PostProcessConfig::default();
+        register(&fixture.paths, &mut config, profile("openai"));
+        use_codex(&fixture.paths, &mut config);
+        assert_eq!(config.processor, CLOUD_PROCESSOR_ID);
     }
 
     /// 비상업 라이선스인 계열은 카드 머리 줄과 내려받기 카드에 주의 배지가 붙어야 합니다.

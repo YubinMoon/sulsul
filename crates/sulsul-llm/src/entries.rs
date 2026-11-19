@@ -7,19 +7,22 @@
 //! `[postprocess] enabled`(다듬기를 쓸지)는 여기서 바꾸지 않습니다. 여기서는 무엇으로 다듬을지만 고릅니다.
 
 use sulsul_core::AppPaths;
-use sulsul_core::config::{ApiProfile, PostProcessConfig};
+use sulsul_core::config::{ApiProfile, PostProcessConfig, ReasoningEffort};
 use sulsul_core::stt::ModelVariant;
 use sulsul_core::toml::Value;
 
 use crate::catalog::{LlmFamily, families, find_variant};
+use crate::codex::{self, auth::CodexAccount};
 use crate::presets::{chat_completions_url, requires_api_key};
-use crate::{CLOUD_PROCESSOR_ID, LOCAL_MODEL_KEY, LOCAL_PROCESSOR_ID};
+use crate::{CLOUD_PROCESSOR_ID, CODEX_PROCESSOR_ID, LOCAL_MODEL_KEY, LOCAL_PROCESSOR_ID};
 
 /// 목록의 항목 하나를 가리키는 키
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LlmEntryKey {
     /// 설치된 로컬 모델
     Local { variant_id: String },
+    /// Codex 로그인 (ChatGPT 계정). 로그인은 하나뿐입니다.
+    Codex,
     /// 등록한 외부 제공자 (API 프로필)
     Provider { profile_id: String },
 }
@@ -45,7 +48,19 @@ pub enum LlmEntryKind {
         family: LlmFamily,
         variant: ModelVariant,
     },
+    Codex(CodexEntry),
     Provider(ApiProfile),
+}
+
+/// Codex 로그인 항목의 내용
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexEntry {
+    /// 로그인한 계정
+    pub account: CodexAccount,
+    /// 고른 모델 ([`codex::chosen_model`])
+    pub model: String,
+    /// 고른 추론 단계
+    pub effort: ReasoningEffort,
 }
 
 /// 목록의 항목 하나
@@ -69,7 +84,8 @@ pub fn chosen_local_model(config: &PostProcessConfig) -> &str {
         .map_or("", str::trim)
 }
 
-/// 실제로 쓸 수 있는 항목 목록: 설치된 로컬 모델(카탈로그 순) 다음 등록된 제공자(등록 순)
+/// 실제로 쓸 수 있는 항목 목록: 설치된 로컬 모델(카탈로그 순), Codex 로그인(로그인했을 때),
+/// 등록된 제공자(등록 순)
 pub fn available_entries(paths: &AppPaths, config: &PostProcessConfig) -> Vec<LlmEntry> {
     let processor = config.processor.trim();
     let local_active = processor == LOCAL_PROCESSOR_ID;
@@ -88,6 +104,19 @@ pub fn available_entries(paths: &AppPaths, config: &PostProcessConfig) -> Vec<Ll
                 },
             });
         }
+    }
+
+    if let Some(account) = codex::auth::account(paths) {
+        entries.push(LlmEntry {
+            key: LlmEntryKey::Codex,
+            selected: processor == CODEX_PROCESSOR_ID,
+            ready: true,
+            kind: LlmEntryKind::Codex(CodexEntry {
+                account,
+                model: codex::chosen_model(config).to_owned(),
+                effort: codex::chosen_effort(config),
+            }),
+        });
     }
 
     let cloud_active = processor == CLOUD_PROCESSOR_ID;
@@ -115,7 +144,7 @@ pub fn selection_ready(entries: &[LlmEntry]) -> bool {
 }
 
 /// 항목을 고릅니다. 고른 항목 하나만 켜지게 `processor`·`api_profile`·
-/// `[postprocess.processors.llm_local] model`을 바꿉니다.
+/// `[postprocess.processors.llm_local] model`을 바꿉니다. Codex를 고르면 쓸 모델도 설정에 적어 둡니다.
 pub fn activate(config: &mut PostProcessConfig, key: &LlmEntryKey) {
     match key {
         LlmEntryKey::Local { variant_id } => {
@@ -128,6 +157,11 @@ pub fn activate(config: &mut PostProcessConfig, key: &LlmEntryKey) {
                     LOCAL_MODEL_KEY.to_owned(),
                     Value::String(variant_id.clone()),
                 );
+        }
+        LlmEntryKey::Codex => {
+            config.processor = CODEX_PROCESSOR_ID.to_owned();
+            let model = codex::chosen_model(config).to_owned();
+            codex::set_model(config, &model);
         }
         LlmEntryKey::Provider { profile_id } => {
             config.processor = CLOUD_PROCESSOR_ID.to_owned();
@@ -175,6 +209,14 @@ pub fn remove_profile(paths: &AppPaths, config: &mut PostProcessConfig, profile_
     }
 }
 
+/// Codex에서 로그아웃한 뒤 부릅니다. Codex를 쓰고 있었으면 준비된 첫 항목으로 바꾸거나 선택을 비웁니다.
+pub fn on_codex_signed_out(paths: &AppPaths, config: &mut PostProcessConfig) {
+    if config.processor.trim() == CODEX_PROCESSOR_ID {
+        let entries = available_entries(paths, config);
+        activate_first_ready(&entries, config);
+    }
+}
+
 /// 로컬 모델 파일을 지운 뒤 부릅니다. 그게 고른 항목이었으면 준비된 첫 항목으로 바꾸거나 선택을 비웁니다.
 pub fn on_local_removed(paths: &AppPaths, config: &mut PostProcessConfig, variant_id: &str) {
     if config.processor.trim() == LOCAL_PROCESSOR_ID && chosen_local_model(config) == variant_id {
@@ -202,6 +244,8 @@ pub enum SelectionIssue {
     NoProvider,
     /// 고른 제공자의 값이 덜 채워졌습니다.
     ProviderIncomplete { profile_id: String },
+    /// Codex를 쓰도록 되어 있는데 로그인하지 않았습니다 (로그아웃했거나 로그인이 만료됨).
+    CodexSignedOut,
     /// 알 수 없는 후처리기 ID입니다.
     UnknownProcessor { id: String },
 }
@@ -232,6 +276,9 @@ pub fn selection_issue(paths: &AppPaths, config: &PostProcessConfig) -> Option<S
             }),
             Some(_) => None,
         },
+        CODEX_PROCESSOR_ID => codex::auth::account(paths)
+            .is_none()
+            .then_some(SelectionIssue::CodexSignedOut),
         other => Some(SelectionIssue::UnknownProcessor {
             id: other.to_owned(),
         }),
@@ -698,6 +745,124 @@ mod tests {
         assert!(reloaded.postprocess.api_profiles.is_empty());
         assert_eq!(reloaded.postprocess.processor, "");
         assert_eq!(selection_issue(&fixture.paths, &reloaded.postprocess), None);
+    }
+
+    /// Codex에 로그인해 둡니다.
+    fn sign_in_codex(paths: &AppPaths) {
+        use crate::codex::auth::tests::{hour_from_now, tokens};
+        crate::codex::auth::store(paths, &tokens(hour_from_now())).unwrap();
+    }
+
+    #[test]
+    fn codex_is_listed_between_local_models_and_providers_when_signed_in() {
+        let fixture = Fixture::new();
+        fixture.install(SMALL);
+        let mut config = PostProcessConfig::default();
+        config.api_profiles.push(profile("openai"));
+        let keys = |config: &PostProcessConfig| -> Vec<LlmEntryKey> {
+            fixture.entries(config).into_iter().map(|e| e.key).collect()
+        };
+        assert_eq!(
+            keys(&config),
+            [LlmEntryKey::local(SMALL), LlmEntryKey::provider("openai")],
+            "로그인하지 않았으면 Codex 항목이 없어야 합니다"
+        );
+
+        sign_in_codex(&fixture.paths);
+        assert_eq!(
+            keys(&config),
+            [
+                LlmEntryKey::local(SMALL),
+                LlmEntryKey::Codex,
+                LlmEntryKey::provider("openai"),
+            ]
+        );
+        let entries = fixture.entries(&config);
+        let LlmEntryKind::Codex(codex_entry) = &entries[1].kind else {
+            panic!("Codex 항목이어야 합니다: {:?}", entries[1]);
+        };
+        assert_eq!(codex_entry.account.email.as_deref(), Some("me@example.com"));
+        assert_eq!(codex_entry.model, codex::DEFAULT_MODEL);
+        assert!(entries[1].ready);
+    }
+
+    #[test]
+    fn activating_codex_selects_only_codex_and_writes_the_model() {
+        let fixture = Fixture::new();
+        fixture.install(SMALL);
+        sign_in_codex(&fixture.paths);
+        let mut config = PostProcessConfig::default();
+        config.api_profiles.push(profile("openai"));
+
+        for key in [
+            LlmEntryKey::Codex,
+            LlmEntryKey::local(SMALL),
+            LlmEntryKey::provider("openai"),
+            LlmEntryKey::Codex,
+        ] {
+            activate(&mut config, &key);
+            let entries = fixture.entries(&config);
+            assert_eq!(
+                selected_keys(&entries),
+                [&key],
+                "{key:?}만 골라져 있어야 합니다"
+            );
+            assert_eq!(selection_issue(&fixture.paths, &config), None);
+        }
+        assert_eq!(config.processor, CODEX_PROCESSOR_ID);
+        assert_eq!(
+            config.processors[CODEX_PROCESSOR_ID].get(codex::MODEL_KEY),
+            Some(&Value::String(codex::DEFAULT_MODEL.into())),
+            "고른 모델이 설정 파일에 보이게 적어야 합니다"
+        );
+    }
+
+    #[test]
+    fn signing_out_of_codex_moves_the_selection() {
+        let fixture = Fixture::new();
+        fixture.install(MEDIUM);
+        sign_in_codex(&fixture.paths);
+        let mut config = PostProcessConfig::default();
+        activate(&mut config, &LlmEntryKey::Codex);
+
+        crate::codex::auth::sign_out(&fixture.paths).unwrap();
+        assert_eq!(
+            selection_issue(&fixture.paths, &config),
+            Some(SelectionIssue::CodexSignedOut)
+        );
+        on_codex_signed_out(&fixture.paths, &mut config);
+        assert_eq!(
+            selected_keys(&fixture.entries(&config)),
+            [&LlmEntryKey::local(MEDIUM)]
+        );
+
+        // 쓰지 않던 Codex에서 로그아웃하면 고른 항목은 그대로입니다.
+        sign_in_codex(&fixture.paths);
+        crate::codex::auth::sign_out(&fixture.paths).unwrap();
+        on_codex_signed_out(&fixture.paths, &mut config);
+        assert_eq!(config.processor, LOCAL_PROCESSOR_ID);
+    }
+
+    #[test]
+    fn codex_selection_survives_saving_and_reloading() {
+        let fixture = Fixture::new();
+        sign_in_codex(&fixture.paths);
+        let store = ConfigStore::new(fixture.paths.config_file());
+        let mut config = store.load_or_create().unwrap().config;
+        activate(&mut config.postprocess, &LlmEntryKey::Codex);
+        codex::set_model(&mut config.postprocess, "gpt-5.6-terra");
+        codex::set_effort(&mut config.postprocess, ReasoningEffort::None);
+
+        let reloaded = save_and_reload(&store, &config);
+        assert_eq!(
+            selected_keys(&fixture.entries(&reloaded.postprocess)),
+            [&LlmEntryKey::Codex]
+        );
+        assert_eq!(codex::chosen_model(&reloaded.postprocess), "gpt-5.6-terra");
+        assert_eq!(
+            codex::chosen_effort(&reloaded.postprocess),
+            ReasoningEffort::None
+        );
     }
 
     #[test]
