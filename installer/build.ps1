@@ -1,4 +1,4 @@
-﻿﻿# 술술 Windows 설치 파일(x64)을 만듭니다.
+﻿# 술술 Windows 설치 파일(x64)을 만듭니다.
 #
 #   1. 릴리스 빌드: sulsul-app(기본 기능 = Vulkan)과 글 다듬기 실행기 sulsul-llm-runner
 #   2. 넣을 파일을 target\installer\stage에 모음
